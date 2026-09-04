@@ -110,6 +110,21 @@ def main():
     p.add_argument("--delta", type=float, default=1e-5)
     p.add_argument("--mask-fraction", type=float, default=.25)
     p.add_argument("--epsilon-budget", type=float)
+    p = commands.add_parser("dataset", help="生成、冻结并运行小规模纯模拟数据对照")
+    dataset_commands = p.add_subparsers(dest="dataset_command", required=True)
+    p = dataset_commands.add_parser("generate-mock")
+    p.add_argument("--output", type=Path, required=True)
+    p.add_argument("--count", type=int, default=8)
+    p.add_argument("--seed", type=int, default=20260905)
+    p = dataset_commands.add_parser("freeze")
+    p.add_argument("--input", type=Path, required=True)
+    p.add_argument("--output", type=Path, required=True)
+    p.add_argument("--seed", type=int, default=20260905)
+    p.add_argument("--dependency-lock", type=Path)
+    p = dataset_commands.add_parser("run")
+    p.add_argument("--input", type=Path, required=True)
+    p.add_argument("--manifest", type=Path, required=True)
+    p.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if args.command == "import-pack":
         store = Store(app_dir()/"app.sqlite")
@@ -178,6 +193,47 @@ def main():
         print(json.dumps(result, ensure_ascii=False, indent=2))
         if any(item.get("budget", {}).get("status") == "exceeded" for item in result.get("transforms", [])):
             raise SystemExit(3)
+    elif args.command == "dataset":
+        from .dataset import build_mock_corpus, freeze_mock_corpus, run_mock_comparison
+
+        def read_json(path):
+            if path.stat().st_size > 20 * 1024 * 1024:
+                raise ValueError("模拟数据文件超过 20MB")
+            return json.loads(path.read_text(encoding="utf-8"))
+
+        def write_once(path, value):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("x", encoding="utf-8") as stream:
+                json.dump(value, stream, ensure_ascii=False, indent=2)
+                stream.write("\n")
+            restrict_mode(path, 0o600)
+
+        if args.dataset_command == "generate-mock":
+            records = build_mock_corpus(args.count, args.seed)
+            write_once(args.output, {
+                "schema_version": 1,
+                "kind": "fully_synthetic_mock_corpus",
+                "records": records,
+            })
+            print("Synthetic mock corpus created:", args.output)
+        elif args.dataset_command == "freeze":
+            records = read_json(args.input)["records"]
+            lock = args.dependency_lock
+            if lock is None and Path("requirements.lock").is_file():
+                lock = Path("requirements.lock")
+            dependency_hash = (
+                "sha256:" + hashlib.sha256(lock.read_bytes()).hexdigest()
+                if lock is not None else "unrecorded"
+            )
+            write_once(args.output, freeze_mock_corpus(
+                records, seed=args.seed, dependency_hash=dependency_hash,
+            ))
+            print("Technical mock freeze created:", args.output)
+        else:
+            records = read_json(args.input)["records"]
+            manifest = read_json(args.manifest)
+            write_once(args.output, run_mock_comparison(records, manifest))
+            print("Technical mock comparison report created:", args.output)
 
 
 if __name__ == "__main__":

@@ -69,6 +69,18 @@ Windows 本机模式下，Unix 文件权限位（如 `chmod 0700`）不生效；
 
 **扫描 PDF / OCR**：没有 OCR 时保留页面、坐标和待处理状态，可在边侧看原图并逐页人工转录。需要自动 OCR 时，在目标硬件上安装 `paddleocr>=3,<4` 和匹配平台的 `paddlepaddle>=3,<4`，预置离线模型资源，再设置 `LEX_OCR_ENABLED=1`、`LEX_OCR_PROVIDER=paddle` 和 `LEX_OCR_MODELS_READY=1`。最后一个变量是部署者对离线资产已就绪的声明，不会触发下载，也不代表精度验收。解析器通过本地 OCR Provider 契约工作，每个识别锚点记录 Provider 及版本；Provider 未注册、模型缺失或推理错误都会保留原扫描页并转人工处理，绝不回退云端 OCR。OCR 结果默认需要人工复核。当前交付已验证 Provider 契约、坐标、原图渲染、失败降级及手工转录，**未验证 PaddleOCR 权重推理或识别精度**。
 
+## 小规模模拟数据与离线对照
+
+当前只生成 2–8 份明确标记为纯模拟、且使用 `example.invalid` 联系方式的劳动争议材料，不包含真实案件片段。以下命令分别生成语料、冻结 70:30 开发/盲测划分及依赖哈希、运行四个文本核心组和独立 Ianvs 向量补充组：
+
+```bash
+lexaegis dataset generate-mock --output .data/mock-corpus.json
+lexaegis dataset freeze --input .data/mock-corpus.json --output .data/mock-manifest.json
+lexaegis dataset run --input .data/mock-corpus.json --manifest .data/mock-manifest.json --output .data/mock-report.json
+```
+
+模拟语料只带坐标化直接标识技术真值；双人法学标注与第三人仲裁字段保持空白。因此报告中的法律任务可用性固定为 `not_applicable`，Ianvs 的成员推断也会在没有真实目标模型输出时明确返回 `not_applicable`。这些结果不能用于宣称正式案件的隐私、合规或法律效果。
+
 ## 数据、版本与恢复
 
 - 原件位于 `.data/app/files/`；业务数据库为 `.data/app/app.sqlite`；网关账本为 `.data/gateway/gateway.sqlite`。
