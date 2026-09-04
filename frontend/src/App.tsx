@@ -168,6 +168,17 @@ export default function App() {
     data?.documents.flatMap((d: Obj) => d.ir?.blocks || []) || [];
   const activeSource = source || blocks[0] || null;
   const currentCase = data?.case;
+  const factFieldOptions = Array.from(
+    new Map<string, Obj>(
+      (boot?.packs || [])
+        .filter((pack: Obj) => pack.domain_id === currentCase?.domain)
+        .flatMap((pack: Obj) => pack.fact_fields || [])
+        .map((field: Obj | string) => {
+          const id = typeof field === "string" ? field : field.id;
+          return [id, { id, label: typeof field === "string" ? txt(id) : field.label || txt(id) }];
+        }),
+    ).values(),
+  );
   const pickCase = (id: string) => {
     setCaseId(id);
     setData(null);
@@ -1340,17 +1351,9 @@ export default function App() {
                         setForm({ ...form, field: e.target.value })
                       }
                     >
-                      {Array.from(
-                        new Set<string>(
-                          (boot?.packs || [])
-                            .filter(
-                              (p: Obj) => p.domain_id === currentCase?.domain,
-                            )
-                            .flatMap((p: Obj) => p.fact_fields),
-                        ),
-                      ).map((k) => (
-                        <option key={k} value={k}>
-                          {txt(k)}
+                      {factFieldOptions.map((field) => (
+                        <option key={field.id} value={field.id}>
+                          {field.label}
                         </option>
                       ))}
                     </select>

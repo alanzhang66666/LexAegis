@@ -8,13 +8,23 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
+        include:
+          - os: windows-latest
+            constraints: windows.txt
+            playwright_args: chromium
+          - os: macos-latest
+            constraints: macos.txt
+            playwright_args: chromium
+          - os: ubuntu-latest
+            constraints: linux.txt
+            playwright_args: --with-deps chromium
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: {python-version: "3.12", cache: pip}
-      - run: python -m pip install -e ".[test]"
+      - run: python -m pip install -r requirements.lock -c constraints/${{ matrix.constraints }}
+      - run: python -m pip install --no-deps -e .
       - run: python -m pytest -q
       - uses: pnpm/action-setup@v4
         with: {version: 11.19.0}
@@ -24,17 +34,78 @@ jobs:
         working-directory: frontend
       - run: pnpm build
         working-directory: frontend
+      - run: pnpm exec playwright install ${{ matrix.playwright_args }}
+        working-directory: frontend
+      - run: pnpm test:e2e -- --project=desktop-1280 --grep-invert "five-viewport"
+        working-directory: frontend
       - run: lexaegis doctor
 
-  multi-arch-image:
+  responsive-visual-baseline:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12", cache: pip}
+      - run: python -m pip install -r requirements.lock -c constraints/linux.txt
+      - run: python -m pip install --no-deps -e .
+      - uses: pnpm/action-setup@v4
+        with: {version: 11.19.0}
+      - uses: actions/setup-node@v4
+        with: {node-version: "24", cache: pnpm, cache-dependency-path: frontend/pnpm-lock.yaml}
+      - run: pnpm install --frozen-lockfile
+        working-directory: frontend
+      - run: pnpm build
+        working-directory: frontend
+      - run: pnpm exec playwright install --with-deps chromium
+        working-directory: frontend
+      - run: pnpm test:e2e -- --grep "five-viewport"
+        working-directory: frontend
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: responsive-visual-baseline
+          path: |
+            frontend/test-results
+            frontend/playwright-report
+
+  multi-arch-image:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            suffix: amd64
+          - platform: linux/arm64
+            suffix: arm64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ matrix.platform }}
+          tags: lexaegis-ci:${{ matrix.suffix }}
+          load: true
           push: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - run: docker run --rm --platform ${{ matrix.platform }} --tmpfs /data:uid=10001,gid=10001,mode=0700 -e LEX_DATA_DIR=/data lexaegis-ci:${{ matrix.suffix }} python -m lexaegis.cli doctor
+
+  compose-isolation:
+    runs-on: ubuntu-latest
+    env:
+      LEX_LOCAL_PASSWORD: ci-local-password-only
+      LEX_GATEWAY_SECRET: ci-gateway-signing-secret-at-least-32
+      LEX_REDTEAM_SECRET: ci-redteam-signing-secret-at-least-32
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12", cache: pip}
+      - run: python -m pip install -r requirements.lock -c constraints/linux.txt
+      - run: python -m pip install --no-deps -e .
+      - run: docker compose --profile redteam up -d --build --wait
+      - run: lexaegis check-isolation
+      - if: always()
+        run: docker compose --profile redteam down -v

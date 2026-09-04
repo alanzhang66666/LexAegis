@@ -50,13 +50,19 @@ export function Dialog({ open, title, busy, onClose, children }: {
   open: boolean; title: string; busy?: boolean; onClose: () => void; children: ReactNode;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  // Capture the invoking control during render, before a child's autoFocus runs
+  // in the commit phase and makes the dialog input look like the previous focus.
+  const returnFocus = useRef<HTMLElement | null>(document.activeElement as HTMLElement | null);
+  const closeRef = useRef(onClose);
+  const busyRef = useRef(busy);
+  closeRef.current = onClose;
+  busyRef.current = busy;
   useEffect(() => {
     if (!open) return;
-    const previous = document.activeElement as HTMLElement | null;
     const root = ref.current;
     root?.focus();
     const keydown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !busy) onClose();
+      if (event.key === "Escape" && !busyRef.current) closeRef.current();
       if (event.key !== "Tab" || !root) return;
       const focusable = Array.from(root.querySelectorAll<HTMLElement>("button,input,select,textarea,a[href],[tabindex]:not([tabindex='-1'])"))
         .filter(element => !element.hasAttribute("disabled"));
@@ -66,8 +72,8 @@ export function Dialog({ open, title, busy, onClose, children }: {
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
     };
     document.addEventListener("keydown", keydown);
-    return () => { document.removeEventListener("keydown", keydown); previous?.focus(); };
-  }, [open, busy, onClose]);
+    return () => { document.removeEventListener("keydown", keydown); returnFocus.current?.focus(); };
+  }, [open]);
   if (!open) return null;
   return <div className="modal-backdrop" onClick={() => !busy && onClose()}>
     <div ref={ref} className="modal" role="dialog" aria-modal="true" aria-label={title} tabIndex={-1}

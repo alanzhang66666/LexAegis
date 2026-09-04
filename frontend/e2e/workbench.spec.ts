@@ -16,9 +16,9 @@ test("synthetic case: disclosure, explicit approval, dispatch and source-linked 
   await page.getByRole("button", { name: "生成披露方案", exact: true }).click();
   await page.getByRole("button", { name: "检验风险并冻结请求" }).click();
   await expect(
-    page.getByRole("heading", { name: "合成演示请求可审批" }),
+    page.getByRole("heading", { name: "当前门禁允许进入审批" }),
   ).toBeVisible();
-  await expect(page.getByText("未实现 · 未运行")).toHaveCount(4);
+  await expect(page.getByText("未运行 · 阻断")).toHaveCount(4);
   await page.getByRole("button", { name: "审批当前完整请求" }).click();
   await page.getByRole("button", { name: "已知悉并批准当前版本" }).click();
   await page.getByRole("button", { name: "执行模拟调用" }).click();
@@ -93,7 +93,7 @@ test("dashboard layout at desktop and mobile, capabilities remain honest", async
   });
   await page.getByRole("button", { name: "运行配置", exact: true }).click();
   await expect(
-    page.getByText("四类策略为占位；正式案件外发保持阻断"),
+    page.getByText("未运行、错误和不确定均不算通过"),
   ).toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
   const overflow = await page.evaluate(
@@ -104,4 +104,42 @@ test("dashboard layout at desktop and mobile, capabilities remain honest", async
     path: "../.data/acceptance-mobile.png",
     fullPage: true,
   });
+});
+
+test("dialog keyboard behavior and accessible control names", async ({ page }) => {
+  const trigger=page.getByRole("button",{name:"新建案件",exact:true});
+  await trigger.click();
+  await expect(page.getByRole("dialog")).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+  const unnamed=await page.locator("button").evaluateAll(buttons=>buttons.filter(button=>
+    !(button.getAttribute("aria-label")||button.getAttribute("title")||button.textContent?.trim())).length);
+  expect(unnamed).toBe(0);
+  const unlabelled=await page.locator("input,select,textarea").evaluateAll(controls=>controls.filter(control=>
+    !(control.getAttribute("aria-label")||control.getAttribute("aria-labelledby")||(control as HTMLInputElement).labels?.length)).length);
+  expect(unlabelled).toBe(0);
+  await page.emulateMedia({reducedMotion:"reduce"});
+  const duration=await page.locator(".primary").first().evaluate(element=>getComputedStyle(element).transitionDuration);
+  const seconds=duration.split(",").map(value=>value.trim().endsWith("ms")
+    ? Number.parseFloat(value)/1000:Number.parseFloat(value));
+  expect(Math.max(...seconds)).toBeLessThanOrEqual(.01);
+});
+
+test("five-viewport structural visual baseline", async ({page},testInfo)=>{
+  const viewport=page.viewportSize()!;
+  await expect(page.locator(".work-panel").or(page.locator(".dashboard"))).toBeVisible();
+  const overflow=await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth);
+  expect(overflow).toBe(false);
+  if(viewport.width<=900){
+    await page.getByRole("button",{name:"01 完整披露流程"}).click();
+    await page.getByRole("button",{name:"原始材料",exact:true}).click();
+    await expect(page.locator(".source-panel")).toBeVisible();
+    await expect(page.locator(".work-panel")).toBeHidden();
+    await page.getByRole("button",{name:"案件工作区",exact:true}).click();
+    await expect(page.locator(".work-panel")).toBeVisible();
+    await page.getByRole("button",{name:"依据与留痕",exact:true}).click();
+    await expect(page.locator(".context-panel")).toBeVisible();
+  }
+  await testInfo.attach(`layout-${viewport.width}.png`,{body:await page.screenshot({fullPage:true}),contentType:"image/png"});
 });

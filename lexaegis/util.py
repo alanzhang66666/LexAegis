@@ -49,15 +49,14 @@ def exclusive_lock(path, *, error):
     try:
         if os.name == "nt":
             import msvcrt
-            fh.seek(0)
-            if fh.read(1) == b"":
-                fh.write(b"\0")
-                fh.flush()
-            fh.seek(0)
             try:
+                fh.seek(0)
+                if fh.read(1) == b"":
+                    fh.write(b"\0")
+                    fh.flush()
+                fh.seek(0)
                 msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
             except OSError as exc:
-                fh.close()
                 raise error from exc
         else:
             import fcntl
@@ -68,7 +67,7 @@ def exclusive_lock(path, *, error):
                 raise error
         yield fh
     finally:
-        if os.name == "nt":
+        if os.name == "nt" and not fh.closed:
             import msvcrt
             try:
                 fh.seek(0)
