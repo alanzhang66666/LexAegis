@@ -117,12 +117,16 @@ def check_claims(raw, task, facts):
         ids = item["source_ids"]
         if not all(isinstance(i, str) for i in ids):
             raise ValueError("摘要引用必须是字符串标识")
+        if len(ids) > 100:
+            raise ValueError("单条摘要引用超过上限")
         valid = all(isinstance(i, str) and i in decisions and decisions[i]["output"] for i in ids)
         support = "\n".join(decisions[i]["output"] for i in ids) if valid else ""
         support_items = [decisions[i]["output"] for i in ids] if valid else []
         issues = []
         if not ids or not valid:
             issues.append("引用不存在或指向未披露事实")
+        if len(ids) != len(set(ids)):
+            issues.append("引用列表包含重复事实")
         if any(n not in support for n in re.findall(r"\d+(?:\.\d+)?", text)):
             issues.append("日期或金额存在未在引用事实中出现的数字")
         if text not in support:
@@ -135,6 +139,9 @@ def check_claims(raw, task, facts):
             issues.append("包含未知或不属于引用事实的身份 token")
         if "[[LEX:" in text and len(returned_tokens) != text.count("[[LEX:"):
             issues.append("身份 token 已破损，禁止自动复原")
+        leaked = [finding for finding in detect_text(text) if finding["value"] not in support]
+        if leaked:
+            issues.append("陈述包含未在引用事实中出现的直接标识")
         anchors = [s for i in ids if i in by_id for s in by_id[i]["source_ids"]]
         results.append({"id": digest(item)[:16], "text": text, "local_text": text, "source_ids": ids, "anchors": anchors,
                         "support": support_items, "issues": list(dict.fromkeys(issues)), "status": "needs_review" if issues else "source_matched",

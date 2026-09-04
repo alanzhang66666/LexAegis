@@ -121,7 +121,7 @@ def main():
         print("Backup created:", args.destination)
     elif args.command == "restore":
         restore(args.archive, args.target, args.gateway_target)
-        print("Restored; credentials are not included. Reconfigure and restart services.")
+        print("Restored. Local account password hashes are included; gateway/cloud secrets are not. Reconfigure secrets and restart services.")
     elif args.command == "start":
         from .launcher import run
         run()

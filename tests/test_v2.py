@@ -9,6 +9,7 @@ from lexaegis.dataset import build_semisynthetic_manifest, validate_annotations
 from lexaegis.experiments import gaussian_dp, l2_clip, mia_requires_real_outputs, random_projection, rdp_gaussian, rdp_to_epsilon
 from lexaegis.registry import run_pack_regressions, validate_pack
 from lexaegis import task_engine
+from lexaegis.policy import check_claims
 from lexaegis.util import digest
 from .test_workflow import formal_material
 
@@ -106,6 +107,13 @@ def test_wire_payload_excludes_local_only_data(env):
     assert set(wire)=={"contract_version","task","facts"}
     assert "林澄" not in str(wire) and "mapping" not in str(wire).lower()
     assert "[[LEX:P0001]]" in str(wire)
+
+
+def test_claim_validator_flags_unknown_direct_identifier():
+    task={"decisions":[{"fact_id":"f1","output":"[[LEX:P0001]]主张工资12000元"}]}
+    facts=[{"id":"f1","source_ids":["b1"]}]
+    claims=check_claims({"claims":[{"text":"[[LEX:P0001]]电话13800138000，主张工资12000元","source_ids":["f1"]}]},task,facts)
+    assert "陈述包含未在引用事实中出现的直接标识" in claims[0]["issues"]
 
 
 def test_dp_budget_projection_and_real_mia_inputs():

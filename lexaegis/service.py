@@ -239,6 +239,23 @@ def assert_current(repo, task):
     return case
 
 
+def assert_frozen_dependencies(repo, task):
+    dependencies = (task.get("request") or {}).get("dependencies") or {}
+    if not dependencies:
+        raise DomainError("请求依赖尚未冻结")
+    pack = repo.get(task["pack_id"], "pack")
+    if dependencies.get("pack_hash") != digest(pack):
+        raise DomainError("案由包版本或状态已变化，请重新检验")
+    provider_id = dependencies.get("provider_id")
+    if provider_id:
+        try:
+            provider = repo.get(provider_id, "provider")
+        except KeyError as error:
+            raise DomainError("服务商档案已删除，请重新检验") from error
+        if dependencies.get("provider_hash") != digest(provider):
+            raise DomainError("服务商档案已变化，请重新检验")
+
+
 def update_decision(repo, task_id, fact_id, method, necessity, custom_output=None):
     task = repo.get(task_id, "task")
     case = assert_current(repo, task)
@@ -289,6 +306,7 @@ def evaluate_task(repo, task_id):
             profile = repo.get(settings["provider_id"], "provider")
         except KeyError:
             profile = None
+    profile_hash = digest(profile) if profile else None
     fields = {decision["field"] for decision in task["decisions"] if decision.get("output")}
     checks = provider_checks(profile, domain=case["domain"], task_type=task["type"], fields=fields) if case["mode"] == "formal" else []
     attacks = frozen_protocol_runs(repo, task_id, attack_input_hash, pack) if case["mode"] == "formal" else None
@@ -302,7 +320,8 @@ def evaluate_task(repo, task_id):
     dependencies = {"case_revision": case["revision"], "material_versions": {document["id"]: document["version"] for document in repo.list("document", case["id"])},
                     "task_version": task["version"], "task_definition_version": task.get("task_definition_version", "2.0"),
                     "pack": task["pack_id"], "pack_hash": digest(pack), "settings_version": settings["version"],
-                    "provider_id": settings.get("provider_id"), "model": settings.get("cloud_model"), "mapping_version": case.get("mapping_version", 1),
+                    "provider_id": settings.get("provider_id"), "provider_hash": profile_hash,
+                    "model": settings.get("cloud_model"), "mapping_version": case.get("mapping_version", 1),
                     "ledger_version": case["ledger_version"], "attack_input_hash": attack_input_hash,
                     "risk_protocol_hashes": {item.get("kind"): item.get("protocol_hash") for item in (attacks or []) if item.get("protocol_hash")}}
     request = {"request_id": uid("request"), "case_id": case["id"], "task_id": task["id"], "mode": case["mode"], "transport": task["transport"], "target": settings["cloud_url"].rstrip("/") + "/chat/completions" if task["transport"] == "cloud" else "simulation://bundled-facts", "wire_payload": wire_payload, "body": body, "dependencies": dependencies, "policy": {"approved_for_dispatch": risk["approval_allowed"], "demo_exception": case["mode"] == "demo", "risk_completion": risk["completion"]}}
@@ -319,6 +338,7 @@ def approve_task(repo, task_id, expected_hash, actor="local-lawyer", actor_role=
     from datetime import datetime, timezone, timedelta
     task = repo.get(task_id, "task")
     case = assert_current(repo, task)
+    assert_frozen_dependencies(repo, task)
     if task["status"] != "review" or not task["risk"]["approval_allowed"]:
         raise DomainError("当前风险门禁不允许审批")
     if expected_hash != task["request_hash"] or digest(task["request"]) != expected_hash:
@@ -340,6 +360,7 @@ def reserve_send(repo, task_id):
     from datetime import datetime, timezone
     task = repo.get(task_id, "task")
     case = assert_current(repo, task)
+    assert_frozen_dependencies(repo, task)
     assert_editable(repo, case["id"])
     approval = task["approval"]
     if task["status"] != "approved" or not approval:

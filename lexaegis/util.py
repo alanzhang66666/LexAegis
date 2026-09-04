@@ -82,4 +82,6 @@ def exclusive_lock(path, *, error):
 
 
 def audit(repo, scope, event, **metadata):
-    repo.put("audit", {"id": uid("evt"), "at": now(), "actor": "local-lawyer", "event": event, "metadata": metadata}, scope)
+    from .auth import current_actor
+    actor = metadata.pop("actor", None) or current_actor.get()
+    repo.put("audit", {"id": uid("evt"), "at": now(), "actor": actor, "event": event, "metadata": metadata}, scope)

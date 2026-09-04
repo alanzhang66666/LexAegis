@@ -40,6 +40,7 @@ def test_complete_synthetic_workflow_and_source_confirmation(env):
     assert client.post(f"/api/v1/tasks/{task['id']}/local-export-approval",json={"actor":"复核律师","actor_role":"legal_reviewer"}).status_code==200
     local=client.get(f"/api/v1/tasks/{task['id']}/export?view=local").json()
     assert local["artifact"]["claims"][0]["local_text"]
+    assert local["bundle_type"]=="local_review_bundle"
 
 
 @pytest.mark.parametrize("scenario",["linkage","stop"])
@@ -176,8 +177,8 @@ def test_corrected_doc_retains_old_anchors_and_stales_tasks_after_restart(env):
     corrected=client.put(f"/api/v1/cases/{case['id']}/documents/{doc['id']}/correction",json={"block_id":old_anchor,"text":"校正后工资15000元"})
     assert corrected.status_code==200
     assert corrected.json()["version"]==2
-    with TestClient(create_app(env["root"],password="test2")) as restarted:
-        restarted.post('/api/v1/login',json={"password":"test2"})
+    with TestClient(create_app(env["root"],password="test-restart-password")) as restarted:
+        restarted.post('/api/v1/login',json={"password":"test-restart-password"})
         anchors=restarted.get(f"/api/v1/cases/{case['id']}/anchors").json()
         assert any(a["id"]==old_anchor and "12000" in a["text"] for a in anchors)
         data=restarted.get(f"/api/v1/cases/{case['id']}").json()

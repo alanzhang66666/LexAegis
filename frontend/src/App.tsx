@@ -11,10 +11,8 @@ import {
   Upload,
   Check,
   LockKeyhole,
-  AlertTriangle,
   ChevronRight,
   Download,
-  Play,
   X,
   Search,
   Clock3,
@@ -24,9 +22,14 @@ import {
   LogOut,
   PanelLeftClose,
   CircleHelp,
+  Users,
+  Moon,
+  Sun,
 } from "lucide-react";
-import { Empty, Tag } from "./components/ui";
-import { BenchmarkCenter, ProviderCenter } from "./pages/GovernanceCenters";
+import { Dialog, Empty, StageStepper, Tag } from "./components/ui";
+import { BenchmarkCenter, LegalPackCenter, ProviderCenter, UserCenter } from "./pages/GovernanceCenters";
+import { RiskWorkspace } from "./workspaces/RiskWorkspace";
+import { RestorationWorkspace } from "./workspaces/RestorationWorkspace";
 
 type Obj = Record<string, any>;
 const labels: Record<string, string> = {
@@ -95,9 +98,12 @@ async function api(path: string, method = "GET", body?: any) {
 }
 export default function App() {
   const [boot, setBoot] = useState<Obj | null>(null),
+    [principal, setPrincipal] = useState<Obj | null>(null),
     [logged, setLogged] = useState(false),
     [loginReady, setLoginReady] = useState(false),
+    [username, setUsername] = useState("admin"),
     [password, setPassword] = useState("");
+  const [theme,setTheme]=useState(()=>localStorage.getItem("lex_theme")||"light");
   const [caseId, setCaseId] = useState(""),
     [data, setData] = useState<Obj | null>(null),
     [page, setPage] = useState("cases"),
@@ -108,15 +114,18 @@ export default function App() {
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
     [notice, setNotice] = useState("");
+  const [pane,setPane]=useState<"source"|"work">("work"),[contextOpen,setContextOpen]=useState(false);
   const [modal, setModal] = useState(""),
     [form, setForm] = useState<Obj>({}),
     [filter, setFilter] = useState("");
   const reload = useCallback(async () => {
-    const b = await api("/bootstrap");
+    const [b,me] = await Promise.all([api("/bootstrap"),api("/me")]);
     setBoot(b);
+    setPrincipal(me);
     setLogged(true);
     if (caseId) setData(await api("/cases/" + caseId));
   }, [caseId]);
+  useEffect(()=>{document.documentElement.dataset.theme=theme;localStorage.setItem("lex_theme",theme)},[theme]);
   useEffect(() => {
     reload()
       .catch(() => setLogged(false))
@@ -178,7 +187,7 @@ export default function App() {
       const anchors: Obj[] = await api("/cases/" + caseId + "/anchors");
       const normalized = ids.map((item: any) => typeof item === "string" ? item : item.id);
       const b = anchors.find((a) => normalized.includes(a.id));
-      if (b) setSource(b);
+      if (b) { setSource(b); setPane("source"); }
     } catch (e) {
       setError((e as Error).message);
     }
@@ -254,11 +263,16 @@ export default function App() {
             onSubmit={(e) => {
               e.preventDefault();
               run(async () => {
-                await api("/login", "POST", { password });
+                const me=await api("/login", "POST", { username,password });
+                setPrincipal(me);
                 setLogged(true);
               });
             }}
           >
+            <label>
+              用户名
+              <input value={username} onChange={(e)=>setUsername(e.target.value)} required autoComplete="username"/>
+            </label>
             <label>
               本地访问口令
               <input
@@ -304,7 +318,10 @@ export default function App() {
             { id: "providers", name: "服务商治理", icon: LockKeyhole },
             { id: "benchmark", name: "隔离实验", icon: CircleHelp },
             { id: "settings", name: "运行配置", icon: Settings2 },
-          ].map((item) => (
+            { id: "users", name: "本地用户", icon: Users },
+          ].filter(item=>!["benchmark","settings","users"].includes(item.id)||principal?.role==="admin")
+            .filter(item=>item.id!=="providers"||["admin","legal_reviewer"].includes(principal?.role))
+            .map((item) => (
             <button
               key={item.id}
               className={
@@ -357,12 +374,13 @@ export default function App() {
               run(async () => {
                 await api("/logout", "POST");
                 setLogged(false);
+                setPrincipal(null);
               })
             }
           >
-            <div className="avatar">律</div>
+            <div className="avatar">{(principal?.actor||"律").slice(0,1)}</div>
             <span>
-              本地律师<small>单用户工作空间</small>
+              {principal?.actor||"本地用户"}<small>{principal?.role||"unknown"}</small>
             </span>
             <LogOut size={16} />
           </button>
@@ -393,6 +411,8 @@ export default function App() {
               <LockKeyhole size={13} /> 本地优先
             </span>
             <Tag tone="green">云边协同</Tag>
+            <button className="icon-button" aria-label={theme==="light"?"切换深色主题":"切换浅色主题"}
+              onClick={()=>setTheme(theme==="light"?"dark":"light")}>{theme==="light"?<Moon size={15}/>:<Sun size={15}/>}</button>
           </div>
         </header>
         {(error || notice) && (
@@ -612,26 +632,14 @@ export default function App() {
                 返回案件列表
               </button>
             </div>
-            <div className="stage-bar">
-              {["材料与事实", "披露方案", "风险与审批", "摘要与回链"].map(
-                (name, i) => (
-                  <button
-                    key={name}
-                    className={
-                      tab === ["facts", "disclosure", "risk", "result"][i]
-                        ? "selected"
-                        : ""
-                    }
-                    onClick={() =>
-                      setTab(["facts", "disclosure", "risk", "result"][i])
-                    }
-                  >
-                    <span>{String(i + 1).padStart(2, "0")}</span>
-                    {name}
-                    <ChevronRight size={15} />
-                  </button>
-                ),
-              )}
+            <StageStepper active={tab} onSelect={id=>{setTab(id);setPane("work")}} stages={[
+              {id:"facts",label:"材料与事实"},{id:"disclosure",label:"披露方案"},
+              {id:"risk",label:"风险与审批"},{id:"result",label:"摘要与回链"},
+            ]}/>
+            <div className="pane-tabs" aria-label="工作区面板">
+              <button className={pane==="source"?"selected":""} onClick={()=>setPane("source")}>原始材料</button>
+              <button className={pane==="work"?"selected":""} onClick={()=>setPane("work")}>案件工作区</button>
+              <button className={contextOpen?"selected":""} onClick={()=>setContextOpen(!contextOpen)}>依据与留痕</button>
             </div>
             {data.jobs.some((j: Obj) =>
               ["pending", "running", "failed"].includes(j.status),
@@ -655,7 +663,7 @@ export default function App() {
                 ))}
               </div>
             )}
-            <div className="three-panel">
+            <div className={`three-panel pane-${pane} ${contextOpen?"context-open":""}`}>
               <section className="source-panel">
                 <div className="panel-heading">
                   <h3>
@@ -1102,257 +1110,14 @@ export default function App() {
                     )}
 
                     {tab === "risk" && (
-                      <>
-                        {task.risk ? (
-                          <>
-                            <div
-                              className={
-                                "risk-banner " +
-                                (task.risk.blockers.length
-                                  ? "blocked"
-                                  : "ready")
-                              }
-                            >
-                              <ShieldCheck size={28} />
-                              <div>
-                                <h2>
-                                  {task.risk.blockers.length
-                                    ? "当前请求已阻断"
-                                    : "合成演示请求可审批"}
-                                </h2>
-                                <p>
-                                  完整风险检验：
-                                  {task.risk.completion === "complete"
-                                    ? "已完成"
-                                    : "未完成"}{" "}
-                                  · 不代表已证明安全
-                                </p>
-                              </div>
-                            </div>
-                            {task.risk.blockers.map((b: string) => (
-                              <div key={b} className="blocker">
-                                <AlertTriangle size={15} />
-                                {b}
-                              </div>
-                            ))}
-                            <h4 className="subheading">风险检查记录</h4>
-                            <div className="attack-list">
-                              {task.risk.attacks.map((a: Obj) => (
-                                <div key={a.kind}>
-                                  <span>{txt(a.kind)}</span>
-                                  <Tag tone={a.outcome === "resisted" ? "green" : "amber"}>{attackLabels[a.outcome || "not_run"]}</Tag>
-                                </div>
-                              ))}
-                            </div>
-                            {task.risk.findings.map((f: string, i: number) => (
-                              <p className="finding" key={i}>
-                                {f}
-                              </p>
-                            ))}
-                            <details className="request-detail" open>
-                              <summary>
-                                完整请求快照 <Tag>v{task.version}</Tag>
-                              </summary>
-                              <div className="request-target">
-                                <b>目标</b>
-                                {task.request.target}
-                                <b>模型</b>
-                                {task.request.body.model}
-                              </div>
-                              <pre>
-                                {JSON.stringify(task.request.body, null, 2)}
-                              </pre>
-                              <small>SHA-256 · {task.request_hash}</small>
-                            </details>
-                            <div className="approval-actions">
-                              {task.status === "review" && (
-                                <button
-                                  className="primary"
-                                  disabled={busy}
-                                  onClick={() => setModal("approve")}
-                                >
-                                  <Check size={16} />
-                                  审批当前完整请求
-                                </button>
-                              )}
-                              {task.status === "approved" && (
-                                <button
-                                  className="primary"
-                                  disabled={busy}
-                                  onClick={() => taskAction("send")}
-                                >
-                                  <Play size={15} />
-                                  {task.transport === "mock"
-                                    ? "执行模拟调用"
-                                    : "发送至已批准云端"}
-                                </button>
-                              )}
-                              {task.status === "unknown" && (
-                                <button
-                                  className="secondary"
-                                  onClick={() => taskAction("reconcile")}
-                                >
-                                  查询网关记录（不重发）
-                                </button>
-                              )}
-                              <button
-                                className="secondary"
-                                disabled={
-                                  busy ||
-                                  [
-                                    "queued",
-                                    "sending",
-                                    "complete",
-                                    "unknown",
-                                  ].includes(task.status)
-                                }
-                                onClick={() => taskAction("evaluate")}
-                              >
-                                重新检验
-                              </button>
-                              <button
-                                className="text-button danger-text"
-                                disabled={
-                                  busy ||
-                                  [
-                                    "queued",
-                                    "sending",
-                                    "complete",
-                                    "unknown",
-                                  ].includes(task.status)
-                                }
-                                onClick={() => taskAction("stop")}
-                              >
-                                停止任务
-                              </button>
-                            </div>
-                            {task.status === "complete" && (
-                              <button
-                                className="primary"
-                                onClick={() => setTab("result")}
-                              >
-                                查看摘要与回链 <ArrowRight size={16} />
-                              </button>
-                            )}
-                            {task.error && (
-                              <div className="inline-warning">{task.error}</div>
-                            )}
-                          </>
-                        ) : (
-                          <div className="empty">
-                            <ShieldCheck size={30} />
-                            <h3>检验当前披露方案</h3>
-                            <p>冻结请求后，查看完整发送内容与阻断原因。</p>
-                            <button
-                              className="primary"
-                              onClick={() => taskAction("evaluate")}
-                            >
-                              开始检验
-                            </button>
-                          </div>
-                        )}
-                      </>
+                      <RiskWorkspace task={task} busy={busy} label={txt} attackLabels={attackLabels}
+                        onAction={taskAction} onApprove={()=>setModal("approve")} onResult={()=>setTab("result")}
+                        onRunAttacks={(auxiliary)=>run(()=>api(`/tasks/${task.id}/attacks/run`,"POST",{auxiliary}),
+                          "红队作业已排队；完成后请重新检验。")}/>
                     )}
 
                     {tab === "result" && (
-                      <>
-                        {task.artifact ? (
-                          <>
-                            {task.type === "timeline" ? (
-                              <>
-                                <div className="result-heading"><Tag tone="green">本地确定性结果</Tag></div>
-                                <p className="context-note">时间线仅从已确认事实中筛选，不调用边侧或云端模型。</p>
-                                {(task.artifact.events || []).map((event: Obj, i: number) => <article className="claim-card" key={event.id}><div className="fact-meta"><span className="fact-no">{String(i + 1).padStart(2, "0")}</span><Tag>时间事实</Tag></div><p>{event.text}</p><div className="fact-footer"><button onClick={() => locate(event.source_ids)}><Link2 size={13} />回到原文</button></div></article>)}
-                              </>
-                            ) : <>
-                            <div className="result-heading">
-                              <Tag
-                                tone={
-                                  task.artifact.provenance === "simulation"
-                                    ? "amber"
-                                    : "green"
-                                }
-                              >
-                                {task.artifact.provenance === "simulation"
-                                  ? "模拟结果 · 非模型生成"
-                                  : "云端 API 返回"}
-                              </Tag>
-                              <a
-                                className="text-button"
-                                href={`/api/v1/tasks/${task.id}/export`}
-                              >
-                                <Download size={14} />
-                                导出 JSON
-                              </a>
-                            </div>
-                            <p className="context-note">
-                              身份仅在边侧回填；请逐项对照原文后确认。
-                            </p>
-                            {task.artifact.claims.map((c: Obj, i: number) => (
-                              <article className="claim-card" key={c.id}>
-                                <div className="fact-meta">
-                                  <span className="fact-no">
-                                    {String(i + 1).padStart(2, "0")}
-                                  </span>
-                                  <Tag tone={c.reviewed ? "green" : "amber"}>
-                                    {c.reviewed
-                                      ? "律师已复核"
-                                      : c.status === "source_matched"
-                                        ? "引用文本匹配"
-                                        : "需人工复核"}
-                                  </Tag>
-                                </div>
-                                <p>{c.local_text || c.text}</p>
-                                {c.issues.map((issue: string) => (
-                                  <small className="claim-issue" key={issue}>
-                                    <AlertTriangle size={12} />
-                                    {issue}
-                                  </small>
-                                ))}
-                                <div className="fact-footer">
-                                  <button onClick={() => locate(c.anchors)}>
-                                    <Link2 size={13} />
-                                    回到原文
-                                  </button>
-                                  <button
-                                    disabled={busy || c.reviewed || task.stale}
-                                    onClick={() =>
-                                      taskAction("claims/" + c.id + "/review")
-                                    }
-                                  >
-                                    {c.reviewed ? "已确认" : "已核对本项"}
-                                  </button>
-                                </div>
-                              </article>
-                            ))}
-                            <div className="bottom-action">
-                              <button
-                                className="primary"
-                                disabled={
-                                  busy ||
-                                  task.artifact.confirmed ||
-                                  task.stale ||
-                                  !task.artifact.claims.every(
-                                    (c: Obj) => c.reviewed,
-                                  )
-                                }
-                                onClick={() => taskAction("confirm")}
-                              >
-                                <Check size={15} />
-                                {task.artifact.confirmed
-                                  ? "结果已确认"
-                                  : "确认最终结果"}
-                              </button>
-                            </div>
-                            </>}
-                          </>
-                        ) : (
-                          <Empty
-                            title="尚无摘要结果"
-                            detail="完成审批和调用后，结果会在此进入来源校核。"
-                          />
-                        )}
-                      </>
+                      <RestorationWorkspace task={task} busy={busy} locate={locate} onAction={taskAction}/>
                     )}
                   </>
                 )}
@@ -1360,7 +1125,7 @@ export default function App() {
               <aside className="context-panel">
                 <div className="panel-heading">
                   <h3>依据与运行边界</h3>
-                  <CircleHelp size={16} />
+                  <button className="context-close" aria-label="关闭依据面板" onClick={()=>setContextOpen(false)}><X size={16}/></button>
                 </div>
                 <div className="boundary-card">
                   <LockKeyhole size={20} />
@@ -1499,79 +1264,14 @@ export default function App() {
             </div>
           </div>
         )}
-        {page === "providers" && <ProviderCenter providers={boot?.providers} />}
-        {page === "benchmark" && <BenchmarkCenter protocols={boot?.risk_protocols} />}
-        {page === "registry" && (
-          <div className="content">
-            <div className="section-heading">
-              <div>
-                <div className="eyebrow">EXTENSIBLE BY DESIGN</div>
-                <h1>法学规则中心</h1>
-                <p>案由与任务独立扩展；法学未定不阻塞工程，但持续阻断正式外发。</p>
-              </div>
-              <Tag>版本化注册</Tag>
-            </div>
-            <h2 className="subheading">任务能力</h2>
-            <div className="capability-grid">
-              {boot?.tasks.map((t: Obj) => (
-                <div className="capability" key={t.id}>
-                  <div>
-                    <b>{t.name}</b>
-                    <Tag tone={t.available ? "green" : "neutral"}>
-                      {t.available ? "已实现" : "尚未开放"}
-                    </Tag>
-                  </div>
-                  <p>
-                    {t.id} · {t.version}
-                  </p>
-                </div>
-              ))}
-            </div>
-            <h2 className="subheading">案由知识包</h2>
-            {boot?.packs.map((p: Obj) => (
-              <div className="pack-card" key={p.id}>
-                <div>
-                  <h3>{p.name}</h3>
-                  <Tag tone="amber">
-                    {p.status === "demo"
-                      ? "演示规则"
-                      : p.status === "draft"
-                        ? "草稿 / 测试"
-                        : "已发布"}
-                  </Tag>
-                </div>
-                <p>
-                  {p.version} · {p.fact_fields.map((field: any) => txt(typeof field === "string" ? field : field.id)).join(" / ")}
-                </p>
-                <small>{p.references.join(" ")}</small>
-                <details>
-                  <summary>查看字段规则与依据</summary>
-                  <pre>{JSON.stringify(p.rules, null, 2)}</pre>
-                </details>
-              </div>
-            ))}
-            <div className="context-note">
-              正式规则通过命令行校验并导入，已有版本不可覆盖；知识包不能执行任意代码。
-            </div>
-          </div>
-        )}
+        {page === "providers" && <ProviderCenter providers={boot?.providers} request={api} refresh={reload} busy={busy}/>}
+        {page === "benchmark" && <BenchmarkCenter protocols={boot?.risk_protocols} request={api} refresh={reload}/>}
+        {page === "registry" && <LegalPackCenter packs={boot?.packs} tasks={boot?.task_definitions||boot?.tasks} request={api}/>}
+        {page === "users" && <UserCenter request={api}/>}
       </main>
 
       {modal && (
-        <div className="modal-backdrop" onClick={() => !busy && setModal("")}>
-          <div
-            className="modal"
-            onClick={(e) => e.stopPropagation()}
-            role="dialog"
-            aria-modal="true"
-          >
-            <button
-              className="modal-close"
-              aria-label="关闭对话框"
-              onClick={() => setModal("")}
-            >
-              <X size={20} />
-            </button>
+        <Dialog open title={modal} busy={busy} onClose={() => setModal("")}>
             {modal === "case" && (
               <>
                 <div className="eyebrow">NEW CASE</div>
@@ -1813,8 +1513,7 @@ export default function App() {
               </>
             )}
             {error && <p className="error">{error}</p>}
-          </div>
-        </div>
+        </Dialog>
       )}
     </div>
   );

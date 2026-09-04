@@ -1,5 +1,4 @@
 import asyncio
-import hmac
 import io
 import json
 import os
@@ -15,13 +14,14 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 from . import service
+from .auth import create_user_record, current_actor, ensure_initial_admin, public_user, verify_password
 from .parsing import ocr_available
 from .providers import EdgeClient
 from .contracts import ProviderProfile, RiskProtocol
 from .governance import protocol_content_hash, publish_pack_record
 from .registry import TASKS, import_pack, run_pack_regressions, task_definitions, validate_pack
 from .storage import Store
-from .util import app_dir, audit, now, restrict_mode, sign, uid
+from .util import app_dir, audit, digest, now, restrict_mode, sign, uid
 
 
 class Input(BaseModel):
@@ -35,6 +35,25 @@ class CaseInput(Input):
 
 class DemoInput(Input):
     scenario: Literal["success", "linkage", "stop"] = "success"
+
+
+class LoginInput(Input):
+    username: str = "admin"
+    password: str
+
+
+class UserCreateInput(Input):
+    username: str
+    display_name: str = Field(min_length=1, max_length=80)
+    role: Literal["admin", "case_operator", "legal_reviewer", "approver"]
+    password: str = Field(min_length=12, max_length=512)
+
+
+class UserUpdateInput(Input):
+    display_name: str | None = Field(default=None, min_length=1, max_length=80)
+    role: Literal["admin", "case_operator", "legal_reviewer", "approver"] | None = None
+    status: Literal["active", "disabled"] | None = None
+    password: str | None = Field(default=None, min_length=12, max_length=512)
 
 
 class FactInput(Input):
@@ -91,7 +110,12 @@ class AttackBatchInput(Input):
     auxiliary: dict[str, list[dict]] = Field(default_factory=dict)
 
 
+class ProviderReviewInput(Input):
+    status: Literal["reviewed", "expired"]
+
+
 def create_app(data_dir=None, password=None):
+    explicit_password = password is not None
     root = Path(data_dir or app_dir()).resolve()
     root.mkdir(parents=True, exist_ok=True)
     restrict_mode(root, 0o700)
@@ -105,6 +129,8 @@ def create_app(data_dir=None, password=None):
             password_file.write_text(secrets.token_urlsafe(18), encoding="utf-8")
             restrict_mode(password_file, 0o600)
         password = password_file.read_text(encoding="utf-8").strip()
+    ensure_initial_admin(store, password, os.getenv("LEX_LOCAL_ACTOR", "本地管理员"),
+                         reset_password=explicit_password)
     sessions = {}
     attempts = {}
     app = FastAPI(title="LexAegis", docs_url=None, redoc_url=None)
@@ -114,17 +140,40 @@ def create_app(data_dir=None, password=None):
 
     @app.middleware("http")
     async def guard(request: Request, call_next):
+        actor_token = current_actor.set("system")
         if request.url.path.startswith("/api/"):
             if request.method not in ("GET", "HEAD"):
                 origin = request.headers.get("origin")
                 allowed = {"http://127.0.0.1:8765", "http://localhost:8765", "http://127.0.0.1:5173", "http://localhost:5173", "http://testserver"}
                 if origin and origin not in allowed:
+                    current_actor.reset(actor_token)
                     return JSONResponse({"detail": "不允许跨站请求"}, 403)
             if request.url.path not in ("/api/v1/login", "/api/v1/health"):
-                session = sessions.get(request.cookies.get("lex_session"))
+                token = request.cookies.get("lex_session")
+                session = sessions.get(token)
                 if not session or session["expires"] <= time.time():
+                    current_actor.reset(actor_token)
                     return JSONResponse({"detail": "请登录本地工作台"}, 401)
-        response = await call_next(request)
+                with store.read() as repo:
+                    try:
+                        user = repo.get(session["user_id"], "user")
+                    except KeyError:
+                        user = None
+                if not user or user.get("status") != "active":
+                    sessions.pop(token, None)
+                    current_actor.reset(actor_token)
+                    return JSONResponse({"detail": "本地账户已停用"}, 401)
+                if session.get("auth_version") != user.get("auth_version", 1):
+                    sessions.pop(token, None)
+                    current_actor.reset(actor_token)
+                    return JSONResponse({"detail": "账户凭据已变化，请重新登录"}, 401)
+                session.update(actor=user["display_name"], role=user["role"], username=user["username"])
+                current_actor.reset(actor_token)
+                actor_token = current_actor.set(user["display_name"])
+        try:
+            response = await call_next(request)
+        finally:
+            current_actor.reset(actor_token)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["Cache-Control"] = "no-store"
@@ -145,19 +194,28 @@ def create_app(data_dir=None, password=None):
         return {"status": "ok", "version": "0.2.0"}
 
     @app.post("/api/v1/login")
-    def login(body: dict, request: Request, response: Response):
+    def login(body: LoginInput, request: Request, response: Response):
         ip = request.client.host if request.client else "local"
-        recent = [t for t in attempts.get(ip, []) if t > time.time()-60]
+        username = body.username.strip().lower()
+        attempt_key = ip + ":" + username
+        recent = [t for t in attempts.get(attempt_key, []) if t > time.time()-60]
         if len(recent) >= 10:
             raise HTTPException(429, "尝试过多，请一分钟后重试")
-        attempts[ip] = recent + [time.time()]
-        if not hmac.compare_digest(str(body.get("password", "")), password):
+        attempts[attempt_key] = recent + [time.time()]
+        with store.read() as repo:
+            try:
+                user = repo.get("user:" + username, "user")
+            except KeyError:
+                user = None
+        if not user or user.get("status") != "active" or not verify_password(body.password, user):
             raise HTTPException(401, "本地访问口令不正确")
         token = secrets.token_urlsafe(32)
-        sessions[token] = {"expires": time.time() + 8*3600, "actor": os.getenv("LEX_LOCAL_ACTOR", "local-lawyer"),
-                           "role": os.getenv("LEX_LOCAL_ROLE", "admin")}
+        sessions[token] = {"expires": time.time() + 8*3600, "user_id": user["id"],
+                           "username": user["username"], "actor": user["display_name"], "role": user["role"],
+                           "auth_version": user.get("auth_version", 1)}
         response.set_cookie("lex_session", token, httponly=True, samesite="strict", max_age=8*3600)
-        return {"ok": True, "actor": sessions[token]["actor"], "role": sessions[token]["role"]}
+        attempts.pop(attempt_key, None)
+        return {"ok": True, "username": username, "actor": sessions[token]["actor"], "role": sessions[token]["role"]}
 
     def principal(request: Request):
         return sessions.get(request.cookies.get("lex_session"), {"actor": "unknown", "role": "unknown"})
@@ -171,13 +229,59 @@ def create_app(data_dir=None, password=None):
     @app.get("/api/v1/me")
     def me(request: Request):
         identity = principal(request)
-        return {"actor": identity["actor"], "role": identity["role"]}
+        return {key: identity.get(key) for key in ("user_id", "username", "actor", "role")}
 
     @app.post("/api/v1/logout")
     def logout(request: Request, response: Response):
         sessions.pop(request.cookies.get("lex_session"), None)
         response.delete_cookie("lex_session")
         return {"ok": True}
+
+    @app.get("/api/v1/users")
+    def users(request: Request):
+        require_role(request, "admin")
+        with store.read() as repo:
+            return [public_user(user) for user in repo.list("user")]
+
+    @app.post("/api/v1/users")
+    def user_create(body: UserCreateInput, request: Request):
+        identity = require_role(request, "admin")
+        with store.transaction() as repo:
+            try:
+                repo.get("user:" + body.username.strip().lower(), "user")
+                raise service.DomainError("用户名已存在")
+            except KeyError:
+                pass
+            user = create_user_record(body.username, body.display_name, body.role, body.password,
+                                      created_by=identity["actor"])
+            repo.put("user", user)
+            audit(repo, "", "user.created", user_id=user["id"], role=user["role"], actor=identity["actor"])
+            return public_user(user)
+
+    @app.put("/api/v1/users/{username}")
+    def user_update(username: str, body: UserUpdateInput, request: Request):
+        identity = require_role(request, "admin")
+        from .auth import password_hash
+        with store.transaction() as repo:
+            user = repo.get("user:" + username.lower(), "user")
+            if body.display_name is not None:
+                user["display_name"] = body.display_name.strip()
+            if body.role is not None:
+                user["role"] = body.role
+            if body.status is not None:
+                user["status"] = body.status
+            if body.password is not None:
+                user["password_salt"], user["password_hash"] = password_hash(body.password)
+                user["auth_version"] = int(user.get("auth_version", 1)) + 1
+            active_admins = [item for item in repo.list("user")
+                             if item["id"] != user["id"] and item.get("status") == "active" and item.get("role") == "admin"]
+            if (user.get("status") != "active" or user.get("role") != "admin") and not active_admins:
+                raise service.DomainError("不能停用或降级最后一个管理员")
+            user["updated_at"] = now()
+            repo.put("user", user)
+            audit(repo, "", "user.updated", user_id=user["id"], role=user["role"],
+                  status=user["status"], actor=identity["actor"])
+            return public_user(user)
 
     @app.get("/api/v1/bootstrap")
     def bootstrap():
@@ -267,13 +371,57 @@ def create_app(data_dir=None, password=None):
 
     @app.put("/api/v1/providers/{provider_id}")
     def provider_put(provider_id: str, body: ProviderProfile, request: Request):
-        require_role(request, "admin")
+        identity = require_role(request, "admin")
         if provider_id != body.id:
             raise service.DomainError("服务商标识不一致")
         with store.transaction() as repo:
-            repo.put("provider", body.model_dump())
-            audit(repo, "", "provider.updated", provider_id=provider_id, status=body.status)
-            return body
+            profile = body.model_dump()
+            try:
+                existing = repo.get(provider_id, "provider")
+            except KeyError:
+                existing = None
+            profile["profile_version"] = int((existing or {}).get("profile_version", 0)) + 1
+            profile.update(status="draft", reviewed_by=None, reviewed_at=None)
+            repo.put("provider", profile)
+            audit(repo, "", "provider.updated", provider_id=provider_id, status="draft",
+                  version=profile["profile_version"], actor=identity["actor"])
+            return profile
+
+    @app.post("/api/v1/providers/{provider_id}/review")
+    def provider_review(provider_id: str, body: ProviderReviewInput, request: Request):
+        identity = require_role(request, "legal_reviewer")
+        with store.transaction() as repo:
+            profile = repo.get(provider_id, "provider")
+            if body.status == "reviewed":
+                required = [
+                    profile.get("role") not in (None, "unknown"),
+                    bool(profile.get("processing_regions")), bool(profile.get("retention")),
+                    profile.get("training_use") != "unknown", profile.get("human_access") != "unknown",
+                    profile.get("subprocessor_status") in ("none", "declared"),
+                    bool(profile.get("deletion_mechanism")), bool(profile.get("contract_reference")),
+                    bool(profile.get("impact_assessment_reference")), bool(profile.get("valid_until")),
+                    bool(profile.get("allowed_tasks")), bool(profile.get("allowed_domains")),
+                    bool(profile.get("allowed_fields")), "cloud" in profile.get("allowed_transports", []),
+                ]
+                if not all(required) or (profile.get("subprocessor_status") == "declared" and not profile.get("subprocessors")):
+                    raise service.DomainError("服务商关键处理条件或允许范围尚未完整登记")
+            profile.update(status=body.status, reviewed_by=identity["actor"], reviewed_at=now(),
+                           profile_version=int(profile.get("profile_version", 1)) + 1)
+            repo.put("provider", profile)
+            audit(repo, "", "provider.reviewed", provider_id=provider_id, status=body.status,
+                  version=profile["profile_version"], actor=identity["actor"])
+            return profile
+
+    @app.delete("/api/v1/providers/{provider_id}")
+    def provider_delete(provider_id: str, request: Request):
+        identity = require_role(request, "admin")
+        with store.transaction() as repo:
+            profile = repo.get(provider_id, "provider")
+            if profile.get("status") == "reviewed" or repo.get("settings").get("provider_id") == provider_id:
+                raise service.DomainError("经复核或正在使用的服务商档案不能删除，只能标记过期")
+            repo.delete(provider_id)
+            audit(repo, "", "provider.deleted", provider_id=provider_id, actor=identity["actor"])
+        return {"ok": True}
 
     @app.get("/api/v1/risk-protocols")
     def risk_protocols():
@@ -299,12 +447,14 @@ def create_app(data_dir=None, password=None):
             return protocol
 
     @app.post("/api/v1/cases")
-    def create_case(body: CaseInput):
+    def create_case(body: CaseInput, request: Request):
+        require_role(request, "case_operator")
         with store.transaction() as repo:
             return service.create_case(repo, body.name, body.domain)
 
     @app.post("/api/v1/demos")
-    def demo(body: DemoInput):
+    def demo(body: DemoInput, request: Request):
+        require_role(request, "case_operator")
         from .demo import SCENARIOS
         with store.transaction() as repo:
             return service.create_case(repo, SCENARIOS[body.scenario]["name"], scenario=body.scenario)
@@ -317,7 +467,8 @@ def create_app(data_dir=None, password=None):
             return {"case": case, "documents": docs, "facts": repo.list("fact", case_id), "tasks": repo.list("task", case_id), "jobs": repo.list("job", case_id), "audit": repo.list("audit", case_id), "ledger": repo.list("disclosure", case_id)}
 
     @app.post("/api/v1/cases/{case_id}/documents")
-    async def upload(case_id: str, file: UploadFile = File(...)):
+    async def upload(case_id: str, request: Request, file: UploadFile = File(...)):
+        require_role(request, "case_operator")
         extension = Path(file.filename or "").suffix.lower()
         if extension not in (".docx", ".pdf", ".png", ".jpg", ".jpeg"):
             raise HTTPException(400, "仅支持 DOCX、PDF、PNG 和 JPEG")
@@ -373,7 +524,8 @@ def create_app(data_dir=None, password=None):
         return Response(output.getvalue(), media_type="image/png")
 
     @app.put("/api/v1/cases/{case_id}/documents/{document_id}/correction")
-    def correction(case_id: str, document_id: str, body: Correction):
+    def correction(case_id: str, document_id: str, body: Correction, request: Request):
+        require_role(request, "case_operator")
         with store.transaction() as repo:
             return service.correct_document(repo, case_id, document_id, body.block_id, body.text)
 
@@ -384,17 +536,20 @@ def create_app(data_dir=None, password=None):
             return list(service.anchor_index(repo, case_id, current_only=False).values())
 
     @app.post("/api/v1/cases/{case_id}/facts")
-    def add_fact(case_id: str, body: FactInput):
+    def add_fact(case_id: str, body: FactInput, request: Request):
+        require_role(request, "case_operator")
         with store.transaction() as repo:
             return service.save_fact(repo, case_id, body.model_dump())
 
     @app.put("/api/v1/cases/{case_id}/facts/{fact_id}")
-    def edit_fact(case_id: str, fact_id: str, body: FactInput):
+    def edit_fact(case_id: str, fact_id: str, body: FactInput, request: Request):
+        require_role(request, "case_operator")
         with store.transaction() as repo:
             return service.save_fact(repo, case_id, body.model_dump(), fact_id)
 
     @app.delete("/api/v1/cases/{case_id}/facts/{fact_id}")
-    def delete_fact(case_id: str, fact_id: str):
+    def delete_fact(case_id: str, fact_id: str, request: Request):
+        require_role(request, "case_operator")
         with store.transaction() as repo:
             case = service.get_case(repo, case_id)
             service.assert_editable(repo, case_id)
@@ -405,7 +560,8 @@ def create_app(data_dir=None, password=None):
         return {"ok": True}
 
     @app.post("/api/v1/cases/{case_id}/extract")
-    def extract(case_id: str):
+    def extract(case_id: str, request: Request):
+        require_role(request, "case_operator")
         with store.transaction() as repo:
             case = service.get_case(repo, case_id)
             if case["mode"] == "demo":
@@ -421,17 +577,20 @@ def create_app(data_dir=None, password=None):
             return service.queue_job(repo, case_id, "extract", {"revision": case["revision"], "blocks": blocks})
 
     @app.post("/api/v1/cases/{case_id}/tasks")
-    def task(case_id: str, body: TaskInput):
+    def task(case_id: str, body: TaskInput, request: Request):
+        require_role(request, "case_operator")
         with store.transaction() as repo:
             return service.create_task(repo, case_id, body.transport, body.task_type, body.pack_id)
 
     @app.patch("/api/v1/tasks/{task_id}/decisions/{fact_id}")
-    def decision(task_id: str, fact_id: str, body: DecisionInput):
+    def decision(task_id: str, fact_id: str, body: DecisionInput, request: Request):
+        require_role(request, "case_operator")
         with store.transaction() as repo:
             return service.update_decision(repo, task_id, fact_id, body.transform, body.necessity, body.output)
 
     @app.post("/api/v1/tasks/{task_id}/evaluate")
-    def evaluate(task_id: str):
+    def evaluate(task_id: str, request: Request):
+        require_role(request, "case_operator")
         with store.transaction() as repo:
             return service.evaluate_task(repo, task_id)
 
@@ -454,12 +613,14 @@ def create_app(data_dir=None, password=None):
             return service.approve_task(repo, task_id, body.request_hash, identity["actor"], "approver")
 
     @app.post("/api/v1/tasks/{task_id}/send")
-    def send(task_id: str):
+    def send(task_id: str, request: Request):
+        require_role(request, "case_operator")
         with store.transaction() as repo:
             return service.reserve_send(repo, task_id)
 
     @app.post("/api/v1/tasks/{task_id}/stop")
-    def stop(task_id: str):
+    def stop(task_id: str, request: Request):
+        require_role(request, "case_operator")
         with store.transaction() as repo:
             task = repo.get(task_id, "task")
             if task["status"] in ("queued", "sending", "unknown", "complete"):
@@ -470,7 +631,8 @@ def create_app(data_dir=None, password=None):
             return task
 
     @app.post("/api/v1/tasks/{task_id}/reconcile")
-    def reconcile(task_id: str):
+    def reconcile(task_id: str, request: Request):
+        require_role(request, "case_operator")
         with store.transaction() as repo:
             task = repo.get(task_id, "task")
             if task["status"] != "unknown":
@@ -497,13 +659,16 @@ def create_app(data_dir=None, password=None):
             return task
 
     @app.post("/api/v1/tasks/{task_id}/confirm")
-    def confirm(task_id: str):
+    def confirm(task_id: str, request: Request):
+        identity = require_role(request, "legal_reviewer", "approver")
         with store.transaction() as repo:
             task = repo.get(task_id, "task")
             service.assert_current(repo, task)
             if task["status"] != "complete" or not task["artifact"] or not all(c["reviewed"] for c in task["artifact"]["claims"]):
                 raise service.DomainError("请先逐项查看原文并确认摘要陈述")
             task["artifact"]["confirmed"] = True
+            task["artifact"]["confirmed_by"] = identity["actor"]
+            task["artifact"]["confirmed_at"] = now()
             repo.put("task", task, task["case_id"])
             audit(repo, task["case_id"], "artifact.confirmed", task_id=task_id)
             return task
@@ -518,32 +683,45 @@ def create_app(data_dir=None, password=None):
 
     @app.post("/api/v1/tasks/{task_id}/local-export-approval")
     def approve_local_export(task_id: str, body: NamedConfirmation, request: Request):
+        from datetime import datetime, timezone, timedelta
         identity = require_role(request, "legal_reviewer", "approver")
         with store.transaction() as repo:
             task = repo.get(task_id, "task")
+            service.assert_current(repo, task)
             if not task.get("artifact") or not task["artifact"].get("confirmed"):
                 raise service.DomainError("本地复原结果须先逐项确认")
-            record = {"id": uid("local_export"), "task_id": task_id, "actor": identity["actor"], "actor_role": identity["role"], "at": now()}
+            record = {"id": uid("local_export"), "task_id": task_id, "task_version": task["version"],
+                      "artifact_hash": digest(task["artifact"]),
+                      "actor": identity["actor"], "actor_role": identity["role"], "at": now(),
+                      "expires_at": (datetime.now(timezone.utc)+timedelta(minutes=15)).isoformat()}
             repo.put("local_export_approval", record, task_id)
             audit(repo, task["case_id"], "local_export.approved", task_id=task_id, actor=identity["actor"])
             return record
 
     @app.get("/api/v1/tasks/{task_id}/export")
     def export(task_id: str, view: Literal["cloud", "local"] = "cloud"):
+        from datetime import datetime, timezone
         with store.read() as repo:
             task = repo.get(task_id, "task")
             local_approvals = repo.list("local_export_approval", task_id)
         if not task.get("artifact"):
             raise HTTPException(409, "尚无结果")
-        if view == "local" and not local_approvals:
-            raise HTTPException(409, "含真实身份的本地复原包需要具名二次确认")
+        if view == "local":
+            valid = [item for item in local_approvals
+                     if item.get("task_version") == task["version"]
+                     and item.get("artifact_hash") == digest(task["artifact"])
+                     and datetime.fromisoformat(item["expires_at"]) > datetime.now(timezone.utc)]
+            if task.get("stale") or not task["artifact"].get("confirmed") or not valid:
+                raise HTTPException(409, "含真实身份的本地复原包需要当前版本的限时具名二次确认")
         artifact = json.loads(json.dumps(task["artifact"]))
         if view == "cloud":
             for claim in artifact.get("claims", []):
                 claim.pop("local_text", None)
                 claim.pop("anchors", None)
         mode = task["request"]["mode"] if task.get("request") else "local"
-        body = {"task_id": task_id, "view": view, "mode": mode, "stale": task["stale"], "artifact": artifact,
+        body = {"task_id": task_id, "view": view,
+                "bundle_type": "cloud_view" if view == "cloud" else "local_review_bundle",
+                "mode": mode, "stale": task["stale"], "artifact": artifact,
                 "request_hash": task.get("request_hash"), "pack": task["pack_id"]}
         return Response(json.dumps(body, ensure_ascii=False, indent=2), media_type="application/json", headers={"Content-Disposition": f'attachment; filename="{task_id}.json"'})
 
@@ -555,7 +733,8 @@ def create_app(data_dir=None, password=None):
         return Response(json.dumps(events, ensure_ascii=False, indent=2), media_type="application/json", headers={"Content-Disposition": 'attachment; filename="audit.json"'})
 
     @app.put("/api/v1/settings")
-    def settings(body: SettingsInput):
+    def settings(body: SettingsInput, request: Request):
+        require_role(request, "admin")
         cloud, edge = urlparse(body.cloud_url), urlparse(body.edge_url)
         edge_hosts = set(os.getenv("LEX_EDGE_ALLOWED_HOSTS", "127.0.0.1,localhost,edge-model").split(","))
         if cloud.scheme != "https" or not cloud.hostname or cloud.username or cloud.password or cloud.query or cloud.fragment:
@@ -580,7 +759,8 @@ def create_app(data_dir=None, password=None):
             return result
 
     @app.post("/api/v1/jobs/{job_id}/cancel")
-    def cancel(job_id: str):
+    def cancel(job_id: str, request: Request):
+        require_role(request, "case_operator")
         with store.transaction() as repo:
             job = repo.get(job_id, "job")
             if job["status"] != "pending" or job["kind"] in ("send", "reconcile"):

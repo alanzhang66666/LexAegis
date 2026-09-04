@@ -15,6 +15,18 @@
   --focus-ring: #77a88f;
 }
 
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface-canvas: #17201d;
+  --surface-paper: #202a26;
+  --color-brand: #79b89d;
+  --color-info: #7fa9d1;
+  --color-success: #73bd99;
+  --color-warning: #d7a66d;
+  --color-danger: #e28b82;
+  --focus-ring: #91cdb1;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }

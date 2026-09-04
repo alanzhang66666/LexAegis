@@ -20,8 +20,14 @@ def provider_checks(profile: dict | None, *, domain: str, task_type: str, fields
         return checks
     known = profile.get("role") not in (None, "unknown") and bool(profile.get("processing_regions"))
     known = known and profile.get("training_use") != "unknown" and profile.get("human_access") != "unknown"
-    add("关键处理条件", known, "角色、处理地区、训练使用和人工访问必须人工登记")
-    valid = profile.get("status") == "reviewed" and bool(profile.get("contract_reference")) and bool(profile.get("impact_assessment_reference"))
+    known = known and bool(profile.get("retention")) and bool(profile.get("deletion_mechanism"))
+    known = known and profile.get("subprocessor_status") in ("none", "declared")
+    if profile.get("subprocessor_status") == "declared":
+        known = known and bool(profile.get("subprocessors"))
+    add("关键处理条件", known, "角色、地区、留存、删除、训练、人工访问和分包商状态必须人工登记")
+    valid = (profile.get("status") == "reviewed" and bool(profile.get("contract_reference"))
+             and bool(profile.get("impact_assessment_reference")) and bool(profile.get("reviewed_by"))
+             and bool(profile.get("reviewed_at")))
     if profile.get("valid_until"):
         try:
             expires = datetime.fromisoformat(profile["valid_until"])

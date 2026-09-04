@@ -246,6 +246,7 @@ class ProviderProfile(Contract):
     training_use: Literal["forbidden", "allowed", "unknown"] = "unknown"
     human_access: Literal["forbidden", "controlled", "allowed", "unknown"] = "unknown"
     subprocessors: list[str] = Field(default_factory=list)
+    subprocessor_status: Literal["none", "declared", "unknown"] = "unknown"
     deletion_mechanism: str | None = None
     contract_reference: str | None = None
     impact_assessment_reference: str | None = None
@@ -255,6 +256,9 @@ class ProviderProfile(Contract):
     allowed_fields: list[str] = Field(default_factory=list)
     allowed_transports: list[Literal["cloud"]] = Field(default_factory=list)
     status: Literal["draft", "reviewed", "expired"] = "draft"
+    profile_version: int = Field(default=1, ge=1)
+    reviewed_by: str | None = None
+    reviewed_at: str | None = None
 
 
 class ApprovalV2(Contract):
