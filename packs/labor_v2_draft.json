@@ -14,6 +14,20 @@
     {"id": "amount", "label": "金额", "value_type": "money", "description": "工资或补偿金额"},
     {"id": "evidence", "label": "证据", "value_type": "text", "description": "证据名称与证明目的"}
   ],
+  "task_field_matrix": [
+    {"task_id": "fact_summary", "field": "entity", "necessity": "uncertain", "rationale": "待法学团队确认"},
+    {"task_id": "fact_summary", "field": "relation", "necessity": "uncertain", "rationale": "待法学团队确认"},
+    {"task_id": "fact_summary", "field": "event", "necessity": "uncertain", "rationale": "待法学团队确认"},
+    {"task_id": "fact_summary", "field": "date", "necessity": "uncertain", "rationale": "待法学团队确认"},
+    {"task_id": "fact_summary", "field": "amount", "necessity": "uncertain", "rationale": "待法学团队确认"},
+    {"task_id": "fact_summary", "field": "evidence", "necessity": "uncertain", "rationale": "待法学团队确认"},
+    {"task_id": "timeline", "field": "entity", "necessity": "uncertain", "rationale": "待法学团队确认"},
+    {"task_id": "timeline", "field": "relation", "necessity": "uncertain", "rationale": "待法学团队确认"},
+    {"task_id": "timeline", "field": "event", "necessity": "uncertain", "rationale": "待法学团队确认"},
+    {"task_id": "timeline", "field": "date", "necessity": "uncertain", "rationale": "待法学团队确认"},
+    {"task_id": "timeline", "field": "amount", "necessity": "uncertain", "rationale": "待法学团队确认"},
+    {"task_id": "timeline", "field": "evidence", "necessity": "uncertain", "rationale": "待法学团队确认"}
+  ],
   "rules": [
     {"field": "entity", "necessity": "uncertain", "transform": "delete", "reason": "法学规则尚未审核", "forbidden": false},
     {"field": "relation", "necessity": "uncertain", "transform": "delete", "reason": "法学规则尚未审核", "forbidden": false},
@@ -27,6 +41,17 @@
   "forbidden_terms": ["唯一", "公开获奖"],
   "manual_review_conditions": ["法源未冻结", "规则必要性不确定", "攻击协议未完成"],
   "references": ["案隐盾申请评议书20260831(1).docx（待法学团队确认）"],
+  "legal_status": "pending_legal_review",
+  "dispatch_allowed": false,
+  "published_scope": {},
   "risk_protocols": [],
-  "synthetic_cases": []
+  "synthetic_cases": [
+    {
+      "id": "conservative_default_001",
+      "expected_decisions": [
+        {"field": "entity", "necessity": "uncertain", "transform": "delete"},
+        {"field": "event", "necessity": "uncertain", "transform": "delete"}
+      ]
+    }
+  ]
 }

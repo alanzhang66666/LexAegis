@@ -4,10 +4,11 @@ import pytest
 
 from lexaegis.attacks import evaluate as attack
 from lexaegis.contracts import MappingEntry
-from lexaegis.detection import detect_text, merge_overlaps, risk_signals
+from lexaegis.detection import bind_source_spans, detect_text, merge_overlaps, risk_signals
 from lexaegis.dataset import build_semisynthetic_manifest, validate_annotations
 from lexaegis.experiments import gaussian_dp, l2_clip, mia_requires_real_outputs, random_projection, rdp_gaussian, rdp_to_epsilon
-from lexaegis.registry import validate_pack
+from lexaegis.registry import run_pack_regressions, validate_pack
+from lexaegis import task_engine
 from lexaegis.util import digest
 from .test_workflow import formal_material
 
@@ -30,6 +31,32 @@ def test_v1_cannot_be_promoted_and_v2_default_is_conservative():
                         "fact_fields":[{"id":"event","label":"事件"}],"rules":[{"field":"event","necessity":"uncertain","transform":"delete","reason":"待审"}],
                         "references":[]})
     assert pack.rules[0].necessity=="uncertain" and pack.rules[0].transform=="delete"
+    assert pack.task_field_matrix[0].necessity=="uncertain"
+    assert not pack.dispatch_allowed and pack.legal_status=="pending_legal_review"
+
+
+def test_pack_rejects_executable_regex_and_runs_synthetic_regression():
+    raw={"schema_version":2,"id":"safe_pack","name":"技术测试案由","version":"0.1","status":"draft","task_ids":["timeline"],
+         "fact_fields":[{"id":"event","label":"事件"}],
+         "rules":[{"field":"event","necessity":"uncertain","transform":"delete","reason":"待审"}],
+         "references":[],"synthetic_cases":[{"id":"c1","expected_decisions":[{"field":"event","transform":"delete"}]}]}
+    pack=validate_pack(raw)
+    assert run_pack_regressions(pack.model_dump())["status"]=="passed"
+    raw["direct_identifier_patterns"]=[{"category":"bad","pattern":"(a+)+"}]
+    with pytest.raises(ValueError,match="回溯"):
+        validate_pack(raw)
+
+
+def test_detection_binds_every_exact_original_span_and_finds_context_name():
+    anchors={
+        "b1":{"id":"b1","text":"劳动者林甲主张联系13800138000。","document_version":1},
+        "b2":{"id":"b2","text":"另页记载13800138000。","document_version":1},
+    }
+    phone=detect_text("联系13800138000")
+    bound=bind_source_spans(phone,["b1","b2"],anchors)
+    assert {item["anchor_id"] for item in bound[0]["source_spans"]}=={"b1","b2"}
+    assert bound[0]["coordinate_space"]=="disclosure" and bound[0]["locator_status"]=="located"
+    assert "姓名" in {item["category"] for item in detect_text(anchors["b1"]["text"])}
 
 
 def test_local_timeline_extends_without_dispatch(env):
@@ -39,6 +66,36 @@ def test_local_timeline_extends_without_dispatch(env):
     task=result.json()
     assert task["status"]=="complete" and task["request"] is None
     assert task["artifact"]["provenance"]=="local_deterministic"
+
+
+def test_entrypoint_task_executes_without_service_state_machine_change(env, monkeypatch):
+    class Plugin:
+        @staticmethod
+        def definition():
+            return {"schema_version":2,"id":"custom_timeline","name":"扩展时间线","version":"1.0","status":"available",
+                    "execution_type":"local_deterministic",
+                    "input_schema":{"type":"object","required":["facts"],"properties":{"facts":{"type":"array"}}},
+                    "output_schema":{"type":"object","required":["events"],"properties":{"events":{"type":"array"}}},
+                    "validator":"custom_v1","transports":["local"],"ui_renderer":"timeline","max_payload_chars":50000}
+        @staticmethod
+        def run(payload):
+            return {"events":[{"id":item["id"],"text":item["value"],"source_ids":item["source_ids"]} for item in payload["facts"]]}
+    class Entry:
+        name="custom"
+        @staticmethod
+        def load():
+            return Plugin
+    monkeypatch.setattr(task_engine,"entry_points",lambda group:[Entry()])
+    case,_,_=formal_material(env)
+    with env["app"].state.store.transaction() as repo:
+        pack=repo.list("pack")[-1]
+        pack["task_ids"].append("custom_timeline")
+        pack["task_field_matrix"].append({"task_id":"custom_timeline","field":"event","necessity":"uncertain","rationale":"测试"})
+        repo.put("pack",pack)
+    result=env["client"].post(f"/api/v1/cases/{case['id']}/tasks",
+                              json={"task_type":"custom_timeline","transport":"local","pack_id":pack["id"]})
+    assert result.status_code==200,result.text
+    assert result.json()["artifact"]["events"] and result.json()["status"]=="complete"
 
 
 def test_wire_payload_excludes_local_only_data(env):

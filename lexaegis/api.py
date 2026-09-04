@@ -19,7 +19,7 @@ from .parsing import ocr_available
 from .providers import EdgeClient
 from .contracts import ProviderProfile, RiskProtocol
 from .governance import protocol_content_hash, publish_pack_record
-from .registry import TASKS, import_pack, task_definitions, validate_pack
+from .registry import TASKS, import_pack, run_pack_regressions, task_definitions, validate_pack
 from .storage import Store
 from .util import app_dir, audit, now, restrict_mode, sign, uid
 
@@ -230,8 +230,8 @@ def create_app(data_dir=None, password=None):
     def pack_validate(pack_id: str):
         with store.read() as repo:
             pack = repo.get(pack_id, "pack")
-        validate_pack({key: value for key, value in pack.items() if key not in ("domain_id",) and not (key == "id" and str(value).startswith("pack:"))} | {"id": pack["domain_id"]})
-        return {"valid": True, "pack_id": pack_id}
+        validated = validate_pack({key: value for key, value in pack.items() if key not in ("domain_id",) and not (key == "id" and str(value).startswith("pack:"))} | {"id": pack["domain_id"]})
+        return {"valid": True, "pack_id": pack_id, "regressions": run_pack_regressions(validated.model_dump())}
 
     @app.post("/api/v1/packs/{pack_id}/publish")
     def pack_publish(pack_id: str, body: NamedConfirmation, request: Request):

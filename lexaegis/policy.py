@@ -1,5 +1,5 @@
 import re
-from .detection import DEFAULT_PATTERNS, detect_text, risk_signals, sensitivity_signals
+from .detection import DEFAULT_PATTERNS, bind_source_spans, detect_text, risk_signals, sensitivity_signals
 from .util import digest
 
 ATTACKS = ["identity", "candidate_set", "sensitive_inference", "cross_round"]
@@ -52,9 +52,14 @@ def assess(case, pack, facts, decisions, docs, ledger, transport, provider_resul
     findings, blockers = [], []
     emitted = "\n".join(d["output"] for d in decisions if d["output"])
     fact_by_id = {fact["id"]: fact for fact in facts}
-    detector_inputs = [(fact_by_id.get(decision["fact_id"], {}).get("source_ids", [None])[0] if fact_by_id.get(decision["fact_id"], {}).get("source_ids") else None,
+    detector_inputs = [(fact_by_id.get(decision["fact_id"], {}).get("source_ids", []),
                         decision["output"]) for decision in decisions if decision.get("output")]
-    detected_findings = [finding for anchor_id, text in detector_inputs for finding in detect_text(text, anchor_id=anchor_id, pack=pack)]
+    anchor_index = {block["id"]: block for document in docs for block in document.get("ir", {}).get("blocks", [])}
+    detected_findings = [
+        finding
+        for source_ids, text in detector_inputs
+        for finding in bind_source_spans(detect_text(text, pack=pack), source_ids, anchor_index)
+    ]
     detected = list(dict.fromkeys(finding["category"] for finding in detected_findings))
     if detected:
         blockers.append("仍包含直接标识：" + "、".join(detected))
@@ -82,10 +87,13 @@ def assess(case, pack, facts, decisions, docs, ledger, transport, provider_resul
     if not demo:
         from .governance import validate_formal_gate
         blockers.extend(validate_formal_gate(pack, provider_results or [], attacks or [], isolation_verified))
+        if set(pack.get("risk_weights", {})) != {"entity", "density", "context", "combination", "cross_round"}:
+            blockers.append("五类风险信号权重尚未冻结")
     if transport == "mock" and not demo:
         blockers.append("正式案件不能使用模拟调用")
     attacks = attacks or [{"kind": name, "capability": "available", "outcome": "not_run"} for name in ATTACKS]
-    signals = risk_signals(detector_inputs, pack, len(ledger))
+    signals = risk_signals([(source_ids[0] if source_ids else None, text) for source_ids, text in detector_inputs],
+                           pack, len(ledger), findings=detected_findings)
     findings.append("确定性检测不是完整再识别测试；未执行的攻击不计为通过。")
     if demo:
         findings.append("仅允许固定合成数据演示；完整风险检验仍未完成。")

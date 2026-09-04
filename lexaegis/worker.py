@@ -6,7 +6,7 @@ from . import service
 from .contracts import AttackRun
 from .governance import protocol_content_hash
 from .parsing import parse
-from .policy import check_claims
+from .task_engine import validate_cloud_result
 from .providers import EdgeClient
 from .storage import Store
 from .util import app_dir, audit, digest, exclusive_lock, now, sign, uid
@@ -17,26 +17,30 @@ def finish_response(repo, task, record):
     disclosure = repo.get(task["request"]["request_id"], "disclosure")
     if status == "complete":
         try:
-            claims = check_claims(record["result"], task, task["fact_snapshot"])
+            validated = validate_cloud_result(task["type"], record["result"], task, task["fact_snapshot"])
             case = service.get_case(repo, task["case_id"])
-            all_anchors = service.anchor_index(repo, task["case_id"], current_only=False)
-            current_anchors = service.anchor_index(repo, task["case_id"], current_only=True)
-            for claim in claims:
-                display = claim["text"]
-                entries = case.get("mapping_entries", [])
-                if entries:
-                    for entry in entries:
-                        display = display.replace(entry["wire_token"], entry["original_value"])
-                else:
-                    for original, alias in case.get("mapping", {}).items():
-                        display = display.replace(alias, original)
-                claim["local_text"] = display
-                anchor_ids = claim["anchors"]
-                claim["anchors"] = [all_anchors[anchor_id] for anchor_id in anchor_ids if anchor_id in all_anchors]
-                if any(anchor_id not in current_anchors for anchor_id in anchor_ids):
-                    claim["issues"].append("引用包含历史材料版本锚点，确认前须显式核对")
-                    claim["status"] = "needs_review"
-            task["artifact"] = {"schema_version": 2, "claims": claims, "provenance": "simulation" if task["transport"] == "mock" else "cloud", "confirmed": False}
+            provenance = "simulation" if task["transport"] == "mock" else "cloud"
+            if isinstance(validated, list):
+                all_anchors = service.anchor_index(repo, task["case_id"], current_only=False)
+                current_anchors = service.anchor_index(repo, task["case_id"], current_only=True)
+                for claim in validated:
+                    display = claim["text"]
+                    entries = case.get("mapping_entries", [])
+                    if entries:
+                        for entry in entries:
+                            display = display.replace(entry["wire_token"], entry["original_value"])
+                    else:
+                        for original, alias in case.get("mapping", {}).items():
+                            display = display.replace(alias, original)
+                    claim["local_text"] = display
+                    anchor_ids = claim["anchors"]
+                    claim["anchors"] = [all_anchors[anchor_id] for anchor_id in anchor_ids if anchor_id in all_anchors]
+                    if any(anchor_id not in current_anchors for anchor_id in anchor_ids):
+                        claim["issues"].append("引用包含历史材料版本锚点，确认前须显式核对")
+                        claim["status"] = "needs_review"
+                task["artifact"] = {"schema_version": 2, "claims": validated, "provenance": provenance, "confirmed": False}
+            else:
+                task["artifact"] = {"schema_version": 2, "result": validated, "provenance": provenance, "confirmed": False}
             task["status"] = "complete"
         except ValueError as error:
             task.update(status="failed", error=str(error))

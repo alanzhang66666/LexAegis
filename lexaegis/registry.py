@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 from .contracts import DomainPack, DomainPackV2, TaskDefinition, TaskDefinitionV2
 from .governance import publish_pack_record
@@ -36,7 +37,69 @@ def validate_pack(raw):
         raise ValueError("任务尚未注册")
     if any(key.lower().endswith(("code", "expression", "script", "callable")) for key in _walk_keys(dump)):
         raise ValueError("案由包只能包含声明式数据，不允许代码或可执行表达式")
+    if schema_version == 2:
+        fields = {item.id for item in pack.fact_fields}
+        if len(fields) != len(pack.fact_fields):
+            raise ValueError("事实字段标识不可重复")
+        if any(rule.field not in fields for rule in pack.rules):
+            raise ValueError("披露规则引用了未定义字段")
+        matrix = pack.task_field_matrix
+        if not matrix:
+            generated = [
+                {"task_id": task_id, "field": field, "necessity": "uncertain", "rationale": "待法学团队确认"}
+                for task_id in pack.task_ids for field in sorted(fields)
+            ]
+            pack = DomainPackV2.model_validate({**pack.model_dump(), "task_field_matrix": generated})
+            matrix = pack.task_field_matrix
+        pairs = [(item.task_id, item.field) if hasattr(item, "task_id") else (item["task_id"], item["field"]) for item in matrix]
+        if len(set(pairs)) != len(pairs):
+            raise ValueError("任务—字段矩阵存在重复项")
+        if any(task_id not in pack.task_ids or field not in fields for task_id, field in pairs):
+            raise ValueError("任务—字段矩阵引用了未定义任务或字段")
+        if set(pack.task_ids) - {task_id for task_id, _ in pairs}:
+            raise ValueError("每个任务至少需要一项字段必要性定义")
+        for spec in pack.direct_identifier_patterns:
+            _validate_pattern(spec)
+        allowed_weights = {"entity", "density", "context", "combination", "cross_round"}
+        if set(pack.risk_weights) - allowed_weights or any(not 0 <= value <= 1 for value in pack.risk_weights.values()):
+            raise ValueError("风险权重名称或范围无效")
+        if pack.status == "published":
+            if (set(pack.risk_weights) != allowed_weights or not pack.dispatch_allowed
+                    or pack.legal_status != "reviewed" or not pack.published_scope):
+                raise ValueError("正式案由包缺少冻结权重、法学发布状态或适用范围")
     return pack
+
+
+def _validate_pattern(spec):
+    if not isinstance(spec, dict) or not {"category", "pattern"} <= set(spec):
+        raise ValueError("直接标识模式缺少 category 或 pattern")
+    pattern = spec["pattern"]
+    if not isinstance(pattern, str) or len(pattern) > 500 or "\n" in pattern:
+        raise ValueError("直接标识模式长度或格式无效")
+    if re.search(r"\\[1-9]|\(\?P=|\([^)]*[+*][^)]*\)[+*{]", pattern):
+        raise ValueError("直接标识模式包含高风险回溯结构")
+    try:
+        re.compile(pattern)
+    except re.error as error:
+        raise ValueError("直接标识模式不是有效正则") from error
+
+
+def run_pack_regressions(pack: dict) -> dict:
+    rules = {item["field"]: item for item in pack.get("rules", [])}
+    results = []
+    for index, case in enumerate(pack.get("synthetic_cases", [])):
+        failures = []
+        for expected in case.get("expected_decisions", []):
+            actual = rules.get(expected.get("field"))
+            if not actual:
+                failures.append(f"字段 {expected.get('field')} 无规则")
+                continue
+            for key in ("necessity", "transform", "forbidden"):
+                if key in expected and actual.get(key) != expected[key]:
+                    failures.append(f"{expected['field']}.{key} 不匹配")
+        results.append({"id": case.get("id", f"case_{index+1}"), "passed": not failures, "failures": failures})
+    return {"status": "passed" if results and all(item["passed"] for item in results) else ("failed" if results else "not_run"),
+            "total": len(results), "results": results}
 
 
 def _walk_keys(value):

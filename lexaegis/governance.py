@@ -93,8 +93,11 @@ def publish_pack_record(pack: dict, actor: str) -> dict:
         raise ValueError("只有 reviewed 案由包可以发布")
     if not pack.get("review_record") or not pack.get("reviewer") or not pack.get("references"):
         raise ValueError("发布前必须具有法源、审核人和审核记录")
+    if (pack.get("legal_status") != "reviewed" or not pack.get("dispatch_allowed")
+            or not pack.get("published_scope") or len(pack.get("risk_weights", {})) != 5):
+        raise ValueError("发布前必须冻结法学状态、适用范围、外发许可和五类风险权重")
     frozen = dict(pack)
-    frozen.update(status="published", reviewed_at=pack.get("reviewed_at") or now())
+    frozen.update(status="published", reviewed_at=pack.get("reviewed_at") or now(), frozen_at=now())
     frozen["content_hash"] = digest({key: value for key, value in frozen.items() if key != "content_hash"})
     frozen["published_by"] = actor
     return frozen

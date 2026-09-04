@@ -82,6 +82,13 @@ class RiskProtocolRef(Contract):
     version: str
 
 
+class TaskFieldRequirement(Contract):
+    task_id: str
+    field: str
+    necessity: Literal["required", "conditional", "unnecessary", "uncertain"] = "uncertain"
+    rationale: str = ""
+
+
 class DomainPackV2(Contract):
     schema_version: Literal[2] = 2
     id: str = Field(pattern=r"^[a-z][a-z0-9_]{1,60}$")
@@ -91,6 +98,7 @@ class DomainPackV2(Contract):
     compatible_core: str = ">=0.2,<2"
     task_ids: list[str]
     fact_fields: list[FactFieldDefinition]
+    task_field_matrix: list[TaskFieldRequirement] = Field(default_factory=list)
     rules: list[FieldRule]
     direct_identifier_patterns: list[dict[str, Any]] = Field(default_factory=list)
     risk_weights: dict[str, float] = Field(default_factory=dict)
@@ -100,9 +108,14 @@ class DomainPackV2(Contract):
     effective_from: str | None = None
     effective_until: str | None = None
     review_record: str | None = None
+    legal_status: Literal["pending_legal_review", "reviewed"] = "pending_legal_review"
+    dispatch_allowed: bool = False
     reviewer: str | None = None
     reviewed_at: str | None = None
     content_hash: str | None = None
+    frozen_at: str | None = None
+    published_scope: dict[str, Any] = Field(default_factory=dict)
+    published_by: str | None = None
     risk_protocols: list[RiskProtocolRef] = Field(default_factory=list)
     synthetic_cases: list[dict[str, Any]] = Field(default_factory=list)
 
@@ -148,6 +161,9 @@ class DetectionFinding(Contract):
     end: int = Field(ge=0)
     risk: Literal["low", "medium", "high", "critical"]
     source_anchor_id: str | None = None
+    source_anchor_ids: list[str] = Field(default_factory=list)
+    source_spans: list[dict[str, Any]] = Field(default_factory=list)
+    coordinate_space: Literal["disclosure", "source"] = "disclosure"
     locator_status: Literal["located", "warning"] = "located"
     explanation: str = ""
 
