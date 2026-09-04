@@ -50,7 +50,7 @@ def test_pdf_text_and_scan_mixed_pages(tmp_path):
 
 
 def test_domain_pack_extends_without_gate_change_and_immutable_versions(env):
-    raw=json.loads(Path('packs/contract_test.json').read_text())
+    raw=json.loads(Path('packs/contract_test.json').read_text(encoding='utf-8'))
     raw['id']='new_domain';raw['name']='新增领域测试'
     with env['app'].state.store.transaction() as repo:
         p=import_pack(repo,raw)

@@ -18,6 +18,9 @@ services:
       LEX_EDGE_URL: http://edge-model:8080/v1
       LEX_EDGE_MODEL: ${LEX_EDGE_MODEL:-}
       LEX_ISOLATED: "1"
+      LEX_DEPLOYMENT_MODE: isolated
+      LEX_RUNTIME_ROLE: api
+      PYTHONDONTWRITEBYTECODE: "1"
     volumes: ["app-data:/data"]
     networks: [internal]
     healthcheck:
@@ -34,6 +37,13 @@ services:
       LEX_DATA_DIR: /data
       LEX_GATEWAY_URL: http://gateway:8766
       LEX_GATEWAY_SECRET: ${LEX_GATEWAY_SECRET:?Set a signing secret}
+      LEX_EDGE_URL: http://edge-model:8080/v1
+      LEX_EDGE_MODEL: ${LEX_EDGE_MODEL:-}
+      LEX_EDGE_ALLOWED_HOSTS: edge-model
+      LEX_ISOLATED: "1"
+      LEX_DEPLOYMENT_MODE: isolated
+      LEX_RUNTIME_ROLE: worker
+      PYTHONDONTWRITEBYTECODE: "1"
     volumes: ["app-data:/data"]
     networks: [internal]
   gateway:
@@ -44,6 +54,8 @@ services:
       LEX_GATEWAY_SECRET: ${LEX_GATEWAY_SECRET:?Set a signing secret}
       LEX_CLOUD_API_KEY: ${LEX_CLOUD_API_KEY:-}
       LEX_CLOUD_ALLOWED_HOSTS: ${LEX_CLOUD_ALLOWED_HOSTS:-api.openai.com}
+      LEX_RUNTIME_ROLE: gateway
+      PYTHONDONTWRITEBYTECODE: "1"
     volumes: ["gateway-data:/data"]
     networks: [internal, egress]
   redteam:
@@ -52,6 +64,15 @@ services:
     command: [python, -m, uvicorn, "lexaegis.redteam:app", --host, 0.0.0.0, --port, "8767", --no-access-log]
     networks: [redteam]
     # No volumes: neither raw documents nor truth labels can be read.
+  benchmark:
+    <<: *runtime
+    profiles: [benchmark]
+    command: [python, -m, lexaegis.cli, bench, --profile, ianvs-pipl]
+    environment:
+      LEX_RUNTIME_ROLE: benchmark
+      PYTHONDONTWRITEBYTECODE: "1"
+    networks: [redteam]
+    # No volumes and no gateway secret: experiments cannot read cases, mappings, truth or credentials.
   edge-model:
     image: ${LEX_EDGE_IMAGE:-ghcr.io/ggml-org/llama.cpp:server}
     profiles: [edge]

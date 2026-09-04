@@ -17,9 +17,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from . import service
 from .parsing import ocr_available
 from .providers import EdgeClient
-from .registry import TASKS
+from .contracts import ProviderProfile, RiskProtocol
+from .governance import publish_pack_record
+from .registry import TASKS, import_pack, task_definitions, validate_pack
 from .storage import Store
-from .util import app_dir, audit, now, sign, uid
+from .util import app_dir, audit, now, restrict_mode, sign, uid
 
 
 class Input(BaseModel):
@@ -48,7 +50,9 @@ class Correction(Input):
 
 
 class TaskInput(Input):
-    transport: Literal["mock", "cloud"] = "cloud"
+    transport: Literal["local", "mock", "cloud"] = "cloud"
+    task_type: str = "fact_summary"
+    pack_id: str | None = None
 
 
 class DecisionInput(Input):
@@ -59,6 +63,18 @@ class DecisionInput(Input):
 
 class ApprovalInput(Input):
     request_hash: str
+    actor: str = Field(default="local-lawyer", min_length=1, max_length=120)
+    actor_role: Literal["approver"] = "approver"
+
+
+class NamedConfirmation(Input):
+    actor: str = Field(min_length=1, max_length=120)
+    actor_role: Literal["legal_reviewer", "approver"]
+
+
+class PackTransitionInput(Input):
+    status: Literal["pending_review", "reviewed", "retired"]
+    review_record: str | None = Field(default=None, max_length=5000)
 
 
 class SettingsInput(Input):
@@ -66,12 +82,15 @@ class SettingsInput(Input):
     cloud_model: str = Field(max_length=200)
     edge_url: str
     edge_model: str = Field(max_length=200)
+    provider_id: str | None = None
+    deployment_mode: Literal["native", "isolated"] = "native"
+    isolation_verified: bool = False
 
 
 def create_app(data_dir=None, password=None):
     root = Path(data_dir or app_dir()).resolve()
     root.mkdir(parents=True, exist_ok=True)
-    root.chmod(0o700)
+    restrict_mode(root, 0o700)
     (root / "files").mkdir(exist_ok=True)
     store = Store(root / "app.sqlite")
     service.initialize(store)
@@ -79,9 +98,9 @@ def create_app(data_dir=None, password=None):
     if not password:
         password_file = root / "local-password"
         if not password_file.exists():
-            password_file.write_text(secrets.token_urlsafe(18))
-            password_file.chmod(0o600)
-        password = password_file.read_text().strip()
+            password_file.write_text(secrets.token_urlsafe(18), encoding="utf-8")
+            restrict_mode(password_file, 0o600)
+        password = password_file.read_text(encoding="utf-8").strip()
     sessions = {}
     attempts = {}
     app = FastAPI(title="LexAegis", docs_url=None, redoc_url=None)
@@ -97,8 +116,10 @@ def create_app(data_dir=None, password=None):
                 allowed = {"http://127.0.0.1:8765", "http://localhost:8765", "http://127.0.0.1:5173", "http://localhost:5173", "http://testserver"}
                 if origin and origin not in allowed:
                     return JSONResponse({"detail": "不允许跨站请求"}, 403)
-            if request.url.path not in ("/api/v1/login", "/api/v1/health") and sessions.get(request.cookies.get("lex_session"), 0) <= time.time():
-                return JSONResponse({"detail": "请登录本地工作台"}, 401)
+            if request.url.path not in ("/api/v1/login", "/api/v1/health"):
+                session = sessions.get(request.cookies.get("lex_session"))
+                if not session or session["expires"] <= time.time():
+                    return JSONResponse({"detail": "请登录本地工作台"}, 401)
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
@@ -117,7 +138,7 @@ def create_app(data_dir=None, password=None):
 
     @app.get("/api/v1/health")
     def health():
-        return {"status": "ok", "version": "0.1.0"}
+        return {"status": "ok", "version": "0.2.0"}
 
     @app.post("/api/v1/login")
     def login(body: dict, request: Request, response: Response):
@@ -129,9 +150,24 @@ def create_app(data_dir=None, password=None):
         if not hmac.compare_digest(str(body.get("password", "")), password):
             raise HTTPException(401, "本地访问口令不正确")
         token = secrets.token_urlsafe(32)
-        sessions[token] = time.time() + 8*3600
+        sessions[token] = {"expires": time.time() + 8*3600, "actor": os.getenv("LEX_LOCAL_ACTOR", "local-lawyer"),
+                           "role": os.getenv("LEX_LOCAL_ROLE", "admin")}
         response.set_cookie("lex_session", token, httponly=True, samesite="strict", max_age=8*3600)
-        return {"ok": True}
+        return {"ok": True, "actor": sessions[token]["actor"], "role": sessions[token]["role"]}
+
+    def principal(request: Request):
+        return sessions.get(request.cookies.get("lex_session"), {"actor": "unknown", "role": "unknown"})
+
+    def require_role(request: Request, *roles):
+        identity = principal(request)
+        if identity["role"] not in roles and identity["role"] != "admin":
+            raise HTTPException(403, "当前本地角色无权执行该操作")
+        return identity
+
+    @app.get("/api/v1/me")
+    def me(request: Request):
+        identity = principal(request)
+        return {"actor": identity["actor"], "role": identity["role"]}
 
     @app.post("/api/v1/logout")
     def logout(request: Request, response: Response):
@@ -142,7 +178,9 @@ def create_app(data_dir=None, password=None):
     @app.get("/api/v1/bootstrap")
     def bootstrap():
         with store.read() as repo:
-            return {"cases": repo.list("case"), "packs": repo.list("pack"), "tasks": [t.model_dump() for t in TASKS], "settings": repo.get("settings")}
+            return {"cases": repo.list("case"), "packs": repo.list("pack"), "tasks": [t.model_dump() for t in TASKS],
+                    "task_definitions": task_definitions(), "providers": repo.list("provider"), "risk_protocols": repo.list("risk_protocol"),
+                    "settings": repo.get("settings")}
 
     @app.get("/api/v1/capabilities")
     def capabilities():
@@ -156,7 +194,106 @@ def create_app(data_dir=None, password=None):
             cloud = result.json()
         except Exception:
             cloud = {"status": "unconfigured", "detail": "外发网关未启动或签名配置不正确"}
-        return {"edge": edge, "cloud": cloud, "ocr": {"status": "available" if ocr_available() else "unconfigured", "detail": "已启用；模型资产需离线预置" if ocr_available() else "PaddleOCR 可选依赖或离线模型未配置"}, "redteam": {"status": "unimplemented", "detail": "四类策略为占位；正式案件外发保持阻断"}, "isolation": {"status": "available" if os.getenv("LEX_ISOLATED") == "1" else "unconfigured", "detail": "容器隔离配置已启用，仍需运行隔离验收" if os.getenv("LEX_ISOLATED") == "1" else "当前为本机开发模式，未验证网络隔离"}}
+        with store.read() as repo:
+            published = [pack for pack in repo.list("pack") if pack.get("schema_version") == 2 and pack.get("status") == "published"]
+            protocols = repo.list("risk_protocol")
+        isolation_ok = bool(settings.get("isolation_verified")) and settings.get("deployment_mode") == "isolated"
+        return {"technical": {"status": "available", "detail": "V2 契约、确定性检测、稳定 token 和本地复原已实现"},
+                "runtime": {"status": "available" if settings.get("cloud_model") else "unconfigured", "detail": "运行配置与实现状态分开报告"},
+                "legal": {"status": "available" if published else "unconfigured", "detail": f"已发布 V2 案由包 {len(published)} 个"},
+                "validation": {"status": "unconfigured", "detail": "真实模型、真实云端和正式案件尚未验收"},
+                "edge": edge, "cloud": cloud,
+                "ocr": {"status": "available" if ocr_available() else "unconfigured", "detail": "已启用；模型资产需离线预置" if ocr_available() else "PaddleOCR 可选依赖或离线模型未配置"},
+                "redteam": {"status": "available" if len([p for p in protocols if p.get('status') == 'frozen']) >= 4 else "unconfigured", "detail": "未运行、错误和不确定均不算通过"},
+                "isolation": {"status": "available" if isolation_ok else "unconfigured", "detail": "已记录隔离验收" if isolation_ok else "尚无通过的隔离验收记录"}}
+
+    @app.get("/api/v1/domains")
+    def domains():
+        with store.read() as repo:
+            return repo.list("pack")
+
+    @app.get("/api/v1/task-definitions")
+    def definitions():
+        return task_definitions()
+
+    @app.post("/api/v1/packs/import")
+    def pack_import(body: dict, request: Request):
+        require_role(request, "admin")
+        with store.transaction() as repo:
+            return import_pack(repo, body)
+
+    @app.post("/api/v1/packs/{pack_id}/validate")
+    def pack_validate(pack_id: str):
+        with store.read() as repo:
+            pack = repo.get(pack_id, "pack")
+        validate_pack({key: value for key, value in pack.items() if key not in ("domain_id",) and not (key == "id" and str(value).startswith("pack:"))} | {"id": pack["domain_id"]})
+        return {"valid": True, "pack_id": pack_id}
+
+    @app.post("/api/v1/packs/{pack_id}/publish")
+    def pack_publish(pack_id: str, body: NamedConfirmation, request: Request):
+        identity = require_role(request, "legal_reviewer")
+        with store.transaction() as repo:
+            pack = repo.get(pack_id, "pack")
+            published = publish_pack_record(pack, identity["actor"])
+            repo.put("pack", published)
+            audit(repo, "", "pack.published", pack_id=pack_id, actor=identity["actor"], content_hash=published["content_hash"])
+            return published
+
+    @app.post("/api/v1/packs/{pack_id}/transition")
+    def pack_transition(pack_id: str, body: PackTransitionInput, request: Request):
+        identity = require_role(request, "legal_reviewer" if body.status == "reviewed" else "admin")
+        allowed = {"draft": {"pending_review"}, "pending_review": {"draft", "reviewed"}, "reviewed": {"pending_review"}, "published": {"retired"}, "retired": set()}
+        with store.transaction() as repo:
+            pack = repo.get(pack_id, "pack")
+            if pack.get("schema_version") != 2 or body.status not in allowed.get(pack.get("status"), set()):
+                raise service.DomainError("案由包生命周期转换无效")
+            if body.status == "reviewed":
+                if not body.review_record or not pack.get("references"):
+                    raise service.DomainError("法学复核必须填写审核记录并具有法源")
+                pack.update(review_record=body.review_record, reviewer=identity["actor"], reviewed_at=now())
+            pack["status"] = body.status
+            repo.put("pack", pack)
+            audit(repo, "", "pack.transitioned", pack_id=pack_id, status=body.status, actor=identity["actor"])
+            return pack
+
+    @app.get("/api/v1/providers")
+    def providers():
+        with store.read() as repo:
+            return repo.list("provider")
+
+    @app.put("/api/v1/providers/{provider_id}")
+    def provider_put(provider_id: str, body: ProviderProfile, request: Request):
+        require_role(request, "admin")
+        if provider_id != body.id:
+            raise service.DomainError("服务商标识不一致")
+        with store.transaction() as repo:
+            repo.put("provider", body.model_dump())
+            audit(repo, "", "provider.updated", provider_id=provider_id, status=body.status)
+            return body
+
+    @app.get("/api/v1/risk-protocols")
+    def risk_protocols():
+        with store.read() as repo:
+            return repo.list("risk_protocol")
+
+    @app.put("/api/v1/risk-protocols/{protocol_id}")
+    def risk_protocol_put(protocol_id: str, body: RiskProtocol, request: Request):
+        from .util import digest
+        require_role(request, "admin")
+        if protocol_id != body.id:
+            raise service.DomainError("协议标识不一致")
+        protocol = body.model_dump()
+        if protocol["status"] == "frozen":
+            protocol["content_hash"] = digest({key: value for key, value in protocol.items() if key != "content_hash"})
+        with store.transaction() as repo:
+            try:
+                existing = repo.get(protocol_id, "risk_protocol")
+                if existing.get("status") == "frozen" and existing != protocol:
+                    raise service.DomainError("冻结协议不可覆盖，请创建新版本")
+            except KeyError:
+                pass
+            repo.put("risk_protocol", protocol)
+            return protocol
 
     @app.post("/api/v1/cases")
     def create_case(body: CaseInput):
@@ -179,8 +316,8 @@ def create_app(data_dir=None, password=None):
     @app.post("/api/v1/cases/{case_id}/documents")
     async def upload(case_id: str, file: UploadFile = File(...)):
         extension = Path(file.filename or "").suffix.lower()
-        if extension not in (".docx", ".pdf"):
-            raise HTTPException(400, "仅支持 DOCX 和 PDF")
+        if extension not in (".docx", ".pdf", ".png", ".jpg", ".jpeg"):
+            raise HTTPException(400, "仅支持 DOCX、PDF、PNG 和 JPEG")
         with store.read() as repo:
             case = service.get_case(repo, case_id)
             if case["mode"] == "demo":
@@ -191,7 +328,7 @@ def create_app(data_dir=None, password=None):
         ident = uid("doc")
         path = root / "files" / (ident + extension)
         path.write_bytes(data)
-        path.chmod(0o600)
+        restrict_mode(path, 0o600)
         try:
             with store.transaction() as repo:
                 case = service.get_case(repo, case_id)
@@ -283,7 +420,7 @@ def create_app(data_dir=None, password=None):
     @app.post("/api/v1/cases/{case_id}/tasks")
     def task(case_id: str, body: TaskInput):
         with store.transaction() as repo:
-            return service.create_task(repo, case_id, body.transport)
+            return service.create_task(repo, case_id, body.transport, body.task_type, body.pack_id)
 
     @app.patch("/api/v1/tasks/{task_id}/decisions/{fact_id}")
     def decision(task_id: str, fact_id: str, body: DecisionInput):
@@ -296,9 +433,10 @@ def create_app(data_dir=None, password=None):
             return service.evaluate_task(repo, task_id)
 
     @app.post("/api/v1/tasks/{task_id}/approve")
-    def approve(task_id: str, body: ApprovalInput):
+    def approve(task_id: str, body: ApprovalInput, request: Request):
+        identity = require_role(request, "approver")
         with store.transaction() as repo:
-            return service.approve_task(repo, task_id, body.request_hash)
+            return service.approve_task(repo, task_id, body.request_hash, identity["actor"], "approver")
 
     @app.post("/api/v1/tasks/{task_id}/send")
     def send(task_id: str):
@@ -325,7 +463,8 @@ def create_app(data_dir=None, password=None):
             return service.queue_job(repo, task["case_id"], "reconcile", {"task_id": task_id})
 
     @app.post("/api/v1/tasks/{task_id}/claims/{claim_id}/review")
-    def review_claim(task_id: str, claim_id: str):
+    def review_claim(task_id: str, claim_id: str, request: Request, body: NamedConfirmation | None = None):
+        identity = require_role(request, "legal_reviewer", "approver")
         with store.transaction() as repo:
             task = repo.get(task_id, "task")
             service.assert_current(repo, task)
@@ -335,6 +474,9 @@ def create_app(data_dir=None, password=None):
             if not claim or not claim["anchors"] or "引用不存在或指向未披露事实" in claim["issues"] or "日期或金额存在未在引用事实中出现的数字" in claim["issues"]:
                 raise service.DomainError("存在无效引用或无依据数字，不能确认；请重做任务")
             claim["reviewed"] = True
+            claim["status"] = "confirmed"
+            claim["reviewer"] = identity["actor"]
+            claim["reviewed_at"] = now()
             repo.put("task", task, task["case_id"])
             audit(repo, task["case_id"], "claim.reviewed", task_id=task_id, claim_id=claim_id)
             return task
@@ -351,14 +493,43 @@ def create_app(data_dir=None, password=None):
             audit(repo, task["case_id"], "artifact.confirmed", task_id=task_id)
             return task
 
-    @app.get("/api/v1/tasks/{task_id}/export")
-    def export(task_id: str):
+    @app.get("/api/v1/tasks/{task_id}/restoration")
+    def restoration(task_id: str):
         with store.read() as repo:
             task = repo.get(task_id, "task")
         if not task.get("artifact"):
+            raise HTTPException(409, "尚无可复原结果")
+        return task["artifact"]
+
+    @app.post("/api/v1/tasks/{task_id}/local-export-approval")
+    def approve_local_export(task_id: str, body: NamedConfirmation, request: Request):
+        identity = require_role(request, "legal_reviewer", "approver")
+        with store.transaction() as repo:
+            task = repo.get(task_id, "task")
+            if not task.get("artifact") or not task["artifact"].get("confirmed"):
+                raise service.DomainError("本地复原结果须先逐项确认")
+            record = {"id": uid("local_export"), "task_id": task_id, "actor": identity["actor"], "actor_role": identity["role"], "at": now()}
+            repo.put("local_export_approval", record, task_id)
+            audit(repo, task["case_id"], "local_export.approved", task_id=task_id, actor=identity["actor"])
+            return record
+
+    @app.get("/api/v1/tasks/{task_id}/export")
+    def export(task_id: str, view: Literal["cloud", "local"] = "cloud"):
+        with store.read() as repo:
+            task = repo.get(task_id, "task")
+            local_approvals = repo.list("local_export_approval", task_id)
+        if not task.get("artifact"):
             raise HTTPException(409, "尚无结果")
-        # Export preserves unverified and simulation markers rather than laundering them away.
-        body = {"task_id": task_id, "mode": task["request"]["mode"], "stale": task["stale"], "artifact": task["artifact"], "request_hash": task["request_hash"], "pack": task["pack_id"]}
+        if view == "local" and not local_approvals:
+            raise HTTPException(409, "含真实身份的本地复原包需要具名二次确认")
+        artifact = json.loads(json.dumps(task["artifact"]))
+        if view == "cloud":
+            for claim in artifact.get("claims", []):
+                claim.pop("local_text", None)
+                claim.pop("anchors", None)
+        mode = task["request"]["mode"] if task.get("request") else "local"
+        body = {"task_id": task_id, "view": view, "mode": mode, "stale": task["stale"], "artifact": artifact,
+                "request_hash": task.get("request_hash"), "pack": task["pack_id"]}
         return Response(json.dumps(body, ensure_ascii=False, indent=2), media_type="application/json", headers={"Content-Disposition": f'attachment; filename="{task_id}.json"'})
 
     @app.get("/api/v1/cases/{case_id}/audit-export")
@@ -381,6 +552,11 @@ def create_app(data_dir=None, password=None):
                 raise service.DomainError("请等待正在发送的任务结束")
             previous = repo.get("settings")
             result = {"id": "settings", "version": previous["version"]+1, **body.model_dump()}
+            if result.get("provider_id"):
+                repo.get(result["provider_id"], "provider")
+            # UI configuration cannot self-attest isolation; only preserve an existing isolated attestation.
+            result["deployment_mode"] = previous.get("deployment_mode", os.getenv("LEX_DEPLOYMENT_MODE", "native"))
+            result["isolation_verified"] = bool(previous.get("isolation_verified")) if result["deployment_mode"] == "isolated" else False
             repo.put("settings", result)
             for task in repo.list("task"):
                 task["stale"] = True
@@ -420,7 +596,9 @@ def create_app(data_dir=None, password=None):
                 await asyncio.sleep(2)
         return StreamingResponse(stream(), media_type="text/event-stream", headers={"X-Accel-Buffering": "no"})
 
-    dist = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+    installed_dist = Path(__file__).resolve().parent / "frontend"
+    source_dist = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+    dist = installed_dist if (installed_dist / "index.html").exists() else source_dist
     if dist.exists():
         app.mount("/", StaticFiles(directory=dist, html=True), name="frontend")
     return app

@@ -1,6 +1,6 @@
 # 架构与接口约定
 
-LexAegis 0.1 使用模块化单体和独立外发网关。所有敏感原文留在边侧；云端仅负责经过批准的事实摘要生成。
+LexAegis 0.2 使用模块化单体和独立外发网关。所有敏感原文留在边侧；云端仅负责经过批准的假名化事实摘要生成。
 
 ## 代码组织
 
@@ -15,10 +15,14 @@ LexAegis 0.1 使用模块化单体和独立外发网关。所有敏感原文留�
 | `lexaegis/providers.py` | 边侧和云端 HTTP 适配器，无服务商自动回退 |
 | `lexaegis/gateway.py` | 签名核验、目标白名单、独立请求账本与实际调用 |
 | `lexaegis/worker.py` | 单进程队列、解析、提取、发送与恢复 |
-| `lexaegis/redteam.py` | 无原件/真值访问的攻击者输入占位接口 |
+| `lexaegis/detection.py` | 坐标化 PII、敏感性与冻结权重风险信号 |
+| `lexaegis/governance.py` | 服务商、协议、逐项合规检查和正式门禁 |
+| `lexaegis/task_engine.py` | V2 任务定义、entry point 与本地时间线 |
+| `lexaegis/experiments.py` | 隔离实验的 DP/RDP、掩码、投影和 MIA 输入门槛 |
+| `lexaegis/redteam.py` | 无原件/映射/真值访问的四类攻击接口 |
 | `packs/` | 版本化声明式案由知识包 |
 
-业务聚合统一保存在 `records(id, kind, scope, body)` 中，`kind/scope` 建索引。首版只有一个本地用户，以案件为 scope；需要进一步关系查询或多人写入时，迁移至显式关系表及 PostgreSQL，而不是直接共享 SQLite 文件。迁移编号保存在 `alembic_version`；当前迁移是 `0001_aggregates`。
+业务聚合统一保存在 `records(id, kind, scope, body)` 中，双向 `kind/scope` 建索引。本地会话绑定具名角色；SQLite 仍只支持单实例，不可置于网络共享盘。迁移编号保存在 `alembic_version`；当前迁移是 `0002_v2_contracts`，从 0001 升级前生成并校验备份，失败保持旧版本。
 
 ## 数据和安全契约
 
@@ -28,7 +32,7 @@ LexAegis 0.1 使用模块化单体和独立外发网关。所有敏感原文留�
 - `DisclosureDecision` 分离必要性、变换方式、外发状态和依据。正式规则和硬性禁止不能被界面调整绕过。
 - `DomainPack` 和 `TaskDefinition` 独立注册，任务冻结其版本。当前案由采用最新导入的匹配包，历史任务仍用原包；首版一案选择一个案由，不自动合并多案由规则。
 - `ApprovedRequest` 冻结模型、地址、消息和参数，以及材料、配置、规则、任务和累计披露版本。审批本身不执行发送。
-- 网关使用 HMAC 验证请求与审批，重新计算请求摘要，并检查有效期和目标白名单。首版明确拒绝正式案件外发；只有固定合成数据能进入演示例外。
+- 网关使用 HMAC 验证请求与具名审批，重新计算请求摘要，并检查依赖、有效期、V2 wire contract 和目标白名单。正式案件只有在规则、服务商、四类攻击与隔离均完成时才可外发；当前资产保持失败关闭。
 - 摘要按条目返回 `text/source_ids`；实际原文锚点和真实身份在边侧解析。无引用、无依据数字或无原文支撑的陈述不会自动成为已核实结果。
 
 ## 主状态转换
@@ -46,7 +50,8 @@ LexAegis 0.1 使用模块化单体和独立外发网关。所有敏感原文留�
 - 案件与材料：`/api/v1/cases`、`/cases/{id}/documents`、`/documents/{id}/correction`、`/anchors`。
 - 事实：`/cases/{id}/facts`、`/facts/{id}`、`/extract`。
 - 任务：`/cases/{id}/tasks`、`/tasks/{id}/decisions/{fact}`、`evaluate`、`approve`、`send`、`stop`、`reconcile`。
-- 校核：`/tasks/{id}/claims/{claim}/review`、`confirm`、`export`。
+- 校核：`/tasks/{id}/claims/{claim}/review`、`confirm`、`restoration`、`export?view=cloud|local`。
+- 扩展与治理：`/domains`、`/task-definitions`、`/packs/import`、`validate`、`transition`、`publish`、`/providers`、`/risk-protocols`。
 - 配置与状态：`/bootstrap`、`/settings`、`/capabilities`、`/cases/{id}/events`。
 
 所有业务接口需要本地会话。写操作校验 Origin，Host 使用白名单，前端资源不请求第三方 CDN。首次访问使用本地生成口令；浏览器会话 8 小时有效，重启 API 后需重新登录。
@@ -55,6 +60,6 @@ LexAegis 0.1 使用模块化单体和独立外发网关。所有敏感原文留�
 
 - 首版材料限制：20MB / 文件、200 页 / PDF；边侧提取单任务 5 万字。暂不做跨材料自动分批云端调用。
 - DOCX 的图片、嵌入对象和脚注不保证完整提取，图片证据应转换为 PDF；混合 PDF 按页检测，有文字层但仍夹杂图片的页需律师核实是否遗漏。
-- 语义攻击、独立盲测评分、精细矛盾校核、OCR模型精度评测和正式规则审核尚未完成。
+- 真实攻击运行、独立盲测评分、精细语义/矛盾校核、OCR 模型精度评测和正式规则审核尚未完成。
 - 本地服务支持 CPU/GPU 的选择由适配器背后的推理服务决定；没有自动安装、下载权重或切换云端处理原文。
 - 前端的“已实现”“未配置”“未实现”与真实模型验证记录分开解释。网络隔离只在隔离部署并通过检查脚本后成立。

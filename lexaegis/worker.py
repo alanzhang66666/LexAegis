@@ -7,7 +7,7 @@ from .parsing import parse
 from .policy import check_claims
 from .providers import EdgeClient
 from .storage import Store
-from .util import app_dir, audit, now, sign
+from .util import app_dir, audit, exclusive_lock, now, sign
 
 
 def finish_response(repo, task, record):
@@ -17,12 +17,24 @@ def finish_response(repo, task, record):
         try:
             claims = check_claims(record["result"], task, task["fact_snapshot"])
             case = service.get_case(repo, task["case_id"])
+            all_anchors = service.anchor_index(repo, task["case_id"], current_only=False)
+            current_anchors = service.anchor_index(repo, task["case_id"], current_only=True)
             for claim in claims:
                 display = claim["text"]
-                for original, alias in case.get("mapping", {}).items():
-                    display = display.replace(alias, original)
+                entries = case.get("mapping_entries", [])
+                if entries:
+                    for entry in entries:
+                        display = display.replace(entry["wire_token"], entry["original_value"])
+                else:
+                    for original, alias in case.get("mapping", {}).items():
+                        display = display.replace(alias, original)
                 claim["local_text"] = display
-            task["artifact"] = {"claims": claims, "provenance": "simulation" if task["transport"] == "mock" else "cloud", "confirmed": False}
+                anchor_ids = claim["anchors"]
+                claim["anchors"] = [all_anchors[anchor_id] for anchor_id in anchor_ids if anchor_id in all_anchors]
+                if any(anchor_id not in current_anchors for anchor_id in anchor_ids):
+                    claim["issues"].append("引用包含历史材料版本锚点，确认前须显式核对")
+                    claim["status"] = "needs_review"
+            task["artifact"] = {"schema_version": 2, "claims": claims, "provenance": "simulation" if task["transport"] == "mock" else "cloud", "confirmed": False}
             task["status"] = "complete"
         except ValueError as error:
             task.update(status="failed", error=str(error))
@@ -141,20 +153,15 @@ def process_one(store, root, gateway_client=None):
 
 
 def run():
-    import fcntl
     root = app_dir()
     root.mkdir(parents=True, exist_ok=True)
-    lock = (root / "worker.lock").open("w")
-    try:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        raise SystemExit("已有一个工作进程在运行")
-    store = Store(root / "app.sqlite")
-    service.initialize(store)
-    recover(store)
-    while True:
-        if not process_one(store, root):
-            time.sleep(0.7)
+    with exclusive_lock(root / "worker.lock", error=SystemExit("已有一个工作进程在运行")):
+        store = Store(root / "app.sqlite")
+        service.initialize(store)
+        recover(store)
+        while True:
+            if not process_one(store, root):
+                time.sleep(0.7)
 
 
 if __name__ == "__main__":

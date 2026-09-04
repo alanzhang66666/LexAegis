@@ -1,0 +1,2 @@
+# Generated platform constraints for Python 3.12+ (Intel/Apple Silicon).
+-r ../requirements.lock

@@ -34,7 +34,12 @@ def test_complete_synthetic_workflow_and_source_confirmation(env):
     assert client.post(f"/api/v1/tasks/{task['id']}/confirm").json()["artifact"]["confirmed"]
     exported=client.get(f"/api/v1/tasks/{task['id']}/export").json()
     assert exported["artifact"]["provenance"]=="simulation"
-    assert "local_text" in exported["artifact"]["claims"][0]
+    assert exported["view"]=="cloud"
+    assert "local_text" not in exported["artifact"]["claims"][0]
+    assert client.get(f"/api/v1/tasks/{task['id']}/export?view=local").status_code==409
+    assert client.post(f"/api/v1/tasks/{task['id']}/local-export-approval",json={"actor":"复核律师","actor_role":"legal_reviewer"}).status_code==200
+    local=client.get(f"/api/v1/tasks/{task['id']}/export?view=local").json()
+    assert local["artifact"]["claims"][0]["local_text"]
 
 
 @pytest.mark.parametrize("scenario",["linkage","stop"])
@@ -186,9 +191,12 @@ def test_case_mapping_isolated_and_consistent(env):
     b=env["client"].post(f"/api/v1/cases/{case['id']}/tasks",json={"transport":"mock"}).json()
     other,c=demo_task(env)
     assert a["decisions"][0]["output"]==b["decisions"][0]["output"]
-    assert a["decisions"][0]["output"]!=c["decisions"][0]["output"]
+    assert a["decisions"][0]["output"]==c["decisions"][0]["output"]=="[[LEX:P0001]]"
     alias=a["decisions"][0]["output"]
     assert alias in a["decisions"][2]["output"]
+    first=env["client"].get(f"/api/v1/cases/{case['id']}").json()["case"]
+    second=env["client"].get(f"/api/v1/cases/{other['id']}").json()["case"]
+    assert first["mapping_entries"] is not second["mapping_entries"]
 
 
 def test_hallucinated_numbers_and_missing_sources_never_auto_verify(env):

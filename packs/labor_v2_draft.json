@@ -1,0 +1,32 @@
+{
+  "schema_version": 2,
+  "id": "labor",
+  "name": "劳动争议（V2 法学待审）",
+  "version": "2.0.0-draft.1",
+  "status": "draft",
+  "compatible_core": ">=0.2,<2",
+  "task_ids": ["fact_summary", "timeline"],
+  "fact_fields": [
+    {"id": "entity", "label": "主体", "value_type": "entity", "description": "当事人或其他主体"},
+    {"id": "relation", "label": "关系", "value_type": "text", "description": "劳动关系"},
+    {"id": "event", "label": "事件", "value_type": "text", "description": "争议事件"},
+    {"id": "date", "label": "日期", "value_type": "date", "description": "事件时间"},
+    {"id": "amount", "label": "金额", "value_type": "money", "description": "工资或补偿金额"},
+    {"id": "evidence", "label": "证据", "value_type": "text", "description": "证据名称与证明目的"}
+  ],
+  "rules": [
+    {"field": "entity", "necessity": "uncertain", "transform": "delete", "reason": "法学规则尚未审核", "forbidden": false},
+    {"field": "relation", "necessity": "uncertain", "transform": "delete", "reason": "法学规则尚未审核", "forbidden": false},
+    {"field": "event", "necessity": "uncertain", "transform": "delete", "reason": "法学规则尚未审核", "forbidden": false},
+    {"field": "date", "necessity": "uncertain", "transform": "delete", "reason": "法学规则尚未审核", "forbidden": false},
+    {"field": "amount", "necessity": "uncertain", "transform": "delete", "reason": "法学规则尚未审核", "forbidden": false},
+    {"field": "evidence", "necessity": "uncertain", "transform": "delete", "reason": "法学规则尚未审核", "forbidden": false}
+  ],
+  "direct_identifier_patterns": [],
+  "risk_weights": {},
+  "forbidden_terms": ["唯一", "公开获奖"],
+  "manual_review_conditions": ["法源未冻结", "规则必要性不确定", "攻击协议未完成"],
+  "references": ["案隐盾申请评议书20260831(1).docx（待法学团队确认）"],
+  "risk_protocols": [],
+  "synthetic_cases": []
+}

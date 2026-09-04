@@ -2,11 +2,17 @@
 
 云边协同的法律材料披露工作台：边侧整理原文与身份映射，律师批准完整请求后，由独立网关调用云端大模型 API，结果回到边侧校核和回链。
 
-**当前版本：0.1.0。** 工作台、材料与事实管理、披露编辑、审批、发送台账及合成演示闭环已实现。正式规则资产和四类再识别攻击仍为占位，因此**正式案件的外发保持阻断**。演示流程只接受内置合成材料，不允许用户上传或自定义外发文本。
+**当前版本：0.2.0。** V2 案由/任务契约、稳定 wire token、确定性 PII 与风险信号、服务商治理、四类冻结攻击接口、本地复原和跨平台 CLI 已进入代码。法学规则尚未发布、真实攻击与隔离尚未验收，因此**正式案件的外发保持阻断**。演示流程只接受内置合成材料，不允许用户上传或自定义外发文本。
 
 ## 快速启动
 
-需要 Python 3.12+、Node.js 22+ 和 pnpm 11。当前开发验证使用 Python 3.12.14、Node.js 24.19.0、pnpm 11.19.0。
+运行已构建 wheel 只需要 Python 3.12+；源码开发前端需要 Node.js 22+ 和 pnpm 11。当前 0.2 验证使用 Windows/AMD64 与 Python 3.13.2，CI 定义了 Windows、macOS、Linux 矩阵。
+
+请使用 **http://127.0.0.1:8765** 打开工作台，不要用 `localhost`（在部分系统上可能解析到 `::1`，与 Host 白名单不一致）。
+
+### Linux / macOS
+
+`requirements.lock` 使用环境标记排除 Windows 不支持的 `uvloop`；也可使用 `constraints/linux.txt` 或 `constraints/macos.txt`。
 
 ```bash
 python3 -m venv .venv
@@ -16,19 +22,40 @@ cd frontend
 pnpm install --frozen-lockfile
 pnpm build
 cd ..
-python scripts/dev.py
+python scripts/make_examples.py
+lexaegis start
 ```
+
+### Windows（PowerShell）
+
+Windows 可从项目元数据安装，也可使用 `constraints/windows.txt`：
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -e ".[test]"
+cd frontend
+pnpm install --frozen-lockfile
+pnpm build
+cd ..
+python scripts/make_examples.py
+lexaegis start
+```
+
+若执行策略阻止激活脚本，可先运行：`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`。
+
+Windows 本机模式下，Unix 文件权限位（如 `chmod 0700`）不生效；口令与材料的访问控制依赖当前 Windows 用户账户与目录 ACL，不能当作容器网络隔离的替代。
 
 打开 [本地工作台](http://127.0.0.1:8765)，输入启动终端显示的口令。首次启动会在 `.data/app/` 生成本地访问口令和网关签名密钥。按 Ctrl+C 停止 API、网关和工作进程。
 
 不需要配置模型即可体验三个固定合成案例。选择“完整披露流程”，依次执行：
 
 1. 生成披露方案，查看各字段如何保留、假名化或泛化。
-2. 检验风险并查看完整请求。四类攻击仍显示“未实现 / 未运行”。
+2. 检验风险并查看完整请求。合成演示的四类攻击显示“未运行”，不得作为正式检验通过。
 3. 批准当前版本，再点击“执行模拟调用”。模拟器仅从已披露事实组装条目，不声称模型生成。
 4. 查看摘要、回到原文、逐项核对并确认最终结果。
 
-“组合线索风险”和“主动停止”案例默认阻断审批。正式案件可以上传 `examples/synthetic_labor.docx` 或 `examples/synthetic_scan.pdf`，体验解析、转录、事实编辑及正式外发阻断。
+“组合线索风险”和“主动停止”案例默认阻断审批。正式案件可以上传 `examples/synthetic_labor.docx` 或 `examples/synthetic_scan.pdf`，体验解析、转录、事实编辑及正式外发阻断。若仓库中尚无这两个文件，先执行 `python scripts/make_examples.py`。
 
 ## 模型与 OCR 配置
 
@@ -46,7 +73,7 @@ python scripts/dev.py
 
 - 原件位于 `.data/app/files/`；业务数据库为 `.data/app/app.sqlite`；网关账本为 `.data/gateway/gateway.sqlite`。
 - 原件保持不变，人工校正生成新的 `DocumentIR` 版本。历史事实和任务继续指向原版本；受影响任务失效，不能继续使用旧审批。
-- 案件内使用一致假名，各案件映射互相独立。任务保存规则、事实及完整请求快照。
+- 案件内保存独立 `MappingEntry`，外发只使用 `[[LEX:P0001]]` 稳定 token；真实值映射永不进入网关或云端载荷。任务保存规则、事实及完整请求快照。
 - 模型响应必须带事实引用；数字和引用检查、律师逐项确认共同决定最终结果状态。精确文本匹配不代表语义、法律结论或证据真实性已经自动证实。
 - 发送前写入披露台账。超时、崩溃或结果不明时禁止盲目重发，只能查询网关已有记录。网关无法证明未送达时，状态继续保持不明。
 - SQLite 用 WAL 和短写事务；网络及模型推理不在数据库事务中执行。单工作进程通过文件锁防止重复启动。
@@ -54,8 +81,8 @@ python scripts/dev.py
 离线备份和恢复：先停止三个服务。备份含原始材料，权限为仅本地用户可读，不包含密钥或访问口令；应保存在用户认可的本地位置。
 
 ```bash
-python -m lexaegis.cli backup /path/to/lexaegis-backup.zip --offline-confirm
-python -m lexaegis.cli restore /path/to/lexaegis-backup.zip \
+lexaegis backup /path/to/lexaegis-backup.zip --offline-confirm
+lexaegis restore /path/to/lexaegis-backup.zip \
   --target /path/to/restored-app --gateway-target /path/to/restored-gateway
 ```
 
@@ -68,7 +95,7 @@ python -m lexaegis.cli restore /path/to/lexaegis-backup.zip \
 ```bash
 # .env 必须配置 LEX_LOCAL_PASSWORD 和 LEX_GATEWAY_SECRET
 docker compose up --build -d
-python scripts/check_isolation.py
+lexaegis check-isolation
 ```
 
 可选的 `edge` profile 使用 llama.cpp 服务，将自行取得且适配硬件的 GGUF 权重放到 `models/edge.gguf`。设置 `LEX_EDGE_MODEL=edge-small`。`LEX_EDGE_IMAGE` 可覆盖镜像；交付配置中的上游标签未锁定 digest，正式部署前应验证所选镜像并固定 digest。
@@ -77,7 +104,7 @@ python scripts/check_isolation.py
 docker compose --profile edge up -d
 ```
 
-红队占位服务位于独立内部网络且不挂载任何卷；只提供受限输入契约，返回“未实现”，不执行真实攻击。首版没有提供将其变为安全通过的配置开关。
+红队服务位于独立内部网络且不挂载任何卷；输入契约拒绝原文、mapping、anchors 与真值。只有冻结协议的真实运行结果 `resisted` 才可满足门禁，其他结果均阻断。
 
 当前开发设备没有 Docker，**容器构建及网络隔离未经过实际运行验收**。`check_isolation.py` 是待目标机器执行的验收脚本，不能把 Compose 配置本身当成隔离已通过的证据。主机管理员、恶意本机进程、磁盘加密和云服务商的数据保留政策不属于首版已实现的防护范围。
 
@@ -91,7 +118,7 @@ python -m lexaegis.cli import-pack /path/to/domain-pack.json
 
 正式发布包需审核记录，但导入发布包本身不会解锁外发：四类风险策略仍需独立实现与验收。测试包 `contract_test` 仅验证案由扩展接口。
 
-任务定义位于 `lexaegis/registry.py`。首版事实摘要已开放，时间线、证据整理和争点提取保留注册项。新任务需提供输入输出结构、执行节点、校核器、展示组件及回归案例，复用安全内核。架构约定见 [架构说明](docs/ARCHITECTURE.md)。
+任务定义位于 `lexaegis/task_engine.py`，并可由管理员安装的 `lexaegis.tasks` entry point 扩展。事实摘要和本地确定性时间线已开放，证据整理与争点提取明确标为未实现。架构约定见 [架构说明](docs/ARCHITECTURE.md) 与 [V2 实现状态](docs/IMPLEMENTATION_V2.md)。
 
 ## 验证
 
@@ -103,6 +130,6 @@ pnpm build
 pnpm exec playwright test
 ```
 
-交付验证为 **25 项后端测试、4 条 Chrome 浏览器流程通过**，前端类型检查和生产构建通过。具体覆盖及未验证能力见 [验证报告](docs/VALIDATION.md)。
+当前验证为 **35 项后端测试通过且无弃用警告**，前端类型检查和生产构建通过，wheel 已核验包含前端、V2 包和 NOTICE。0.2 浏览器五视口矩阵与容器隔离仍待 CI/目标环境运行；详见 [验证报告](docs/VALIDATION.md)。
 
-本项目没有集成文档提及的 DataInfra 或 Ianvs 代码，也没有附带模型权重、真实案例或评测效果数字。依赖及来源说明见 [来源与许可](docs/PROVENANCE.md)。
+本项目不集成 DataInfra 代码；Ianvs 仅按固定来源选择性改写算法思想与结构，并保留修改说明。没有附带模型权重、真实案例或评测效果数字。依赖及来源说明见 [来源与许可](docs/PROVENANCE.md)、[第三方台账](docs/THIRD_PARTY.md) 与 [界面设计基线](docs/DESIGN.md)。

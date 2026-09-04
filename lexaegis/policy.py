@@ -1,24 +1,22 @@
 import re
+from .detection import DEFAULT_PATTERNS, detect_text, risk_signals, sensitivity_signals
 from .util import digest
 
 ATTACKS = ["identity", "candidate_set", "sensitive_inference", "cross_round"]
-PATTERNS = {
-    "身份证号": r"(?<!\d)\d{17}[\dXx](?!\d)",
-    "手机号": r"(?<!\d)1[3-9]\d{9}(?!\d)",
-    "电子邮箱": r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}",
-    "银行卡或长编号": r"(?<!\d)\d{16,19}(?!\d)",
-}
+PATTERNS = {item["category"]: item["pattern"] for item in DEFAULT_PATTERNS}
+TOKEN = re.compile(r"\[\[LEX:P\d{4,}\]\]")
 
 
-def detect(text):
-    return [name for name, pattern in PATTERNS.items() if re.search(pattern, text)]
+def detect(text, pack=None):
+    return list(dict.fromkeys(finding["category"] for finding in detect_text(text, pack=pack)))
 
 
 def transform(value, method, mappings):
     if method == "delete":
         return ""
     if method in ("pseudonymize", "generalize"):
-        for original, alias in sorted(mappings.items(), key=lambda p: -len(p[0])):
+        pairs = ((entry["original_value"], entry["wire_token"]) for entry in mappings) if isinstance(mappings, list) else mappings.items()
+        for original, alias in sorted(pairs, key=lambda pair: -len(pair[0])):
             value = value.replace(original, alias)
         for name, pattern in PATTERNS.items():
             value = re.sub(pattern, f"[{name}已隐去]", value)
@@ -29,21 +27,38 @@ def transform(value, method, mappings):
 
 
 def ensure_mappings(case, facts):
-    mapping = case.setdefault("mapping", {})
+    entries = case.setdefault("mapping_entries", [])
+    by_original = {entry["original_value"]: entry for entry in entries}
+    mapping_version = int(case.get("mapping_version", 1))
     for fact in facts:
-        if fact["field"] == "entity" and fact["value"] not in mapping:
-            # Case-specific namespace also prevents accidentally treating aliases as cross-case identity.
-            mapping[fact["value"]] = f"主体{len(mapping)+1}（{case['id'][-4:]}）"
-    return mapping
+        if fact["field"] == "entity" and fact["value"] not in by_original:
+            number = len(entries) + 1
+            mapping_version += 1
+            entry = {"entity_id": f"entity_{number:04d}", "wire_token": f"[[LEX:P{number:04d}]]",
+                     "display_alias": f"主体{number}（{case['id'][-4:]}）", "original_value": fact["value"],
+                     "source_ids": list(fact.get("source_ids", [])), "mapping_version": mapping_version}
+            entries.append(entry)
+            by_original[fact["value"]] = entry
+        elif fact["field"] == "entity":
+            current = by_original[fact["value"]]
+            current["source_ids"] = sorted(set(current.get("source_ids", [])) | set(fact.get("source_ids", [])))
+    # Compatibility projection for 0.1 readers. New code uses mapping_entries.
+    case["mapping"] = {entry["original_value"]: entry["wire_token"] for entry in entries}
+    case["mapping_version"] = mapping_version
+    return entries
 
 
-def assess(case, pack, facts, decisions, docs, ledger, transport):
+def assess(case, pack, facts, decisions, docs, ledger, transport, provider_results=None, attacks=None, isolation_verified=False):
     findings, blockers = [], []
     emitted = "\n".join(d["output"] for d in decisions if d["output"])
-    detected = detect(emitted)
+    fact_by_id = {fact["id"]: fact for fact in facts}
+    detector_inputs = [(fact_by_id.get(decision["fact_id"], {}).get("source_ids", [None])[0] if fact_by_id.get(decision["fact_id"], {}).get("source_ids") else None,
+                        decision["output"]) for decision in decisions if decision.get("output")]
+    detected_findings = [finding for anchor_id, text in detector_inputs for finding in detect_text(text, anchor_id=anchor_id, pack=pack)]
+    detected = list(dict.fromkeys(finding["category"] for finding in detected_findings))
     if detected:
         blockers.append("仍包含直接标识：" + "、".join(detected))
-    for original in case.get("mapping", {}):
+    for original in [entry["original_value"] for entry in case.get("mapping_entries", [])] or case.get("mapping", {}):
         if original and original in emitted:
             blockers.append("仍包含未替换的登记主体")
             break
@@ -60,21 +75,25 @@ def assess(case, pack, facts, decisions, docs, ledger, transport):
     if "唯一" in emitted or "公开获奖" in emitted:
         blockers.append("组合线索风险：唯一岗位或公开事件仍保留")
     if ledger:
-        findings.append(f"已纳入 {len(ledger)} 条已发送或结果不明的历史披露；完整跨轮攻击尚未实现。")
+        findings.append(f"已纳入 {len(ledger)} 条已发送或结果不明的历史披露；须按冻结协议重新运行跨轮攻击。")
     demo = case["mode"] == "demo"
     if case.get("scenario") == "stop":
         blockers.append("合成示例关键证据不完整，主动停止")
     if not demo:
-        if pack["status"] != "published" or not pack.get("review_record"):
-            blockers.append("适用规则尚未正式发布")
-        blockers.append("正式案件所需四类风险攻击策略尚未实现，禁止外发")
+        from .governance import validate_formal_gate
+        blockers.extend(validate_formal_gate(pack, provider_results or [], attacks or [], isolation_verified))
     if transport == "mock" and not demo:
         blockers.append("正式案件不能使用模拟调用")
-    attacks = [{"kind": name, "capability": "unimplemented", "outcome": "not_run"} for name in ATTACKS]
+    attacks = attacks or [{"kind": name, "capability": "available", "outcome": "not_run"} for name in ATTACKS]
+    signals = risk_signals(detector_inputs, pack, len(ledger))
     findings.append("确定性检测不是完整再识别测试；未执行的攻击不计为通过。")
     if demo:
         findings.append("仅允许固定合成数据演示；完整风险检验仍未完成。")
-    return {"completion": "incomplete", "findings": findings, "blockers": list(dict.fromkeys(blockers)), "attacks": attacks, "ledger_version": case["ledger_version"], "approval_allowed": not blockers, "demo_exception": demo}
+    completion = "complete" if not blockers and all(a.get("outcome") == "resisted" for a in attacks) else "incomplete"
+    return {"completion": completion, "findings": findings, "blockers": list(dict.fromkeys(blockers)), "attacks": attacks,
+            "detection_findings": detected_findings, "sensitivity_signals": sensitivity_signals(detected_findings),
+            "risk_signals": signals, "compliance_checks": provider_results or [], "ledger_version": case["ledger_version"],
+            "approval_allowed": not blockers, "demo_exception": demo}
 
 
 def check_claims(raw, task, facts):
@@ -92,6 +111,7 @@ def check_claims(raw, task, facts):
             raise ValueError("摘要引用必须是字符串标识")
         valid = all(isinstance(i, str) and i in decisions and decisions[i]["output"] for i in ids)
         support = "\n".join(decisions[i]["output"] for i in ids) if valid else ""
+        support_items = [decisions[i]["output"] for i in ids] if valid else []
         issues = []
         if not ids or not valid:
             issues.append("引用不存在或指向未披露事实")
@@ -101,8 +121,16 @@ def check_claims(raw, task, facts):
             issues.append("改写或新增陈述需要人工核实语义与证据归属")
         if not text.strip():
             issues.append("陈述为空")
+        known_tokens = set(TOKEN.findall(support))
+        returned_tokens = set(TOKEN.findall(text))
+        if not returned_tokens <= known_tokens:
+            issues.append("包含未知或不属于引用事实的身份 token")
+        if "[[LEX:" in text and len(returned_tokens) != text.count("[[LEX:"):
+            issues.append("身份 token 已破损，禁止自动复原")
         anchors = [s for i in ids if i in by_id for s in by_id[i]["source_ids"]]
-        results.append({"id": digest(item)[:16], "text": text, "source_ids": ids, "anchors": anchors, "issues": issues, "status": "needs_review" if issues else "source_matched", "reviewed": False})
+        results.append({"id": digest(item)[:16], "text": text, "local_text": text, "source_ids": ids, "anchors": anchors,
+                        "support": support_items, "issues": list(dict.fromkeys(issues)), "status": "needs_review" if issues else "source_matched",
+                        "reviewer": None, "reviewed_at": None, "reviewed": False})
     if not results:
         raise ValueError("模型未返回任何事实陈述")
     return results
