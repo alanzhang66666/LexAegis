@@ -25,6 +25,7 @@ class SourceAnchor(Contract):
     bbox: list[float] | None = None
     locator: str = ""
     confidence: float | None = None
+    recognizer: str | None = None
     reviewed: bool = False
 
 

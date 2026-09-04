@@ -2,32 +2,114 @@ import importlib.util
 import hashlib
 import os
 from pathlib import Path
-from typing import Protocol
+from typing import Iterable, Protocol
 from .contracts import DocumentIRV2, SourceAnchor
 
 
 class OCRProvider(Protocol):
-    def recognize(self, image): ...
+    provider_id: str
+    version: str
+
+    def health(self) -> dict: ...
+    def recognize(self, image) -> Iterable[tuple[str, float, list[float]]]: ...
+
+
+class PaddleOCRProvider:
+    provider_id = "paddle"
+    version = "3"
+
+    def __init__(self):
+        self._engine = None
+
+    def health(self):
+        installed = importlib.util.find_spec("paddleocr") is not None
+        assets_ready = os.getenv("LEX_OCR_MODELS_READY") == "1"
+        return {
+            "status": "available" if installed and assets_ready else "unconfigured",
+            "provider": self.provider_id,
+            "version": self.version,
+            "detail": (
+                "PaddleOCR 本地模型资产已由部署者确认预置"
+                if installed and assets_ready
+                else "需要安装 PaddleOCR，并设置 LEX_OCR_MODELS_READY=1 确认模型资产已离线预置"
+            ),
+        }
+
+    def recognize(self, image):
+        if self.health()["status"] != "available":
+            raise RuntimeError("PaddleOCR 本地模型资产未就绪")
+        import numpy as np
+        if self._engine is None:
+            from paddleocr import PaddleOCR
+            # This provider is enabled only after the operator attests that model
+            # assets are present; there is deliberately no remote OCR fallback.
+            self._engine = PaddleOCR(
+                use_doc_orientation_classify=False,
+                use_doc_unwarping=False,
+                use_textline_orientation=False,
+                lang="ch",
+            )
+        for result in self._engine.predict(np.array(image)):
+            data = result.json
+            data = data.get("res", data)
+            for text, score, box in zip(
+                data.get("rec_texts", []),
+                data.get("rec_scores", []),
+                data.get("rec_boxes", []),
+            ):
+                yield text, float(score), [float(v) for v in box]
+
+
+_OCR_PROVIDERS: dict[str, OCRProvider] = {"paddle": PaddleOCRProvider()}
+
+
+def register_ocr_provider(provider: OCRProvider) -> None:
+    if not provider.provider_id or not provider.version:
+        raise ValueError("OCR Provider 必须声明稳定 id 与版本")
+    _OCR_PROVIDERS[provider.provider_id] = provider
+
+
+def ocr_capability() -> dict:
+    provider_id = os.getenv("LEX_OCR_PROVIDER", "paddle")
+    if os.getenv("LEX_OCR_ENABLED") != "1":
+        return {
+            "status": "unconfigured",
+            "provider": provider_id,
+            "detail": "本地 OCR 未启用；扫描页保留原图并进入人工转录",
+        }
+    provider = _OCR_PROVIDERS.get(provider_id)
+    if provider is None:
+        return {
+            "status": "failed",
+            "provider": provider_id,
+            "detail": "配置的本地 OCR Provider 未注册",
+        }
+    try:
+        result = dict(provider.health())
+    except Exception:
+        result = {"status": "failed", "detail": "本地 OCR Provider 健康检查失败"}
+    result.setdefault("provider", provider.provider_id)
+    result.setdefault("version", provider.version)
+    return result
+
+
+def get_ocr_provider() -> OCRProvider | None:
+    capability = ocr_capability()
+    if capability["status"] != "available":
+        return None
+    return _OCR_PROVIDERS[capability["provider"]]
 
 
 def ocr_available():
-    return os.getenv("LEX_OCR_ENABLED") == "1" and importlib.util.find_spec("paddleocr") is not None
+    return get_ocr_provider() is not None
 
 
-def _ocr_page(image):
-    import numpy as np
-    from paddleocr import PaddleOCR
-    # No cloud fallback; model assets must be provisioned before isolated runtime.
-    engine = PaddleOCR(use_doc_orientation_classify=False, use_doc_unwarping=False, use_textline_orientation=False, lang="ch")
-    for result in engine.predict(np.array(image)):
-        data = result.json
-        data = data.get("res", data)
-        for text, score, box in zip(data.get("rec_texts", []), data.get("rec_scores", []), data.get("rec_boxes", [])):
-            yield text, float(score), [float(v) for v in box]
+_DEFAULT_PROVIDER = object()
 
 
-def parse(path: Path, document_id: str, version=1):
+def parse(path: Path, document_id: str, version=1, ocr_provider=_DEFAULT_PROVIDER):
     blocks, warnings = [], []
+    provider = get_ocr_provider() if ocr_provider is _DEFAULT_PROVIDER else ocr_provider
 
     def add(kind, content, **kwargs):
         blocks.append(SourceAnchor(id=f"{document_id}:v{version}:b{len(blocks)}", document_id=document_id, document_version=version, kind=kind, text=content, **kwargs))
@@ -68,13 +150,13 @@ def parse(path: Path, document_id: str, version=1):
                     if boxes:
                         bbox = [min(b[0] for b in boxes)/width, 1-max(b[3] for b in boxes)/height, max(b[2] for b in boxes)/width, 1-min(b[1] for b in boxes)/height]
                     add("pdf_text", extracted, page=p+1, bbox=bbox, locator=f"第 {p+1} 页 · 文本区域")
-                elif ocr_available():
+                elif provider is not None:
                     image = page.render(scale=min(2, 2400/max(width, height))).to_pil().convert("RGB")
                     found = False
                     try:
-                        for content, score, box in _ocr_page(image):
+                        for content, score, box in provider.recognize(image):
                             found = True
-                            add("ocr", content, page=p+1, bbox=[box[0]/image.width, box[1]/image.height, box[2]/image.width, box[3]/image.height], confidence=score, locator=f"第 {p+1} 页 · OCR")
+                            add("ocr", content, page=p+1, bbox=[box[0]/image.width, box[1]/image.height, box[2]/image.width, box[3]/image.height], confidence=score, recognizer=f"{provider.provider_id}@{provider.version}", locator=f"第 {p+1} 页 · OCR")
                     except Exception:
                         warnings.append(f"第 {p+1} 页 OCR 执行失败，请检查离线模型资源")
                     if not found:
@@ -92,12 +174,12 @@ def parse(path: Path, document_id: str, version=1):
             image = source.convert("RGB")
             if image.width * image.height > 50_000_000:
                 raise ValueError("图片像素超过 5000 万限制")
-            if ocr_available():
+            if provider is not None:
                 found = False
                 try:
-                    for content, score, box in _ocr_page(image):
+                    for content, score, box in provider.recognize(image):
                         found = True
-                        add("ocr", content, page=1, bbox=[box[0]/image.width, box[1]/image.height, box[2]/image.width, box[3]/image.height], confidence=score, locator="第 1 页 · OCR")
+                        add("ocr", content, page=1, bbox=[box[0]/image.width, box[1]/image.height, box[2]/image.width, box[3]/image.height], confidence=score, recognizer=f"{provider.provider_id}@{provider.version}", locator="第 1 页 · OCR")
                 except Exception:
                     warnings.append("图片 OCR 执行失败，请检查离线模型资源")
                 if not found:

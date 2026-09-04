@@ -15,7 +15,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 from . import service
 from .auth import create_user_record, current_actor, ensure_initial_admin, public_user, verify_password
-from .parsing import ocr_available
+from .parsing import ocr_capability
 from .providers import EdgeClient
 from .contracts import ProviderProfile, RiskProtocol
 from .governance import protocol_content_hash, publish_pack_record
@@ -311,7 +311,7 @@ def create_app(data_dir=None, password=None):
                 "legal": {"status": "available" if published else "unconfigured", "detail": f"已发布 V2 案由包 {len(published)} 个"},
                 "validation": {"status": "unconfigured", "detail": "真实模型、真实云端和正式案件尚未验收"},
                 "edge": edge, "cloud": cloud,
-                "ocr": {"status": "available" if ocr_available() else "unconfigured", "detail": "已启用；模型资产需离线预置" if ocr_available() else "PaddleOCR 可选依赖或离线模型未配置"},
+                "ocr": ocr_capability(),
                 "redteam": {"status": "available" if len([p for p in protocols if p.get('status') == 'frozen']) >= 4 else "unconfigured", "detail": "未运行、错误和不确定均不算通过"},
                 "isolation": {"status": "available" if isolation_ok else "unconfigured", "detail": "已记录隔离验收" if isolation_ok else "尚无通过的隔离验收记录"}}
 
@@ -505,22 +505,32 @@ def create_app(data_dir=None, password=None):
 
     @app.get("/api/v1/cases/{case_id}/documents/{document_id}/page/{page_number}")
     def render_page(case_id: str, document_id: str, page_number: int):
-        import pypdfium2 as pdfium
         with store.read() as repo:
             doc = repo.get(document_id, "document")
-        if doc["case_id"] != case_id or doc["extension"] != ".pdf":
+        if doc["case_id"] != case_id:
             raise HTTPException(404)
-        pdf = pdfium.PdfDocument(root / "files" / doc["path"])
-        try:
-            if not 1 <= page_number <= len(pdf):
+        material = root / "files" / doc["path"]
+        if doc["extension"] == ".pdf":
+            import pypdfium2 as pdfium
+            pdf = pdfium.PdfDocument(material)
+            try:
+                if not 1 <= page_number <= len(pdf):
+                    raise HTTPException(404)
+                page = pdf[page_number-1]
+                image = page.render(scale=min(1.5, 1600/max(page.get_size()))).to_pil()
+                page.close()
+            finally:
+                pdf.close()
+        elif doc["extension"] in (".png", ".jpg", ".jpeg"):
+            if page_number != 1:
                 raise HTTPException(404)
-            page = pdf[page_number-1]
-            image = page.render(scale=min(1.5, 1600/max(page.get_size()))).to_pil()
-            output = io.BytesIO()
-            image.save(output, format="PNG")
-            page.close()
-        finally:
-            pdf.close()
+            from PIL import Image
+            with Image.open(material) as source:
+                image = source.convert("RGB")
+        else:
+            raise HTTPException(404)
+        output = io.BytesIO()
+        image.save(output, format="PNG")
         return Response(output.getvalue(), media_type="image/png")
 
     @app.put("/api/v1/cases/{case_id}/documents/{document_id}/correction")

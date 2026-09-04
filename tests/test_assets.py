@@ -3,7 +3,7 @@ import zipfile
 from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
-from lexaegis.parsing import parse
+from lexaegis.parsing import ocr_capability, parse, register_ocr_provider
 from lexaegis.registry import import_pack
 from lexaegis.cli import backup, restore
 from lexaegis.redteam import app as redteam
@@ -22,6 +22,56 @@ def test_scan_without_ocr_preserves_page_and_requires_review():
     assert result['blocks'][0]['page']==1
     assert result['blocks'][0]['bbox']==[0,0,1,1]
     assert result['warnings']
+
+
+class FakeOCR:
+    provider_id = "fake"
+    version = "1.2"
+
+    def health(self):
+        return {"status": "available", "detail": "test-only local provider"}
+
+    def recognize(self, image):
+        yield "模拟识别文本", .92, [10, 5, 90, 25]
+
+
+def test_image_ocr_provider_has_coordinates_confidence_and_provenance(tmp_path):
+    from PIL import Image
+    path = tmp_path / "扫描证据.png"
+    Image.new("RGB", (100, 50), "white").save(path)
+    result = parse(path, "doc_image", ocr_provider=FakeOCR())
+    block = result["blocks"][0]
+    assert block["kind"] == "ocr"
+    assert block["bbox"] == [.1, .1, .9, .5]
+    assert block["confidence"] == .92
+    assert block["recognizer"] == "fake@1.2"
+    assert result["needs_review"]
+
+
+def test_ocr_provider_failure_falls_back_to_reviewable_scan(tmp_path):
+    from PIL import Image
+
+    class BrokenOCR(FakeOCR):
+        def recognize(self, image):
+            raise RuntimeError("offline model corrupt")
+
+    path = tmp_path / "scan.jpg"
+    Image.new("RGB", (80, 40), "white").save(path)
+    result = parse(path, "doc_broken", ocr_provider=BrokenOCR())
+    assert result["blocks"][0]["kind"] == "scan"
+    assert result["needs_review"]
+    assert any("OCR 执行失败" in warning for warning in result["warnings"])
+
+
+def test_ocr_capability_distinguishes_disabled_unknown_and_available(monkeypatch):
+    register_ocr_provider(FakeOCR())
+    monkeypatch.setenv("LEX_OCR_PROVIDER", "fake")
+    monkeypatch.setenv("LEX_OCR_ENABLED", "0")
+    assert ocr_capability()["status"] == "unconfigured"
+    monkeypatch.setenv("LEX_OCR_ENABLED", "1")
+    assert ocr_capability()["status"] == "available"
+    monkeypatch.setenv("LEX_OCR_PROVIDER", "missing")
+    assert ocr_capability()["status"] == "failed"
 
 
 def test_docx_table_has_distinct_source_anchors():
@@ -116,3 +166,21 @@ def test_scan_page_render_and_manual_transcription(env):
     assert result.status_code==200
     assert result.json()['version']==2
     assert not result.json()['ir']['needs_review']
+
+
+def test_uploaded_image_page_preview_is_local_png(env, tmp_path):
+    from PIL import Image
+    image = tmp_path / "evidence.jpeg"
+    Image.new("RGB", (120, 60), "white").save(image)
+    client = env["client"]
+    case = client.post("/api/v1/cases", json={"name": "图片材料预览"}).json()
+    client.post(
+        f"/api/v1/cases/{case['id']}/documents",
+        files={"file": ("evidence.jpeg", image.read_bytes(), "image/jpeg")},
+    )
+    process_one(env["app"].state.store, env["root"], env["gate"])
+    doc = client.get(f"/api/v1/cases/{case['id']}").json()["documents"][0]
+    page = client.get(f"/api/v1/cases/{case['id']}/documents/{doc['id']}/page/1")
+    assert page.status_code == 200
+    assert page.content.startswith(b"\x89PNG")
+    assert client.get(f"/api/v1/cases/{case['id']}/documents/{doc['id']}/page/2").status_code == 404
