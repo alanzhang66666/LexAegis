@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from .contracts import ApprovedRequest
 from .providers import OpenAICompatibleProvider
 from .storage import Store
-from .util import digest, now, sign
+from .util import digest, now, restrict_mode, sign
 
 
 class Envelope(BaseModel):
@@ -21,7 +21,7 @@ class Envelope(BaseModel):
 def create_gateway(data_dir=None, secret=None, provider=None):
     root = Path(data_dir or os.getenv("LEX_GATEWAY_DIR", ".data/gateway"))
     root.mkdir(parents=True, exist_ok=True)
-    root.chmod(0o700)
+    restrict_mode(root, 0o700)
     store = Store(root / "gateway.sqlite")
     secret = secret or os.getenv("LEX_GATEWAY_SECRET", "")
     provider = provider or OpenAICompatibleProvider(os.getenv("LEX_CLOUD_API_KEY", ""))
@@ -54,16 +54,24 @@ def create_gateway(data_dir=None, secret=None, provider=None):
         auth({"request": request, "approval": approval}, envelope.signature)
         if digest(request) != approval.get("request_hash"):
             raise HTTPException(403, "Approval hash mismatch")
+        if approval.get("actor_role") != "approver" or not approval.get("actor"):
+            raise HTTPException(403, "Named approver is required")
+        if approval.get("dependencies") != request.get("dependencies"):
+            raise HTTPException(403, "Approval dependencies mismatch")
         try:
             expired = datetime.fromisoformat(approval["expires_at"]) <= datetime.now(timezone.utc)
         except (KeyError, ValueError, TypeError):
             raise HTTPException(403, "Invalid expiry")
         if expired or not request["policy"].get("approved_for_dispatch"):
             raise HTTPException(403, "Approval expired or policy blocked")
-        if request["mode"] == "formal":
-            # Defense in depth: v1 has no implemented complete attack suite.
-            raise HTTPException(403, "Formal dispatch unavailable until verified risk suite is implemented")
-        if not request["policy"].get("demo_exception"):
+        wire = request.get("wire_payload") or {}
+        if set(wire) != {"contract_version", "task", "facts"} or wire.get("contract_version") != 2:
+            raise HTTPException(403, "Invalid cloud wire contract")
+        if any(key in str(wire).lower() for key in ("mapping", "original_value", "local_text", "anchors")):
+            raise HTTPException(403, "Local-only fields are forbidden on the wire")
+        if request["mode"] == "formal" and (request["policy"].get("risk_completion") != "complete" or request["policy"].get("demo_exception")):
+            raise HTTPException(403, "Formal dispatch gates are incomplete")
+        if request["mode"] == "demo" and not request["policy"].get("demo_exception"):
             raise HTTPException(403, "Missing synthetic demonstration scope")
         if request["transport"] == "cloud":
             url = urlparse(request["target"])

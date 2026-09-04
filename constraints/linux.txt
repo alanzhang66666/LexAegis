@@ -1,0 +1,2 @@
+# Generated platform constraints for Python 3.12+ (amd64/arm64).
+-r ../requirements.lock

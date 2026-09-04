@@ -25,6 +25,8 @@ import {
   PanelLeftClose,
   CircleHelp,
 } from "lucide-react";
+import { Empty, Tag } from "./components/ui";
+import { BenchmarkCenter, ProviderCenter } from "./pages/GovernanceCenters";
 
 type Obj = Record<string, any>;
 const labels: Record<string, string> = {
@@ -64,6 +66,7 @@ const labels: Record<string, string> = {
   sensitive_inference: "敏感事实推断",
   cross_round: "跨轮关联",
 };
+const attackLabels: Record<string, string> = { resisted: "攻击未成功", succeeded: "攻击成功 · 阻断", uncertain: "结果不确定 · 阻断", error: "执行错误 · 阻断", not_run: "未运行 · 阻断", not_applicable: "不适用 · 不计通过" };
 const txt = (key: string) => labels[key] || key;
 async function api(path: string, method = "GET", body?: any) {
   const response = await fetch("/api/v1" + path, {
@@ -90,21 +93,6 @@ async function api(path: string, method = "GET", body?: any) {
   }
   return response.json();
 }
-const Tag = ({
-  children,
-  tone = "neutral",
-}: {
-  children: React.ReactNode;
-  tone?: string;
-}) => <span className={"tag " + tone}>{children}</span>;
-const Empty = ({ title, detail }: { title: string; detail: string }) => (
-  <div className="empty">
-    <FileText size={32} />
-    <h3>{title}</h3>
-    <p>{detail}</p>
-  </div>
-);
-
 export default function App() {
   const [boot, setBoot] = useState<Obj | null>(null),
     [logged, setLogged] = useState(false),
@@ -188,7 +176,8 @@ export default function App() {
     if (!ids.length) return;
     try {
       const anchors: Obj[] = await api("/cases/" + caseId + "/anchors");
-      const b = anchors.find((a) => ids.includes(a.id));
+      const normalized = ids.map((item: any) => typeof item === "string" ? item : item.id);
+      const b = anchors.find((a) => normalized.includes(a.id));
       if (b) setSource(b);
     } catch (e) {
       setError((e as Error).message);
@@ -223,12 +212,12 @@ export default function App() {
       );
       setModal("");
     }, "事实已保存；相关旧任务需要重新生成。");
-  const startTask = (transport: string) =>
+  const startTask = (transport: string, taskType = "fact_summary") =>
     run(async () => {
-      const t = await api(`/cases/${caseId}/tasks`, "POST", { transport });
+      const t = await api(`/cases/${caseId}/tasks`, "POST", { transport, task_type: taskType });
       setTaskId(t.id);
-      setTab("disclosure");
-    }, "披露方案已生成，请逐项核对。");
+      setTab(taskType === "timeline" ? "result" : "disclosure");
+    }, taskType === "timeline" ? "本地时间线已生成，未发生外发。" : "披露方案已生成，请逐项核对。");
   const editDecision = (d: Obj, updates: Obj) =>
     run(() =>
       api(`/tasks/${task.id}/decisions/${d.fact_id}`, "PATCH", {
@@ -291,7 +280,7 @@ export default function App() {
           </small>
         </div>
         <div className="login-footer">
-          LEXAEGIS / 0.1 <span>PRIVACY BY PURPOSE</span>
+          LEXAEGIS / 0.2 <span>PRIVACY BY PURPOSE</span>
         </div>
       </div>
     );
@@ -306,12 +295,14 @@ export default function App() {
           </div>
         </div>
         <div className="workspace-label">
-          个人工作空间 <span>V0.1</span>
+          个人工作空间 <span>V0.2</span>
         </div>
         <nav>
           {[
             { id: "cases", name: "案件工作台", icon: FolderOpen },
-            { id: "registry", name: "能力与知识包", icon: Layers3 },
+            { id: "registry", name: "法学规则中心", icon: Layers3 },
+            { id: "providers", name: "服务商治理", icon: LockKeyhole },
+            { id: "benchmark", name: "隔离实验", icon: CircleHelp },
             { id: "settings", name: "运行配置", icon: Settings2 },
           ].map((item) => (
             <button
@@ -389,7 +380,11 @@ export default function App() {
                 : page === "settings"
                   ? "运行配置"
                   : page === "registry"
-                    ? "能力与知识包"
+                    ? "法学规则中心"
+                    : page === "providers"
+                      ? "服务商治理"
+                      : page === "benchmark"
+                        ? "隔离实验"
                     : "案件工作台"}
             </strong>
           </div>
@@ -922,6 +917,9 @@ export default function App() {
                       />
                     )}
                     <div className="bottom-action">
+                      {currentCase.mode === "formal" && (
+                        <button className="secondary" disabled={busy || !data.facts.length} onClick={() => startTask("local", "timeline")}>本地生成时间线</button>
+                      )}
                       <button
                         className="primary"
                         disabled={busy || !data.facts.length}
@@ -954,7 +952,7 @@ export default function App() {
                         {data.tasks.map((t: Obj, i: number) => (
                           <option key={t.id} value={t.id}>
                             任务 {i + 1} ·{" "}
-                            {t.transport === "mock" ? "模拟" : "云端 API"} ·{" "}
+                            {t.transport === "local" ? "本地" : t.transport === "mock" ? "模拟" : "云端 API"} ·{" "}
                             {txt(t.status)}
                           </option>
                         ))}
@@ -1142,7 +1140,7 @@ export default function App() {
                               {task.risk.attacks.map((a: Obj) => (
                                 <div key={a.kind}>
                                   <span>{txt(a.kind)}</span>
-                                  <Tag tone="amber">未实现 · 未运行</Tag>
+                                  <Tag tone={a.outcome === "resisted" ? "green" : "amber"}>{attackLabels[a.outcome || "not_run"]}</Tag>
                                 </div>
                               ))}
                             </div>
@@ -1260,6 +1258,13 @@ export default function App() {
                       <>
                         {task.artifact ? (
                           <>
+                            {task.type === "timeline" ? (
+                              <>
+                                <div className="result-heading"><Tag tone="green">本地确定性结果</Tag></div>
+                                <p className="context-note">时间线仅从已确认事实中筛选，不调用边侧或云端模型。</p>
+                                {(task.artifact.events || []).map((event: Obj, i: number) => <article className="claim-card" key={event.id}><div className="fact-meta"><span className="fact-no">{String(i + 1).padStart(2, "0")}</span><Tag>时间事实</Tag></div><p>{event.text}</p><div className="fact-footer"><button onClick={() => locate(event.source_ids)}><Link2 size={13} />回到原文</button></div></article>)}
+                              </>
+                            ) : <>
                             <div className="result-heading">
                               <Tag
                                 tone={
@@ -1339,6 +1344,7 @@ export default function App() {
                                   : "确认最终结果"}
                               </button>
                             </div>
+                            </>}
                           </>
                         ) : (
                           <Empty
@@ -1416,7 +1422,7 @@ export default function App() {
                     ))}
                 </div>
                 <p className="small-note">
-                  风险攻击未实现时不会显示“通过”。正式案件当前保持外发阻断。
+                  风险攻击未按冻结协议完成时不会显示“通过”。正式案件当前保持外发阻断。
                 </p>
               </aside>
             </div>
@@ -1447,6 +1453,10 @@ export default function App() {
                 ["ocr", "本地 OCR"],
                 ["redteam", "风险攻击"],
                 ["isolation", "网络隔离"],
+                ["technical", "技术实现"],
+                ["runtime", "运行配置"],
+                ["legal", "法学发布"],
+                ["validation", "实际验证"],
               ].map(([key, name]) => (
                 <div className="capability" key={key}>
                   <div>
@@ -1466,6 +1476,7 @@ export default function App() {
             {boot && (
               <SettingsForm
                 value={boot.settings}
+                providers={boot.providers || []}
                 busy={busy}
                 save={(v: Obj) =>
                   run(
@@ -1488,13 +1499,15 @@ export default function App() {
             </div>
           </div>
         )}
+        {page === "providers" && <ProviderCenter providers={boot?.providers} />}
+        {page === "benchmark" && <BenchmarkCenter protocols={boot?.risk_protocols} />}
         {page === "registry" && (
           <div className="content">
             <div className="section-heading">
               <div>
                 <div className="eyebrow">EXTENSIBLE BY DESIGN</div>
-                <h1>能力与知识包</h1>
-                <p>案由与任务独立扩展，共用审批、外发和来源回链。</p>
+                <h1>法学规则中心</h1>
+                <p>案由与任务独立扩展；法学未定不阻塞工程，但持续阻断正式外发。</p>
               </div>
               <Tag>版本化注册</Tag>
             </div>
@@ -1528,7 +1541,7 @@ export default function App() {
                   </Tag>
                 </div>
                 <p>
-                  {p.version} · {p.fact_fields.map(txt).join(" / ")}
+                  {p.version} · {p.fact_fields.map((field: any) => txt(typeof field === "string" ? field : field.id)).join(" / ")}
                 </p>
                 <small>{p.references.join(" ")}</small>
                 <details>
@@ -1758,7 +1771,7 @@ export default function App() {
                 <ShieldCheck size={32} className="green-icon" />
                 <h2>批准这一份完整请求</h2>
                 <p>
-                  请确认已阅读请求正文、目标服务、信息保留依据和残余风险。完整再识别检验尚未实现，本次只允许固定合成数据演示。
+                  请确认已阅读请求正文、目标服务、信息保留依据和残余风险。固定合成演示不替代正式冻结攻击与法学审核。
                 </p>
                 <div className="approval-summary">
                   <b>{task.request.body.model}</b>
@@ -1809,10 +1822,12 @@ export default function App() {
 
 function SettingsForm({
   value,
+  providers,
   busy,
   save,
 }: {
   value: Obj;
+  providers: Obj[];
   busy: boolean;
   save: (v: Obj) => void;
 }) {
@@ -1821,6 +1836,9 @@ function SettingsForm({
     cloud_model: value.cloud_model,
     edge_url: value.edge_url,
     edge_model: value.edge_model,
+    provider_id: value.provider_id || "",
+    deployment_mode: value.deployment_mode || "native",
+    isolation_verified: Boolean(value.isolation_verified),
   });
   return (
     <form
@@ -1867,6 +1885,14 @@ function SettingsForm({
             onChange={(e) => setV({ ...v, cloud_model: e.target.value })}
           />
         </label>
+        <label>
+          经复核服务商档案
+          <select value={v.provider_id} onChange={(e) => setV({ ...v, provider_id: e.target.value || null })}>
+            <option value="">未选择（正式外发阻断）</option>
+            {providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name} · {provider.status}</option>)}
+          </select>
+        </label>
+        <p>部署模式：{v.deployment_mode} · 隔离验收：{v.isolation_verified ? "已记录" : "未通过"}</p>
       </div>
       <button className="primary" disabled={busy}>
         保存运行配置

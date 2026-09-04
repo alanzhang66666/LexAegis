@@ -6,7 +6,9 @@ COPY frontend ./
 RUN pnpm build
 
 FROM python:3.12-slim
+ARG TARGETARCH
 WORKDIR /app
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 COPY requirements.lock ./
 RUN pip install --no-cache-dir -r requirements.lock
 COPY lexaegis ./lexaegis

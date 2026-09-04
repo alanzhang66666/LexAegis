@@ -1,0 +1,4 @@
+include NOTICE
+recursive-include LICENSES *.txt
+recursive-include packs *.json
+recursive-include frontend/dist *

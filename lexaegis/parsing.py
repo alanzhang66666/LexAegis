@@ -1,7 +1,13 @@
 import importlib.util
+import hashlib
 import os
 from pathlib import Path
-from .contracts import DocumentIR, SourceAnchor
+from typing import Protocol
+from .contracts import DocumentIRV2, SourceAnchor
+
+
+class OCRProvider(Protocol):
+    def recognize(self, image): ...
 
 
 def ocr_available():
@@ -80,6 +86,27 @@ def parse(path: Path, document_id: str, version=1):
                 page.close()
         finally:
             pdf.close()
+    elif path.suffix.lower() in (".png", ".jpg", ".jpeg"):
+        from PIL import Image
+        with Image.open(path) as source:
+            image = source.convert("RGB")
+            if image.width * image.height > 50_000_000:
+                raise ValueError("图片像素超过 5000 万限制")
+            if ocr_available():
+                found = False
+                try:
+                    for content, score, box in _ocr_page(image):
+                        found = True
+                        add("ocr", content, page=1, bbox=[box[0]/image.width, box[1]/image.height, box[2]/image.width, box[3]/image.height], confidence=score, locator="第 1 页 · OCR")
+                except Exception:
+                    warnings.append("图片 OCR 执行失败，请检查离线模型资源")
+                if not found:
+                    add("scan", "", page=1, bbox=[0, 0, 1, 1], locator="第 1 页 · 待识别")
+            else:
+                add("scan", "", page=1, bbox=[0, 0, 1, 1], locator="第 1 页 · 扫描页")
+                warnings.append("图片需要本地 OCR，当前未配置；请人工转录。")
     else:
-        raise ValueError("仅支持 DOCX 和 PDF")
-    return DocumentIR(document_id=document_id, version=version, blocks=blocks, warnings=warnings, needs_review=not blocks or any(b.kind in ("ocr", "scan") and not b.reviewed for b in blocks)).model_dump()
+        raise ValueError("仅支持 DOCX、PDF、PNG 和 JPEG")
+    needs_review = not blocks or any(block.kind in ("ocr", "scan") and not block.reviewed for block in blocks)
+    return DocumentIRV2(document_id=document_id, version=version, blocks=blocks, material_hash=hashlib.sha256(path.read_bytes()).hexdigest(),
+                        warnings=warnings, needs_review=needs_review, review_status="pending" if needs_review else "reviewed").model_dump()

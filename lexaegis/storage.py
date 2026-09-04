@@ -3,19 +3,54 @@
 Write transactions serialize business transitions; no network calls inside them.
 """
 import json
+import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 from sqlalchemy import create_engine, text
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 import sqlalchemy as sa
+from .util import restrict_mode
+
+
+CURRENT_REVISION = "0002_v2_contracts"
+
+
+def _backup_before_migration(path: Path) -> Path:
+    backup = path.with_name(path.name + ".pre-0002.bak")
+    if backup.exists():
+        check = sqlite3.connect(backup)
+        try:
+            if check.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+                raise RuntimeError("Existing migration backup failed integrity check")
+        finally:
+            check.close()
+        return backup
+    source = sqlite3.connect(path)
+    target = sqlite3.connect(backup)
+    try:
+        source.backup(target)
+        target.commit()
+        if target.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+            raise RuntimeError("Migration backup failed integrity check")
+    except BaseException:
+        target.close()
+        backup.unlink(missing_ok=True)
+        raise
+    else:
+        target.close()
+    finally:
+        source.close()
+    restrict_mode(backup, 0o600)
+    return backup
 
 
 class Store:
     def __init__(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
         self.path = path
-        self.engine = create_engine(f"sqlite:///{path}", connect_args={"check_same_thread": False, "timeout": 20})
+        url = "sqlite:///" + Path(path).resolve().as_posix()
+        self.engine = create_engine(url, connect_args={"check_same_thread": False, "timeout": 20})
         with self.engine.connect() as conn:
             conn.exec_driver_sql("PRAGMA journal_mode=WAL")
             conn.exec_driver_sql("PRAGMA foreign_keys=ON")
@@ -26,8 +61,20 @@ class Store:
                 op = Operations(context)
                 op.create_table("records", sa.Column("id", sa.String, primary_key=True), sa.Column("kind", sa.String, nullable=False), sa.Column("scope", sa.String, nullable=False), sa.Column("body", sa.Text, nullable=False))
                 op.create_index("records_kind_scope", "records", ["kind", "scope"])
-                conn.execute(text("INSERT INTO alembic_version (version_num) VALUES ('0001_aggregates')"))
-            elif context.get_current_revision() != "0001_aggregates":
+                op.create_index("records_scope_kind", "records", ["scope", "kind"])
+                conn.execute(text("INSERT INTO alembic_version (version_num) VALUES (:revision)"), {"revision": CURRENT_REVISION})
+            elif context.get_current_revision() == "0001_aggregates":
+                conn.commit()
+                _backup_before_migration(self.path)
+                conn.exec_driver_sql("BEGIN IMMEDIATE")
+                try:
+                    Operations(MigrationContext.configure(conn)).create_index("records_scope_kind", "records", ["scope", "kind"])
+                    conn.execute(text("UPDATE alembic_version SET version_num=:revision"), {"revision": CURRENT_REVISION})
+                    conn.commit()
+                except BaseException:
+                    conn.rollback()
+                    raise
+            elif context.get_current_revision() != CURRENT_REVISION:
                 raise RuntimeError("Unsupported database migration version")
             conn.commit()
 

@@ -1,0 +1,12 @@
+LexAegis / 案隐盾
+
+Portions of the architecture and algorithm taxonomy were independently adapted
+from concepts in kubeedge/ianvs pull requests #282 and #283, including commit
+8150672e6c8abcecfefd1f8377e5e40b17d7ace9, licensed under Apache License 2.0.
+The adapted implementation has been materially modified for deterministic,
+anchor-aware legal disclosure controls and isolated experiments.
+
+UI design research referenced HU-UH/awesome-design-md (MIT). No brand assets,
+logos, proprietary fonts, or third-party frontend code are included.
+
+DataInfra-RedactionEverything is not included in the source or dependency tree.

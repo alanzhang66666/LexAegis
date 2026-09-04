@@ -1,0 +1,2 @@
+# Generated platform constraints for Python 3.12+. uvloop is intentionally excluded.
+-r ../requirements.lock
