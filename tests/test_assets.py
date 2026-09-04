@@ -9,6 +9,7 @@ from lexaegis.cli import backup, restore
 from lexaegis.redteam import app as redteam
 from lexaegis.api import create_app
 from lexaegis.worker import process_one
+from lexaegis.util import sign
 from .test_workflow import formal_material
 from .conftest import demo_task, approve
 
@@ -60,14 +61,17 @@ def test_domain_pack_extends_without_gate_change_and_immutable_versions(env):
     assert env['client'].post('/api/v1/cases',json={'name':'测试扩展','domain':'new_domain'}).status_code==200
 
 
-def test_redteam_truth_fields_rejected_and_placeholder_not_pass():
+def test_redteam_truth_fields_rejected_and_placeholder_not_pass(monkeypatch):
+    secret="separate-redteam-secret"
+    monkeypatch.setenv("LEX_REDTEAM_SECRET",secret)
     client=TestClient(redteam)
-    request={'protocol':'identity','request':{'messages':[]}}
-    response=client.post('/evaluate',json=request).json()
+    view={'protocol':'identity','request':{'messages':[]},'disclosed_history':[],'auxiliary':[],'query_budget':3}
+    response=client.post('/evaluate',json={'view':view,'signature':sign(view,secret)}).json()
     assert response['capability']=='unimplemented'
     assert response['completion']=='incomplete'
     assert response['outcome']=='not_run'
-    assert client.post('/evaluate',json={**request,'identity_mapping':{'x':'secret'}}).status_code==422
+    view['request']={'truth':{'x':'secret'}}
+    assert client.post('/evaluate',json={'view':view,'signature':sign(view,secret)}).status_code==422
 
 
 def test_backup_restore_includes_material_versions_approvals_and_send_records(env):

@@ -38,12 +38,37 @@ def provider_checks(profile: dict | None, *, domain: str, task_type: str, fields
     return checks
 
 
-def frozen_protocol_runs(repo, task_id: str) -> list[dict]:
-    protocols = {p["id"]: p for p in repo.list("risk_protocol") if p.get("status") == "frozen"}
+def protocol_content_hash(protocol: dict) -> str:
+    return digest({key: value for key, value in protocol.items() if key != "content_hash"})
+
+
+def protocols_for_pack(repo, pack: dict) -> list[dict]:
+    """Resolve the exact frozen protocols referenced by a pack."""
+    references = {(item["id"], item["version"]) for item in pack.get("risk_protocols", [])}
+    protocols = []
+    for protocol in repo.list("risk_protocol"):
+        if (protocol.get("id"), protocol.get("version")) not in references:
+            continue
+        if protocol.get("status") != "frozen" or protocol.get("content_hash") != protocol_content_hash(protocol):
+            continue
+        protocols.append(protocol)
+    by_kind = {protocol["kind"]: protocol for protocol in protocols}
+    missing = [kind for kind in REQUIRED_ATTACKS if kind not in by_kind]
+    if missing:
+        raise ValueError("案由包未绑定四类有效冻结协议：" + "、".join(missing))
+    return [by_kind[kind] for kind in REQUIRED_ATTACKS]
+
+
+def frozen_protocol_runs(repo, task_id: str, attack_input_hash: str, pack: dict) -> list[dict]:
+    try:
+        protocols = {p["id"]: p for p in protocols_for_pack(repo, pack)}
+    except ValueError:
+        return [{"kind": kind, "outcome": "not_run"} for kind in REQUIRED_ATTACKS]
     latest = {}
     for run in repo.list("attack_run", task_id):
         protocol = protocols.get(run.get("protocol_id"))
-        if protocol and run.get("protocol_hash") == digest(protocol):
+        if (protocol and run.get("protocol_hash") == protocol["content_hash"]
+                and run.get("attack_input_hash") == attack_input_hash):
             latest[protocol["kind"]] = {**run, "kind": protocol["kind"]}
     return [latest.get(kind, {"kind": kind, "outcome": "not_run"}) for kind in REQUIRED_ATTACKS]
 

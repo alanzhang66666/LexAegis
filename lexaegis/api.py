@@ -18,7 +18,7 @@ from . import service
 from .parsing import ocr_available
 from .providers import EdgeClient
 from .contracts import ProviderProfile, RiskProtocol
-from .governance import publish_pack_record
+from .governance import protocol_content_hash, publish_pack_record
 from .registry import TASKS, import_pack, task_definitions, validate_pack
 from .storage import Store
 from .util import app_dir, audit, now, restrict_mode, sign, uid
@@ -85,6 +85,10 @@ class SettingsInput(Input):
     provider_id: str | None = None
     deployment_mode: Literal["native", "isolated"] = "native"
     isolation_verified: bool = False
+
+
+class AttackBatchInput(Input):
+    auxiliary: dict[str, list[dict]] = Field(default_factory=dict)
 
 
 def create_app(data_dir=None, password=None):
@@ -278,13 +282,12 @@ def create_app(data_dir=None, password=None):
 
     @app.put("/api/v1/risk-protocols/{protocol_id}")
     def risk_protocol_put(protocol_id: str, body: RiskProtocol, request: Request):
-        from .util import digest
         require_role(request, "admin")
         if protocol_id != body.id:
             raise service.DomainError("协议标识不一致")
         protocol = body.model_dump()
         if protocol["status"] == "frozen":
-            protocol["content_hash"] = digest({key: value for key, value in protocol.items() if key != "content_hash"})
+            protocol["content_hash"] = protocol_content_hash(protocol)
         with store.transaction() as repo:
             try:
                 existing = repo.get(protocol_id, "risk_protocol")
@@ -431,6 +434,18 @@ def create_app(data_dir=None, password=None):
     def evaluate(task_id: str):
         with store.transaction() as repo:
             return service.evaluate_task(repo, task_id)
+
+    @app.get("/api/v1/tasks/{task_id}/attacks")
+    def task_attacks(task_id: str):
+        with store.read() as repo:
+            repo.get(task_id, "task")
+            return repo.list("attack_run", task_id)
+
+    @app.post("/api/v1/tasks/{task_id}/attacks/run")
+    def run_task_attacks(task_id: str, body: AttackBatchInput, request: Request):
+        require_role(request, "case_operator")
+        with store.transaction() as repo:
+            return service.queue_attack_run(repo, task_id, body.auxiliary)
 
     @app.post("/api/v1/tasks/{task_id}/approve")
     def approve(task_id: str, body: ApprovalInput, request: Request):

@@ -3,11 +3,13 @@ import time
 from pathlib import Path
 import httpx
 from . import service
+from .contracts import AttackRun
+from .governance import protocol_content_hash
 from .parsing import parse
 from .policy import check_claims
 from .providers import EdgeClient
 from .storage import Store
-from .util import app_dir, audit, exclusive_lock, now, sign
+from .util import app_dir, audit, digest, exclusive_lock, now, sign, uid
 
 
 def finish_response(repo, task, record):
@@ -59,6 +61,26 @@ def recover(store):
                 task = repo.get(job["payload"]["task_id"], "task")
                 finish_response(repo, task, {"status": "unknown"})
                 job.update(status="failed", error="工作进程中断；查询网关记录，不自动重发")
+            elif job["kind"] == "redteam":
+                task = repo.get(job["payload"]["task_id"], "task")
+                for protocol_id in job["payload"].get("protocol_ids", []):
+                    try:
+                        protocol = repo.get(protocol_id, "risk_protocol")
+                    except KeyError:
+                        continue
+                    run = AttackRun(
+                        id=uid("attack"), protocol_id=protocol_id,
+                        protocol_hash=protocol.get("content_hash") or protocol_content_hash(protocol),
+                        task_id=task["id"], task_version=job["payload"]["task_version"],
+                        attack_input_hash=job["payload"]["attack_input_hash"], outcome="error",
+                        evidence=["工作进程在红队运行期间中断"], started_at=job.get("started_at", now()),
+                        finished_at=now(),
+                    ).model_dump()
+                    run["result_hash"] = digest({key: value for key, value in run.items() if key != "result_hash"})
+                    repo.put("attack_run", run, task["id"])
+                task["redteam_status"] = "error"
+                repo.put("task", task, task["case_id"])
+                job.update(status="failed", error="红队作业在重启前中断；所有未完成协议记为 error")
             else:
                 job.update(status="failed", error="本地任务在重启前中断；请重新发起")
                 if job["kind"] == "parse":
@@ -69,7 +91,7 @@ def recover(store):
             audit(repo, job["case_id"], "job.interrupted", job_id=job["id"])
 
 
-def process_one(store, root, gateway_client=None):
+def process_one(store, root, gateway_client=None, redteam_client=None):
     with store.transaction() as repo:
         pending = [j for j in repo.list("job") if j["status"] == "pending"]
         if not pending:
@@ -99,6 +121,82 @@ def process_one(store, root, gateway_client=None):
                     raise ValueError("提取期间材料已变化，结果未写入")
                 for fact in facts:
                     service.save_fact(repo, case["id"], {"field": fact["field"], "value": fact["value"], "source_ids": fact["source_ids"], "confirmed": False, "model_suggestion": {"transform": fact["suggested_transform"], "reason": fact["disclosure_reason"]}}, origin="edge_model")
+        elif job["kind"] == "redteam":
+            with store.read() as repo:
+                task = repo.get(job["payload"]["task_id"], "task")
+                service.assert_current(repo, task)
+                if (task["version"] != job["payload"]["task_version"]
+                        or task.get("attack_input_hash") != job["payload"]["attack_input_hash"]):
+                    raise ValueError("红队运行期间任务输入已变化，结果未写入")
+                protocols = [repo.get(ident, "risk_protocol") for ident in job["payload"]["protocol_ids"]]
+                history = [
+                    item.get("request", {}).get("wire_payload")
+                    for item in repo.list("disclosure", task["case_id"])
+                    if item.get("request", {}).get("wire_payload")
+                ]
+            secret = os.getenv("LEX_REDTEAM_SECRET", "")
+            base = os.getenv("LEX_REDTEAM_URL", "http://redteam:8767")
+            client = redteam_client or httpx.Client(trust_env=False)
+            runs = []
+            try:
+                for protocol in protocols:
+                    started_at = now()
+                    view = {
+                        "protocol": protocol,
+                        "request": task["request"]["wire_payload"],
+                        "disclosed_history": history[-protocol["query_budget"]:] if protocol["query_budget"] else [],
+                        "auxiliary": (job["payload"]["auxiliary"].get(protocol["id"])
+                                      or job["payload"]["auxiliary"].get(protocol["kind"]) or []),
+                        "query_budget": max(1, protocol["query_budget"]),
+                    }
+                    try:
+                        if not secret:
+                            raise RuntimeError("redteam secret missing")
+                        response = client.post(
+                            base + "/evaluate",
+                            json={"view": view, "signature": sign(view, secret)},
+                            timeout=protocol["time_budget_seconds"],
+                        )
+                        response.raise_for_status()
+                        result = response.json()
+                        if (result.get("protocol") != protocol["kind"]
+                                or result.get("outcome") not in {"resisted", "succeeded", "uncertain", "error", "not_run"}):
+                            raise ValueError("红队返回契约无效")
+                        outcome = result["outcome"]
+                        score = result.get("score")
+                        evidence = [str(item)[:1000] for item in result.get("evidence", [])][:50]
+                        query_count = int(result.get("query_count", 0))
+                        duration_ms = int(result.get("duration_ms", 0))
+                    except Exception as error:
+                        outcome, score, query_count, duration_ms = "error", None, 0, 0
+                        evidence = [f"红队服务失败：{type(error).__name__}"]
+                    run = AttackRun(
+                        id=uid("attack"), protocol_id=protocol["id"],
+                        protocol_hash=protocol["content_hash"], task_id=task["id"],
+                        task_version=task["version"], attack_input_hash=task["attack_input_hash"],
+                        outcome=outcome, score=score, evidence=evidence,
+                        query_count=query_count, duration_ms=duration_ms,
+                        started_at=started_at, finished_at=now(),
+                    ).model_dump()
+                    run["result_hash"] = digest({key: value for key, value in run.items() if key != "result_hash"})
+                    runs.append(run)
+            finally:
+                if redteam_client is None:
+                    client.close()
+            with store.transaction() as repo:
+                current = repo.get(task["id"], "task")
+                service.assert_current(repo, current)
+                if (current["version"] != job["payload"]["task_version"]
+                        or current.get("attack_input_hash") != job["payload"]["attack_input_hash"]):
+                    raise ValueError("红队运行期间任务输入已变化，结果未写入")
+                for run in runs:
+                    repo.put("attack_run", run, task["id"])
+                    audit(repo, task["case_id"], "redteam.protocol.completed",
+                          task_id=task["id"], protocol_id=run["protocol_id"],
+                          outcome=run["outcome"], result_hash=run["result_hash"])
+                current["redteam_status"] = ("complete" if all(run["outcome"] in ("resisted", "succeeded") for run in runs)
+                                                else "incomplete")
+                repo.put("task", current, task["case_id"])
         elif job["kind"] in ("send", "reconcile"):
             with store.transaction() as repo:
                 task = repo.get(job["payload"]["task_id"], "task")

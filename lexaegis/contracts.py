@@ -209,9 +209,14 @@ class AttackRun(Contract):
     protocol_id: str
     protocol_hash: str
     task_id: str
+    task_version: int = Field(ge=1)
+    attack_input_hash: str
     outcome: Literal["resisted", "succeeded", "uncertain", "error", "not_run", "not_applicable"]
     score: float | None = None
     evidence: list[str] = Field(default_factory=list)
+    query_count: int = Field(default=0, ge=0)
+    duration_ms: int = Field(default=0, ge=0)
+    result_hash: str | None = None
     started_at: str
     finished_at: str | None = None
 

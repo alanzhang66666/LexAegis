@@ -37,6 +37,8 @@ services:
       LEX_DATA_DIR: /data
       LEX_GATEWAY_URL: http://gateway:8766
       LEX_GATEWAY_SECRET: ${LEX_GATEWAY_SECRET:?Set a signing secret}
+      LEX_REDTEAM_SECRET: ${LEX_REDTEAM_SECRET:?Set a separate red-team signing secret}
+      LEX_REDTEAM_URL: http://redteam:8767
       LEX_EDGE_URL: http://edge-model:8080/v1
       LEX_EDGE_MODEL: ${LEX_EDGE_MODEL:-}
       LEX_EDGE_ALLOWED_HOSTS: edge-model
@@ -45,7 +47,7 @@ services:
       LEX_RUNTIME_ROLE: worker
       PYTHONDONTWRITEBYTECODE: "1"
     volumes: ["app-data:/data"]
-    networks: [internal]
+    networks: [internal, redteam]
   gateway:
     <<: *runtime
     command: [python, -m, uvicorn, "lexaegis.gateway:create_gateway", --factory, --host, 0.0.0.0, --port, "8766", --no-access-log]
@@ -62,6 +64,10 @@ services:
     <<: *runtime
     profiles: [redteam]
     command: [python, -m, uvicorn, "lexaegis.redteam:app", --host, 0.0.0.0, --port, "8767", --no-access-log]
+    environment:
+      LEX_REDTEAM_SECRET: ${LEX_REDTEAM_SECRET:?Set a separate red-team signing secret}
+      LEX_RUNTIME_ROLE: redteam
+      PYTHONDONTWRITEBYTECODE: "1"
     networks: [redteam]
     # No volumes: neither raw documents nor truth labels can be read.
   benchmark:
