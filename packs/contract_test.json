@@ -1,0 +1,7 @@
+{
+  "schema_version":1,"id":"contract_test","name":"合同争议（扩展测试）","version":"0.0.1","status":"draft",
+  "task_ids":["fact_summary"],"fact_fields":["entity","relation","event","date","amount","evidence"],
+  "rules":[{"field":"event","necessity":"uncertain","transform":"delete","reason":"测试包：未审定，需人工复核。"}],
+  "references":["仅验证扩展接口，不可用于正式外发。"],"review_record":null,
+  "required_attacks":["identity","candidate_set","sensitive_inference","cross_round"]
+}

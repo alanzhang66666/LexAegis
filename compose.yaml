@@ -1,0 +1,71 @@
+name: lexaegis
+x-runtime: &runtime
+  build: .
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  tmpfs: [/tmp]
+  restart: unless-stopped
+services:
+  api:
+    <<: *runtime
+    ports: ["127.0.0.1:8765:8765"]
+    environment:
+      LEX_DATA_DIR: /data
+      LEX_LOCAL_PASSWORD: ${LEX_LOCAL_PASSWORD:?Set a local password}
+      LEX_GATEWAY_SECRET: ${LEX_GATEWAY_SECRET:?Set a signing secret}
+      LEX_GATEWAY_URL: http://gateway:8766
+      LEX_EDGE_URL: http://edge-model:8080/v1
+      LEX_EDGE_MODEL: ${LEX_EDGE_MODEL:-}
+      LEX_ISOLATED: "1"
+    volumes: ["app-data:/data"]
+    networks: [internal]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/api/v1/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+  worker:
+    <<: *runtime
+    command: [python, -m, lexaegis.worker]
+    depends_on:
+      api: {condition: service_healthy}
+    environment:
+      LEX_DATA_DIR: /data
+      LEX_GATEWAY_URL: http://gateway:8766
+      LEX_GATEWAY_SECRET: ${LEX_GATEWAY_SECRET:?Set a signing secret}
+    volumes: ["app-data:/data"]
+    networks: [internal]
+  gateway:
+    <<: *runtime
+    command: [python, -m, uvicorn, "lexaegis.gateway:create_gateway", --factory, --host, 0.0.0.0, --port, "8766", --no-access-log]
+    environment:
+      LEX_GATEWAY_DIR: /data
+      LEX_GATEWAY_SECRET: ${LEX_GATEWAY_SECRET:?Set a signing secret}
+      LEX_CLOUD_API_KEY: ${LEX_CLOUD_API_KEY:-}
+      LEX_CLOUD_ALLOWED_HOSTS: ${LEX_CLOUD_ALLOWED_HOSTS:-api.openai.com}
+    volumes: ["gateway-data:/data"]
+    networks: [internal, egress]
+  redteam:
+    <<: *runtime
+    profiles: [redteam]
+    command: [python, -m, uvicorn, "lexaegis.redteam:app", --host, 0.0.0.0, --port, "8767", --no-access-log]
+    networks: [redteam]
+    # No volumes: neither raw documents nor truth labels can be read.
+  edge-model:
+    image: ${LEX_EDGE_IMAGE:-ghcr.io/ggml-org/llama.cpp:server}
+    profiles: [edge]
+    command: [--model, /models/edge.gguf, --host, 0.0.0.0, --port, "8080", --alias, edge-small]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    volumes: ["./models:/models:ro"]
+    networks: [internal]
+networks:
+  internal: {internal: true}
+  redteam: {internal: true}
+  egress: {}
+volumes:
+  app-data: {}
+  gateway-data: {}

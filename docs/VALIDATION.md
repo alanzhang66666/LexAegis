@@ -1,0 +1,60 @@
+# 首版验证记录
+
+验证日期：2026-09-04。实际开发设备为 macOS / Apple Silicon；Python 3.12.14、Node.js 24.19.0。此文件只记录实际运行证据，不填充隐私风险降低率或摘要准确率等效果数字。
+
+## 已实现并验证
+
+| 验证 | 结果 |
+| --- | --- |
+| `python -m pytest -q` | 25 项通过 |
+| TypeScript 类型检查与 Vite 生产构建 | 通过 |
+| Chrome Playwright 浏览器验收 | 4 条流程通过 |
+| 桌面、390px 移动端布局 | 截图检查；移动配置页无横向溢出 |
+| DOCX 段落/表格、文本与混合 PDF、扫描页检测 | 解析和来源定位测试通过 |
+| 无 OCR 环境下保留扫描页及复核状态 | 通过 |
+| 材料校正和历史版本回链、重启恢复 | 通过 |
+| 审批失效、未审批阻断、并发重复提交 | 通过 |
+| 网关签名、请求摘要、重复请求去重 | 通过 |
+| 超时和崩溃结果不明、只查询不重发 | 通过 |
+| 累计披露使另一任务旧审批失效 | 通过 |
+| 案件假名隔离、演示模式禁止用户材料 | 通过 |
+| 无依据数字/引用阻断自动确认 | 通过 |
+| 备份、恢复、材料与审批/发送记录关联 | 通过 |
+| 新案由包导入、版本不可覆盖 | 通过 |
+| 红队真值字段拒绝、占位结果不计通过 | 通过 |
+
+浏览器流程：固定合成案例完成披露、审批、模拟发送、逐项原文校核和最终确认；组合线索场景阻断；正式 DOCX 上传和人工事实管理后阻断正式外发；运行配置与移动端布局检查。
+
+截图保存在本机 `.data/acceptance-dashboard.png`、`.data/acceptance-result.png` 和 `.data/acceptance-mobile.png`，不提交运行数据目录。验收测试使用自带合成材料，没有真实案件材料。
+
+## 已实现，等待配置或目标环境验证
+
+- 边侧 OpenAI-compatible 提取接口及 JSON / 引用校验：没有可调用的本地小模型，未做真实推理验证。
+- 云端网关和 OpenAI-compatible 适配器：使用测试替身验证控制路径，未提供 API 密钥，未实际调用云端模型。
+- PaddleOCR 3.x 适配器：没有安装引擎或模型权重；未验证真实 OCR 推理、识别精度或硬件兼容性。
+- Dockerfile、Compose 内外网隔离及验收脚本：当前未安装 Docker，未运行容器构建或真实网络隔离验收。
+
+## 明确占位
+
+正式法律规则、四类再识别攻击策略、独立盲测评估、完整语义事实核验、多用户、时间线、证据目录和争点提取。正式案件的真实外发没有通过配置解锁的通道。
+
+## 复现浏览器验收
+
+先构建前端，然后启动单独的验收数据目录，避免混入使用者案件。下面的口令只用于本机合成验收：
+
+```bash
+LEX_DATA_DIR=.data/acceptance-app \
+LEX_GATEWAY_DIR=.data/acceptance-gateway \
+LEX_LOCAL_PASSWORD=local-acceptance-only \
+LEX_GATEWAY_SECRET=local-acceptance-gateway-secret \
+python scripts/dev.py
+```
+
+另开终端：
+
+```bash
+cd frontend
+pnpm exec playwright test
+```
+
+默认使用已安装的 Chrome。没有 Chrome 时先安装浏览器，或将 Playwright 配置改成已安装的 Chromium。浏览器验收不会访问云端模型。

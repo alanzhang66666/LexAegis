@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "id": "labor",
+  "name": "劳动争议",
+  "version": "0.1.0-demo",
+  "status": "demo",
+  "task_ids": ["fact_summary"],
+  "fact_fields": ["entity", "relation", "event", "date", "amount", "evidence"],
+  "rules": [
+    {"field":"entity","necessity":"conditional","transform":"pseudonymize","reason":"演示：保留主体关系，替换直接身份。"},
+    {"field":"relation","necessity":"required","transform":"pseudonymize","reason":"演示：保留主体关系并替换真实身份。"},
+    {"field":"event","necessity":"conditional","transform":"pseudonymize","reason":"演示：保留事件并替换已登记主体。"},
+    {"field":"date","necessity":"conditional","transform":"generalize","reason":"演示：按月泛化；精度损失需要律师复核。"},
+    {"field":"amount","necessity":"conditional","transform":"keep","reason":"演示：事实摘要中的金额需逐项核实。"},
+    {"field":"evidence","necessity":"conditional","transform":"pseudonymize","reason":"演示：保留证据归属并替换已登记主体。"}
+  ],
+  "references": ["纯合成演示规则，不是经过审核的法律意见或正式规则资产。"],
+  "review_record": null,
+  "required_attacks": ["identity", "candidate_set", "sensitive_inference", "cross_round"]
+}
