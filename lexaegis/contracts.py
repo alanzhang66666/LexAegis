@@ -279,8 +279,13 @@ class PrivacyTransformRun(Contract):
     id: str
     algorithm: Literal["gaussian_dp", "saliency_mask", "jl", "pca", "random_projection"]
     input_hash: str
+    input_model_hash: str | None = None
     parameters: dict[str, Any]
     output_hash: str
+    matrix_hash: str | None = None
+    provenance: Literal["numeric_input", "heuristic", "experimental_model"]
+    budget: dict[str, Any] = Field(default_factory=dict)
+    metrics: dict[str, Any] = Field(default_factory=dict)
     environment: dict[str, str]
     created_at: str
 

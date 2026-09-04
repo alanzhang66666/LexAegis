@@ -37,4 +37,18 @@ LEX_REDTEAM_SECRET=replace-with-a-separate-random-secret docker compose --profil
 
 确定性检测首先记录假名化披露文本中的坐标，再依据事实的全部 `source_ids` 查找原文精确跨度，产出 `source_spans`。无法映射到原文的命中保留为 `warning`，不会自动篡改材料。未配置完整风险权重时，各分项仍可用于观察，但权重为零且正式流程增加硬阻断。
 
+## Ianvs 隔离实验
+
+`lexaegis bench --profile ianvs-pipl` 在没有输入时只报告 `input_required`，不会从文本哈希构造伪向量。完整运行需通过 `--input` 指定 JSON，其中 `vectors` 是真实实验向量，`input_model_hash` 是产生向量的模型或生成器哈希；可选的 `target_outputs` 必须声明 `source: real_target_model` 和模型哈希。
+
+```bash
+lexaegis bench --profile ianvs-pipl \
+  --input experiment-input.json \
+  --output experiment-report.json \
+  --seed 23 --target-dim 2 \
+  --max-norm 1 --noise-multiplier 1 --delta 0.00001
+```
+
+报告包含 Gaussian DP 的 L2 clipping 和可组合 RDP 预算、JL/PCA/稀疏随机投影的冻结矩阵哈希与距离失真，以及显著性掩码的 `heuristic` 或 `experimental_model` 来源。LOSS、Neighbourhood MIA、LiRA 和反演相似度只消费显式真实输出；缺失时为 `not_applicable`，常量分数为 `uncertain`。输出路径使用排他创建，既有报告不会被覆盖。该 CLI 不被生产 API、worker 或 dispatch 导入。
+
 真实边侧模型、PaddleOCR 权重、真实云服务商、容器网络以及 100 份半合成盲测仍需在授权环境执行。代码不得用模拟 loss、文本哈希伪向量、常量指标或空实现伪造验收。

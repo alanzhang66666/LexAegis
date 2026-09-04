@@ -100,7 +100,16 @@ def main():
     commands.add_parser("_record-isolation", help=argparse.SUPPRESS)
     p = commands.add_parser("bench", help="运行隔离实验能力检查")
     p.add_argument("--profile", choices=["ianvs-pipl"], required=True)
+    p.add_argument("--input", type=Path, help="显式实验向量、显著性和真实模型输出 JSON")
+    p.add_argument("--output", type=Path, help="离线 JSON 报告；拒绝覆盖现有文件")
     p.add_argument("--real-target-outputs", type=Path)
+    p.add_argument("--seed", type=int, default=23)
+    p.add_argument("--target-dim", type=int, default=2)
+    p.add_argument("--max-norm", type=float, default=1.0)
+    p.add_argument("--noise-multiplier", type=float, default=1.0)
+    p.add_argument("--delta", type=float, default=1e-5)
+    p.add_argument("--mask-fraction", type=float, default=.25)
+    p.add_argument("--epsilon-budget", type=float)
     args = parser.parse_args()
     if args.command == "import-pack":
         store = Store(app_dir()/"app.sqlite")
@@ -144,13 +153,31 @@ def main():
             audit(repo, "", "isolation.verified", checks=report["checks"])
         print("Isolation attestation recorded in the API data store.")
     elif args.command == "bench":
-        from .experiments import mia_requires_real_outputs
-        outputs = None
+        from .experiments import run_ianvs_profile
+        payload = None
+        if args.input:
+            if args.input.stat().st_size > 100 * 1024 * 1024:
+                raise ValueError("实验输入超过 100MB")
+            payload = json.loads(args.input.read_text(encoding="utf-8"))
         if args.real_target_outputs:
-            outputs = json.loads(args.real_target_outputs.read_text(encoding="utf-8"))
-        result = {"profile": args.profile, "production_dispatch": False, "mia": mia_requires_real_outputs(outputs),
-                  "detail": "实验环境不得挂载正式案件、mapping、网关密钥或真值目录。"}
+            if args.real_target_outputs.stat().st_size > 100 * 1024 * 1024:
+                raise ValueError("目标模型输出超过 100MB")
+            payload = dict(payload or {})
+            payload["target_outputs"] = json.loads(args.real_target_outputs.read_text(encoding="utf-8"))
+        result = run_ianvs_profile(
+            payload, seed=args.seed, target_dim=args.target_dim, max_norm=args.max_norm,
+            noise_multiplier=args.noise_multiplier, delta=args.delta,
+            mask_fraction=args.mask_fraction, epsilon_budget=args.epsilon_budget,
+        )
+        if args.output:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            with args.output.open("x", encoding="utf-8") as stream:
+                json.dump(result, stream, ensure_ascii=False, indent=2)
+                stream.write("\n")
+            restrict_mode(args.output, 0o600)
         print(json.dumps(result, ensure_ascii=False, indent=2))
+        if any(item.get("budget", {}).get("status") == "exceeded" for item in result.get("transforms", [])):
+            raise SystemExit(3)
 
 
 if __name__ == "__main__":
