@@ -10,6 +10,7 @@ build/
 *.egg-info/
 test-results/
 playwright-report/
+.artifacts/
 *.tsbuildinfo
 models/
 .pnpm-store/

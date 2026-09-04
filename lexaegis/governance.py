@@ -9,6 +9,14 @@ from .util import digest, now, uid
 REQUIRED_ATTACKS = ("identity", "candidate_set", "sensitive_inference", "cross_round")
 
 
+def pack_content_hash(pack: dict) -> str:
+    """Hash immutable published content while allowing the lifecycle status to retire."""
+    return digest({
+        key: value for key, value in pack.items()
+        if key not in {"content_hash", "status"}
+    })
+
+
 def provider_checks(profile: dict | None, *, domain: str, task_type: str, fields: set[str]) -> list[dict]:
     checks = []
 
@@ -81,7 +89,8 @@ def frozen_protocol_runs(repo, task_id: str, attack_input_hash: str, pack: dict)
 
 def validate_formal_gate(pack: dict, provider_results: list[dict], attacks: list[dict], isolation_verified: bool) -> list[str]:
     blockers = []
-    if pack.get("schema_version") != 2 or pack.get("status") != "published" or not pack.get("content_hash"):
+    if (pack.get("schema_version") != 2 or pack.get("status") != "published"
+            or not pack.get("content_hash") or pack.get("content_hash") != pack_content_hash(pack)):
         blockers.append("适用规则尚未正式发布")
         blockers.append("适用的 V2 法学规则包尚未冻结并正式发布")
     if any(check["status"] != "pass" for check in provider_results):
@@ -103,7 +112,11 @@ def publish_pack_record(pack: dict, actor: str) -> dict:
             or not pack.get("published_scope") or len(pack.get("risk_weights", {})) != 5):
         raise ValueError("发布前必须冻结法学状态、适用范围、外发许可和五类风险权重")
     frozen = dict(pack)
-    frozen.update(status="published", reviewed_at=pack.get("reviewed_at") or now(), frozen_at=now())
-    frozen["content_hash"] = digest({key: value for key, value in frozen.items() if key != "content_hash"})
-    frozen["published_by"] = actor
+    frozen.update(
+        status="published",
+        reviewed_at=pack.get("reviewed_at") or now(),
+        frozen_at=now(),
+        published_by=actor,
+    )
+    frozen["content_hash"] = pack_content_hash(frozen)
     return frozen

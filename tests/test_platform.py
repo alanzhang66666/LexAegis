@@ -2,8 +2,10 @@ import multiprocessing
 import os
 from pathlib import Path
 
+import pytest
+
 from lexaegis.storage import Store
-from lexaegis.util import exclusive_lock
+from lexaegis.util import assert_local_filesystem, exclusive_lock
 
 
 def _try_lock(path: str, queue) -> None:
@@ -47,3 +49,8 @@ def test_platform_constraint_excludes_windows_uvloop():
     assert not any(line.startswith("uvloop") for line in windows_requirements)
     for name in ("macos.txt", "linux.txt"):
         assert "uvloop==" in (constraints / name).read_text(encoding="utf-8")
+
+
+def test_network_share_sqlite_path_is_rejected():
+    with pytest.raises(ValueError, match="网络文件系统"):
+        assert_local_filesystem(Path("//example.invalid/shared/case.sqlite"))

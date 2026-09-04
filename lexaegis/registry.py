@@ -114,8 +114,8 @@ def _walk_keys(value):
 
 def import_pack(repo, raw):
     pack = validate_pack(raw)
-    if getattr(pack, "status", None) == "published" and (not pack.review_record or not getattr(pack, "content_hash", None)):
-        raise ValueError("正式规则包必须具有审核记录和冻结内容哈希")
+    if getattr(pack, "status", None) == "published":
+        raise ValueError("不得直接导入已发布状态；V2 包必须经过本实例的审核与发布生命周期")
     record = {"id": f"pack:{pack.id}:{pack.version}", **pack.model_dump()}
     record["domain_id"] = pack.id
     record["id"] = f"pack:{pack.id}:{pack.version}"

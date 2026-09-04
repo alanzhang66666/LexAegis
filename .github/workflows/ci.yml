@@ -34,6 +34,8 @@ jobs:
         working-directory: frontend
       - run: pnpm build
         working-directory: frontend
+      - run: python -m pip wheel --no-deps --no-build-isolation --wheel-dir .artifacts/wheel .
+      - run: python scripts/verify_wheel.py .artifacts/wheel
       - run: pnpm exec playwright install ${{ matrix.playwright_args }}
         working-directory: frontend
       - run: pnpm test:e2e -- --project=desktop-1280 --grep-invert "five-viewport"

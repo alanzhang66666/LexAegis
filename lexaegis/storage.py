@@ -10,7 +10,7 @@ from sqlalchemy import create_engine, text
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 import sqlalchemy as sa
-from .util import restrict_mode
+from .util import assert_local_filesystem, restrict_mode
 
 
 CURRENT_REVISION = "0002_v2_contracts"
@@ -47,6 +47,7 @@ def _backup_before_migration(path: Path) -> Path:
 
 class Store:
     def __init__(self, path: Path):
+        assert_local_filesystem(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         self.path = path
         url = "sqlite:///" + Path(path).resolve().as_posix()

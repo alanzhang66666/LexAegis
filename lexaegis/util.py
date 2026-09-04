@@ -2,6 +2,9 @@ import hashlib
 import hmac
 import json
 import os
+import platform
+import re
+import subprocess
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -30,6 +33,45 @@ def sign(value, secret):
 
 def app_dir():
     return Path(os.getenv("LEX_DATA_DIR", ".data/app")).resolve()
+
+
+def assert_local_filesystem(path) -> None:
+    """Reject storage paths known to be on remote/network filesystems."""
+    raw = str(path)
+    if raw.startswith(("//", "\\\\")):
+        raise ValueError("SQLite 数据目录不能位于网络文件系统")
+    resolved = Path(path).resolve()
+    system = platform.system()
+    if system == "Windows":
+        import ctypes
+        drive = resolved.drive + "\\" if resolved.drive else ""
+        if drive and ctypes.windll.kernel32.GetDriveTypeW(drive) == 4:
+            raise ValueError("SQLite 数据目录不能位于映射网络驱动器")
+        return
+    mounts = []
+    try:
+        if system == "Linux":
+            lines = Path("/proc/mounts").read_text(encoding="utf-8").splitlines()
+            for line in lines:
+                parts = line.split()
+                if len(parts) >= 3:
+                    mounts.append((parts[1].replace("\\040", " "), parts[2]))
+        elif system == "Darwin":
+            output = subprocess.run(["mount"], capture_output=True, text=True, timeout=2, check=True).stdout
+            for line in output.splitlines():
+                match = re.search(r" on (.+) \(([^,]+)", line)
+                if match:
+                    mounts.append((match.group(1), match.group(2)))
+    except (OSError, subprocess.SubprocessError):
+        return
+    network_types = {"nfs", "nfs4", "cifs", "smbfs", "sshfs", "fuse.sshfs", "9p"}
+    candidates = [
+        (Path(mount).resolve(), filesystem)
+        for mount, filesystem in mounts
+        if filesystem.lower() in network_types
+    ]
+    if any(resolved == mount or mount in resolved.parents for mount, _ in candidates):
+        raise ValueError("SQLite 数据目录不能位于网络文件系统")
 
 
 def restrict_mode(path, mode=0o600):

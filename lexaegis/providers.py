@@ -8,9 +8,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class ProposedFact(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    field: str
+    field: Literal["entity", "relation", "event", "date", "amount", "evidence"]
     value: str = Field(max_length=10000)
-    source_ids: list[str]
+    source_ids: list[str] = Field(min_length=1, max_length=100)
     suggested_transform: Literal["keep", "pseudonymize", "generalize", "delete"] = "pseudonymize"
     disclosure_reason: str = "待人工确认"
 
@@ -42,9 +42,13 @@ class EdgeClient:
             response = client.post(self.url + "/chat/completions", json={"model": self.model, "messages": [{"role": "system", "content": prompt}, {"role": "user", "content": json.dumps(blocks, ensure_ascii=False)}], "temperature": 0, "response_format": {"type": "json_object"}})
             response.raise_for_status()
         raw = json.loads(response.json()["choices"][0]["message"]["content"])
+        if not isinstance(raw, dict) or not isinstance(raw.get("facts"), list):
+            raise ValueError("边侧模型返回必须是包含 facts 数组的 JSON 对象")
+        if len(raw["facts"]) > 500:
+            raise ValueError("边侧模型返回事实条数超过 500")
         facts = [ProposedFact.model_validate(f).model_dump() for f in raw["facts"]]
         valid_ids = {b["id"] for b in blocks}
-        if len(facts) > 500 or any(not f["source_ids"] or not set(f["source_ids"]) <= valid_ids for f in facts):
+        if any(not set(f["source_ids"]) <= valid_ids for f in facts):
             raise ValueError("模型返回无效来源引用")
         return facts
 
