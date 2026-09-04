@@ -9,7 +9,7 @@ from lexaegis.dataset import build_semisynthetic_manifest, validate_annotations
 from lexaegis.experiments import gaussian_dp, l2_clip, mia_requires_real_outputs, random_projection, rdp_gaussian, rdp_to_epsilon
 from lexaegis.registry import run_pack_regressions, validate_pack
 from lexaegis import task_engine
-from lexaegis.policy import check_claims
+from lexaegis.policy import check_claims, ensure_mappings
 from lexaegis.util import digest
 from .test_workflow import formal_material
 
@@ -114,6 +114,23 @@ def test_claim_validator_flags_unknown_direct_identifier():
     facts=[{"id":"f1","source_ids":["b1"]}]
     claims=check_claims({"claims":[{"text":"[[LEX:P0001]]电话13800138000，主张工资12000元","source_ids":["f1"]}]},task,facts)
     assert "陈述包含未在引用事实中出现的直接标识" in claims[0]["issues"]
+
+
+def test_mapping_conflict_and_unknown_or_broken_tokens_are_explicit():
+    case = {"mapping_entries": [
+        {"entity_id": "entity_0001", "wire_token": "[[LEX:P0001]]", "original_value": "合成人物甲"},
+        {"entity_id": "entity_0002", "wire_token": "[[LEX:P0001]]", "original_value": "合成人物乙"},
+    ]}
+    with pytest.raises(ValueError, match="冲突"):
+        ensure_mappings(case, [])
+    task = {"decisions": [{"fact_id": "f1", "output": "[[LEX:P0001]]主张工资12000元"}]}
+    facts = [{"id": "f1", "source_ids": ["b1"]}]
+    claims = check_claims({"claims": [
+        {"text": "[[LEX:P9999]]主张工资12000元", "source_ids": ["f1"]},
+        {"text": "[[LEX:P0001]主张工资12000元", "source_ids": ["f1"]},
+    ]}, task, facts)
+    assert any("未知" in issue for issue in claims[0]["issues"])
+    assert any("破损" in issue for issue in claims[1]["issues"])
 
 
 def test_dp_budget_projection_and_real_mia_inputs():

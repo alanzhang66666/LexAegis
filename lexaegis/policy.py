@@ -28,6 +28,13 @@ def transform(value, method, mappings):
 
 def ensure_mappings(case, facts):
     entries = case.setdefault("mapping_entries", [])
+    tokens = [entry.get("wire_token") for entry in entries]
+    originals = [entry.get("original_value") for entry in entries]
+    entity_ids = [entry.get("entity_id") for entry in entries]
+    if (len(tokens) != len(set(tokens)) or len(originals) != len(set(originals))
+            or len(entity_ids) != len(set(entity_ids))
+            or any(not isinstance(token, str) or TOKEN.fullmatch(token) is None for token in tokens)):
+        raise ValueError("本地身份映射存在 token、主体或原值冲突；禁止继续生成披露内容")
     by_original = {entry["original_value"]: entry for entry in entries}
     mapping_version = int(case.get("mapping_version", 1))
     for fact in facts:

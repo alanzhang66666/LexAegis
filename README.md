@@ -142,6 +142,6 @@ pnpm build
 pnpm exec playwright test
 ```
 
-当前验证为 **35 项后端测试通过且无弃用警告**，前端类型检查和生产构建通过，wheel 已核验包含前端、V2 包和 NOTICE。0.2 浏览器五视口矩阵与容器隔离仍待 CI/目标环境运行；详见 [验证报告](docs/VALIDATION.md)。
+当前本机验证为 **75 项后端测试通过**，前端类型检查和生产构建通过，桌面完整流程及 1440/1280/900/650/390 五视口浏览器检查通过，wheel 已核验包含前端、V2 包和 NOTICE。容器隔离与三平台远端矩阵仍待相应运行环境取证；详见 [计划实现状态](docs/PLAN_STATUS.md) 与 [验证报告](docs/VALIDATION.md)。
 
 本项目不集成 DataInfra 代码；Ianvs 仅按固定来源选择性改写算法思想与结构，并保留修改说明。没有附带模型权重、真实案例或评测效果数字。依赖及来源说明见 [来源与许可](docs/PROVENANCE.md)、[第三方台账](docs/THIRD_PARTY.md) 与 [界面设计基线](docs/DESIGN.md)。
