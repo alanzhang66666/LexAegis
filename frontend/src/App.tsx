@@ -7,17 +7,12 @@ import {
   ArrowUpRight,
   ArrowRight,
   Plus,
-  FileText,
-  Upload,
   Check,
   LockKeyhole,
   ChevronRight,
-  Download,
   X,
   Search,
   Clock3,
-  ExternalLink,
-  Link2,
   Loader2,
   LogOut,
   PanelLeftClose,
@@ -30,6 +25,10 @@ import { Dialog, Empty, StageStepper, Tag } from "./components/ui";
 import { BenchmarkCenter, LegalPackCenter, ProviderCenter, UserCenter } from "./pages/GovernanceCenters";
 import { RiskWorkspace } from "./workspaces/RiskWorkspace";
 import { RestorationWorkspace } from "./workspaces/RestorationWorkspace";
+import { SourceViewer } from "./workspaces/SourceViewer";
+import { FactWorkspace } from "./workspaces/FactWorkspace";
+import { DisclosureWorkspace } from "./workspaces/DisclosureWorkspace";
+import { ContextRail } from "./workspaces/ContextRail";
 
 type Obj = Record<string, any>;
 const labels: Record<string, string> = {
@@ -675,153 +674,18 @@ export default function App() {
               </div>
             )}
             <div className={`three-panel pane-${pane} ${contextOpen?"context-open":""}`}>
-              <section className="source-panel">
-                <div className="panel-heading">
-                  <h3>
-                    <FileText size={16} />
-                    原始材料
-                  </h3>
-                  <Tag>仅边侧</Tag>
-                </div>
-                <div className="document-list">
-                  {data.documents.map((d: Obj) => (
-                    <button
-                      key={d.id}
-                      onClick={() => setSource(d.ir?.blocks[0] || null)}
-                    >
-                      <FileText size={15} />
-                      <span>
-                        {d.name}
-                        <small>
-                          v{d.version} ·{" "}
-                          {d.status === "ready" ? "已解析" : txt(d.status)}
-                        </small>
-                        {d.error && (
-                          <small className="danger-text">{d.error}</small>
-                        )}
-                      </span>
-                      {d.path !== null && d.extension !== "demo" && (
-                        <a
-                          href={`/api/v1/cases/${caseId}/documents/${d.id}/file`}
-                          onClick={(e) => e.stopPropagation()}
-                          title="下载原件"
-                        >
-                          <Download size={14} />
-                        </a>
-                      )}
-                    </button>
-                  ))}
-                </div>
-                {currentCase.mode === "formal" && (
-                  <label className="upload">
-                    <Upload size={17} />
-                    <span>
-                      上传 DOCX / PDF<small>支持扫描页检测 · 最大 20 MB</small>
-                    </span>
-                    <input
-                      type="file"
-                      accept=".docx,.pdf"
-                      disabled={busy}
-                      onChange={(e) => {
-                        const f = e.target.files?.[0];
-                        if (f) {
-                          const body = new FormData();
-                          body.append("file", f);
-                          run(
-                            () =>
-                              api(
-                                "/cases/" + caseId + "/documents",
-                                "POST",
-                                body,
-                              ),
-                            "已进入本地解析队列。",
-                          );
-                          e.target.value = "";
-                        }
-                      }}
-                    />
-                  </label>
-                )}
-                {activeSource ? (
-                  <>
-                    <div className="source-label">
-                      <span>
-                        {activeSource.locator} · v
-                        {activeSource.document_version}
-                      </span>
-                      {activeSource.confidence !== null &&
-                        activeSource.confidence !== undefined && (
-                          <Tag tone="amber">
-                            OCR {Math.round(activeSource.confidence * 100)}%
-                          </Tag>
-                        )}
-                    </div>
-                    {activeSource.page && (
-                      <div className="page-preview">
-                        <img
-                          alt={`原文第 ${activeSource.page} 页`}
-                          src={`/api/v1/cases/${caseId}/documents/${activeSource.document_id}/page/${activeSource.page}`}
-                        />
-                        {activeSource.bbox && (
-                          <div
-                            className="bbox"
-                            style={{
-                              left: activeSource.bbox[0] * 100 + "%",
-                              top: activeSource.bbox[1] * 100 + "%",
-                              width:
-                                (activeSource.bbox[2] - activeSource.bbox[0]) *
-                                  100 +
-                                "%",
-                              height:
-                                (activeSource.bbox[3] - activeSource.bbox[1]) *
-                                  100 +
-                                "%",
-                            }}
-                          />
-                        )}
-                      </div>
-                    )}
-                    <div className="source-text">
-                      {activeSource.text ||
-                        "未识别文本。请配置 OCR 或查看原图后人工转录。"}
-                    </div>
-                    <div className="source-actions">
-                      {currentCase.mode === "formal" && (
-                        <button
-                          className="text-button"
-                          onClick={() => {
-                            setForm({
-                              text: activeSource.text,
-                              block_id: activeSource.id,
-                              document_id: activeSource.document_id,
-                            });
-                            setModal("correction");
-                          }}
-                        >
-                          校正并生成新版本
-                        </button>
-                      )}
-                    </div>
-                    <div className="anchor-list">
-                      {blocks.map((b: Obj, i: number) => (
-                        <button
-                          className={activeSource.id === b.id ? "selected" : ""}
-                          key={b.id}
-                          onClick={() => setSource(b)}
-                        >
-                          <span>{String(i + 1).padStart(2, "0")}</span>
-                          <span>{b.text.slice(0, 35) || b.locator}</span>
-                        </button>
-                      ))}
-                    </div>
-                  </>
-                ) : (
-                  <Empty
-                    title="尚无材料"
-                    detail="上传材料后在此查看原文与来源位置。"
-                  />
-                )}
-              </section>
+              <SourceViewer data={data} currentCase={currentCase} caseId={caseId} busy={busy}
+                activeSource={activeSource} blocks={blocks} onSelect={setSource}
+                onUpload={(file) => {
+                  const body = new FormData();
+                  body.append("file", file);
+                  run(() => api("/cases/" + caseId + "/documents", "POST", body),
+                    "已进入本地解析队列。");
+                }}
+                onCorrect={(selected) => {
+                  setForm({ text: selected.text, block_id: selected.id, document_id: selected.document_id });
+                  setModal("correction");
+                }}/>
 
               <section className="work-panel">
                 <div className="panel-heading">
@@ -848,111 +712,14 @@ export default function App() {
                     </Tag>
                   )}
                 </div>
-                {tab === "facts" && (
-                  <>
-                    <div className="toolbar">
-                      <p>{data.facts.length} 项事实 · 来源可追溯</p>
-                      {currentCase.mode === "formal" && (
-                        <div>
-                          <button
-                            className="secondary compact"
-                            disabled={busy}
-                            onClick={() =>
-                              run(
-                                () =>
-                                  api("/cases/" + caseId + "/extract", "POST"),
-                                "已进入边侧模型提取队列。",
-                              )
-                            }
-                          >
-                            边侧提取
-                          </button>
-                          <button
-                            className="primary compact"
-                            onClick={() => openFact()}
-                          >
-                            <Plus size={14} />
-                            添加事实
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                    {data.facts.length ? (
-                      data.facts.map((f: Obj, i: number) => (
-                        <article className="fact-card" key={f.id}>
-                          <div className="fact-meta">
-                            <span className="fact-no">
-                              F{String(i + 1).padStart(2, "0")}
-                            </span>
-                            <Tag>{txt(f.field)}</Tag>
-                            <span
-                              className={
-                                "fact-state " + (f.stale ? "danger-text" : "")
-                              }
-                            >
-                              {f.stale
-                                ? "来源已更新"
-                                : f.confirmed
-                                  ? "已确认"
-                                  : "待人工确认"}
-                            </span>
-                          </div>
-                          <p>{f.value}</p>
-                          <div className="fact-footer">
-                            <button onClick={() => locate(f.source_ids)}>
-                              <Link2 size={13} />
-                              查看原文依据
-                            </button>
-                            <span>
-                              {f.origin === "edge_model"
-                                ? "边侧模型提取"
-                                : f.origin === "synthetic"
-                                  ? "合成标注"
-                                  : "人工录入"}
-                            </span>
-                            {currentCase.mode === "formal" && (
-                              <>
-                                <button onClick={() => openFact(f)}>
-                                  编辑
-                                </button>
-                                <button
-                                  className="danger-text"
-                                  onClick={() => {
-                                    setForm(f);
-                                    setModal("deleteFact");
-                                  }}
-                                >
-                                  删除
-                                </button>
-                              </>
-                            )}
-                          </div>
-                        </article>
-                      ))
-                    ) : (
-                      <Empty
-                        title="将材料整理为可核实事实"
-                        detail="使用边侧模型提取，或选择原文片段后人工添加。"
-                      />
-                    )}
-                    <div className="bottom-action">
-                      {currentCase.mode === "formal" && (
-                        <button className="secondary" disabled={busy || !data.facts.length} onClick={() => startTask("local", "timeline")}>本地生成时间线</button>
-                      )}
-                      <button
-                        className="primary"
-                        disabled={busy || !data.facts.length}
-                        onClick={() =>
-                          startTask(
-                            currentCase.mode === "demo" ? "mock" : "cloud",
-                          )
-                        }
-                      >
-                        生成披露方案 <ArrowRight size={15} />
-                      </button>
-                    </div>
-                  </>
-                )}
+                {tab === "facts" && <FactWorkspace facts={data.facts} currentCase={currentCase}
+                  busy={busy} label={txt}
+                  onExtract={() => run(() => api("/cases/" + caseId + "/extract", "POST"),
+                    "已进入边侧模型提取队列。")}
+                  onOpen={openFact} onLocate={locate}
+                  onDelete={(fact) => { setForm(fact); setModal("deleteFact"); }}
+                  onTimeline={() => startTask("local", "timeline")}
+                  onSummary={() => startTask(currentCase.mode === "demo" ? "mock" : "cloud")}/>}
 
                 {tab !== "facts" && !task && (
                   <Empty
@@ -992,133 +759,14 @@ export default function App() {
                         材料或配置已变化，请新建任务。历史记录仍保留。
                       </div>
                     )}
-                    {tab === "disclosure" && (
-                      <>
-                        <div className="context-note">
-                          <LockKeyhole size={14} />
-                          仅下方披露内容会进入请求；原文和身份映射保留在边侧。
-                        </div>
-                        {task.decisions.map((d: Obj, i: number) => (
-                          <article className="decision-card" key={d.fact_id}>
-                            <div className="fact-meta">
-                              <span className="fact-no">
-                                F{String(i + 1).padStart(2, "0")}
-                              </span>
-                              <Tag>{txt(d.field)}</Tag>
-                              <select
-                                aria-label={`字段 ${i + 1} 必要性`}
-                                disabled={
-                                  busy ||
-                                  task.stale ||
-                                  [
-                                    "complete",
-                                    "unknown",
-                                    "stopped",
-                                    "queued",
-                                    "sending",
-                                    "failed",
-                                  ].includes(task.status)
-                                }
-                                value={d.necessity}
-                                onChange={(e) =>
-                                  editDecision(d, { necessity: e.target.value })
-                                }
-                              >
-                                {[
-                                  "required",
-                                  "conditional",
-                                  "unnecessary",
-                                  "uncertain",
-                                ].map((v) => (
-                                  <option key={v} value={v}>
-                                    {txt(v)}
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-                            <div className="transform-options">
-                              {[
-                                "keep",
-                                "pseudonymize",
-                                "generalize",
-                                "delete",
-                              ].map((v) => (
-                                <button
-                                  disabled={
-                                    busy ||
-                                    task.stale ||
-                                    [
-                                      "complete",
-                                      "unknown",
-                                      "stopped",
-                                      "queued",
-                                      "sending",
-                                      "failed",
-                                    ].includes(task.status)
-                                  }
-                                  className={d.transform === v ? "active" : ""}
-                                  key={v}
-                                  onClick={() =>
-                                    editDecision(d, { transform: v })
-                                  }
-                                >
-                                  {txt(v)}
-                                </button>
-                              ))}
-                            </div>
-                            <div
-                              className={
-                                "disclosed-text " + (!d.output ? "deleted" : "")
-                              }
-                            >
-                              {d.output || "此项已删除，不进入外发内容。"}
-                            </div>
-                            <small className="reason">{d.reason}</small>
-                            <div className="fact-footer">
-                              <button
-                                onClick={() =>
-                                  locate(
-                                    task.fact_snapshot.find(
-                                      (f: Obj) => f.id === d.fact_id,
-                                    )?.source_ids || [],
-                                  )
-                                }
-                              >
-                                <Link2 size={13} />
-                                查看依据
-                              </button>
-                              {currentCase.mode === "formal" && (
-                                <button
-                                  onClick={() => {
-                                    setForm({ ...d });
-                                    setModal("output");
-                                  }}
-                                >
-                                  编辑披露文本
-                                </button>
-                              )}
-                            </div>
-                          </article>
-                        ))}
-                        <div className="bottom-action">
-                          <button
-                            className="primary"
-                            disabled={busy || task.stale}
-                            onClick={() =>
-                              run(async () => {
-                                await api(
-                                  "/tasks/" + task.id + "/evaluate",
-                                  "POST",
-                                );
-                                setTab("risk");
-                              })
-                            }
-                          >
-                            检验风险并冻结请求 <ArrowRight size={15} />
-                          </button>
-                        </div>
-                      </>
-                    )}
+                    {tab === "disclosure" && <DisclosureWorkspace task={task}
+                      currentCase={currentCase} busy={busy} label={txt}
+                      onEdit={editDecision} onLocate={locate}
+                      onEditOutput={(decision) => { setForm({ ...decision }); setModal("output"); }}
+                      onEvaluate={() => run(async () => {
+                        await api("/tasks/" + task.id + "/evaluate", "POST");
+                        setTab("risk");
+                      })}/>}
 
                     {tab === "risk" && (
                       <RiskWorkspace task={task} busy={busy} label={txt} attackLabels={attackLabels}
@@ -1133,74 +781,9 @@ export default function App() {
                   </>
                 )}
               </section>
-              <aside className="context-panel">
-                <div className="panel-heading">
-                  <h3>依据与运行边界</h3>
-                  <button className="context-close" aria-label="关闭依据面板" onClick={()=>setContextOpen(false)}><X size={16}/></button>
-                </div>
-                <div className="boundary-card">
-                  <LockKeyhole size={20} />
-                  <h4>原文始终留在边侧</h4>
-                  <p>身份映射、内部理由和评分真值不会自动进入云端请求。</p>
-                </div>
-                <dl className="metadata">
-                  <dt>运行模式</dt>
-                  <dd>
-                    {currentCase.mode === "demo" ? "固定合成演示" : "正式案件"}
-                  </dd>
-                  <dt>当前任务</dt>
-                  <dd>事实摘要</dd>
-                  <dt>规则版本</dt>
-                  <dd>{task?.pack_id || "尚未绑定"}</dd>
-                  <dt>调用方式</dt>
-                  <dd>
-                    {task
-                      ? task.transport === "mock"
-                        ? "模拟调用（不访问云端）"
-                        : "云端大模型 API"
-                      : "待创建任务"}
-                  </dd>
-                </dl>
-                {currentCase.mode === "demo" && (
-                  <button
-                    className="secondary full"
-                    disabled={busy}
-                    onClick={() => startTask("cloud")}
-                  >
-                    <ExternalLink size={14} />
-                    新建真实 API 演示任务
-                  </button>
-                )}
-                <div className="context-divider" />
-                <h4 className="aside-title">
-                  操作留痕
-                  <a
-                    href={`/api/v1/cases/${caseId}/audit-export`}
-                    title="导出审计"
-                  >
-                    <Download size={14} />
-                  </a>
-                </h4>
-                <div className="audit-list">
-                  {data.audit
-                    .slice(-8)
-                    .reverse()
-                    .map((e: Obj) => (
-                      <div key={e.id}>
-                        <span className="audit-dot" />
-                        <div>
-                          <b>{e.event}</b>
-                          <small>
-                            {new Date(e.at).toLocaleTimeString("zh-CN")}
-                          </small>
-                        </div>
-                      </div>
-                    ))}
-                </div>
-                <p className="small-note">
-                  风险攻击未按冻结协议完成时不会显示“通过”。正式案件当前保持外发阻断。
-                </p>
-              </aside>
+              <ContextRail currentCase={currentCase} task={task} caseId={caseId}
+                audit={data.audit} busy={busy} onClose={() => setContextOpen(false)}
+                onStartCloud={() => startTask("cloud")}/>
             </div>
           </div>
         )}
