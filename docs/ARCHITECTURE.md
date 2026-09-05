@@ -1,13 +1,25 @@
 # 架构与接口约定
 
-LexAegis 0.2 使用模块化单体和独立外发网关。所有敏感原文留在边侧；云端仅负责经过批准的假名化事实摘要生成。
+LexAegis 0.2 使用模块化单体和独立外发网关。所有敏感原文留在边侧；云端仅负责经过批准的假名化事实摘要生成。劳动争议 V2 包仍为 `draft`：没有经审核服务商、四类真实攻击 `resisted`、隔离验收与具名审批时，正式外发保持失败关闭。这不是缺省“安全”。
+
+## 0.2 范围
+
+- V2 契约：`DomainPackV2`、`TaskDefinitionV2`、`DocumentIRV2`、稳定 `MappingEntry`、`ClaimArtifactV2`、服务商、审批、攻击协议。
+- v1 包只作为 draft/demo 读取；V2 包按生命周期冻结哈希，同版本不能覆盖。
+- 正式案件外发只使用 `[[LEX:P0001]]` 线 token；mapping、原文、anchors 与 `local_text` 不进入 V2 wire payload 或网关账本。
+- 确定性 PII 坐标、重叠合并、敏感性与冻结权重风险信号；不自动作法律结论。
+- `fact_summary` 走通用任务定义；`timeline` 可本地确定性执行；证据整理与争点提取明确未实现。
+- 默认导出 `cloud_view`；含身份与锚点的 `local_review_bundle` 要求结果确认及具名二次确认。
+- 跨平台 CLI：`lexaegis start|doctor|backup|restore|check-isolation`；Compose 提供 native/isolated/edge/benchmark/redteam 拓扑。
+
+历史计划与共识见 [docs/archive](archive/README.md)。验证证据见 [VALIDATION.md](VALIDATION.md)。
 
 ## 代码组织
 
 | 位置 | 职责 |
 | --- | --- |
 | `frontend/` | React 工作台、事实和披露编辑、审批、结果回链、运行配置 |
-| `lexaegis/api.py` | 单用户会话、HTTP API、材料上传和页面渲染、SSE |
+| `lexaegis/api.py` | 会话、HTTP API、材料上传和页面渲染、SSE |
 | `lexaegis/service.py` | 案件版本、事实与任务、审批及发送状态转换 |
 | `lexaegis/storage.py` | SQLAlchemy 聚合存储、SQLite WAL、Alembic 迁移 |
 | `lexaegis/parsing.py` | DOCX、PDF、扫描识别和可选本地 OCR |
@@ -22,44 +34,68 @@ LexAegis 0.2 使用模块化单体和独立外发网关。所有敏感原文留�
 | `lexaegis/redteam.py` | 无原件/映射/真值访问的四类攻击接口 |
 | `packs/` | 版本化声明式案由知识包 |
 
-业务聚合统一保存在 `records(id, kind, scope, body)` 中，双向 `kind/scope` 建索引。本地会话绑定具名角色；SQLite 仍只支持单实例，不可置于网络共享盘。迁移编号保存在 `alembic_version`；当前迁移是 `0002_v2_contracts`，从 0001 升级前生成并校验备份，失败保持旧版本。
+业务聚合保存在 `records(id, kind, scope, body)` 中。本地会话绑定具名角色；SQLite 只支持单实例，不可置于网络共享盘。当前迁移是 `0002_v2_contracts`，从 0001 升级前生成并校验备份，失败保持旧版本。
 
 ## 数据和安全契约
 
-- `SourceAnchor` 保存材料版本、段落/单元格或 PDF 页、归一化左上坐标，以及 OCR Provider 的稳定 id/版本。PDF 文本版目前采用页内文本联合区域；OCR 使用文本框坐标。
+- `SourceAnchor` 保存材料版本、段落/单元格或 PDF 页、归一化左上坐标，以及 OCR Provider 的稳定 id/版本。
 - `DocumentIR` 保存版本、来源块、置信度、警告与复核状态。OCR 低质量、缺失、失败都不会计为完成复核。
-- `Fact` 保存字段、陈述、来源列表、提取来源和确认状态。不同或矛盾陈述并存，不自动覆盖；首版没有自动完成事实间矛盾消解。
+- `Fact` 保存字段、陈述、来源列表、提取来源和确认状态。不同或矛盾陈述并存，不自动覆盖。
 - `DisclosureDecision` 分离必要性、变换方式、外发状态和依据。正式规则和硬性禁止不能被界面调整绕过。
-- `DomainPack` 和 `TaskDefinition` 独立注册，任务冻结其版本。当前案由采用最新导入的匹配包，历史任务仍用原包；首版一案选择一个案由，不自动合并多案由规则。
-- `ApprovedRequest` 冻结模型、地址、消息和参数，以及材料、配置、规则、任务和累计披露版本。审批本身不执行发送。
-- 网关使用 HMAC 验证请求与具名审批，重新计算请求摘要，并检查依赖、有效期、V2 wire contract 和目标白名单。正式案件只有在规则、服务商、四类攻击与隔离均完成时才可外发；当前资产保持失败关闭。
-- 摘要按条目返回 `text/source_ids`；实际原文锚点和真实身份在边侧解析。无引用、无依据数字或无原文支撑的陈述不会自动成为已核实结果。
+- `DomainPack` 与 `TaskDefinition` 独立注册，任务冻结其版本。一案选择一个案由，不自动合并多案由规则。`DomainPackV2` 保存任务—字段—必要性矩阵；草案缺矩阵时只生成 `uncertain` 保守项。
+- `ApprovedRequest` 冻结模型、地址、消息、参数及材料、配置、规则、任务和累计披露版本。审批本身不执行发送。
+- 网关使用 HMAC 验证请求与具名审批，检查依赖、有效期、V2 wire contract 和目标白名单。
+- 摘要按条目返回 `text/source_ids`；原文锚点和真实身份只在边侧解析。
+
+`TaskDefinitionV2` 使用受限 JSON Schema；本地确定性任务通过 `lexaegis.tasks` entry point 提供 `definition()` 与 `run(payload)`。UI 渲染器只能从契约白名单选择，扩展不能注入前端代码。案由包只允许声明式数据。
 
 ## 主状态转换
 
 `draft → review / blocked → approved → queued → sending → complete / unknown / failed`
 
-尚未发送的任务可停止。内容修改回到 draft，并清除审批；材料或配置修改标记旧任务 stale。queued/sending 时拒绝案件编辑，冻结派发边界。完成任务不可重发，需创建新任务并考虑累计披露。
+尚未发送的任务可停止。内容修改回到 draft 并清除审批；材料或配置修改标记旧任务 stale。queued/sending 时拒绝案件编辑。完成任务不可重发。
 
-发送意图与队列在同一业务事务中写入，然后由工作进程调用网关。网关先持久化 sending 再调用服务商。请求 ID 在网关账本中去重；超时后不主动重复调用。reconcile 只读取网关已有记录。对外部服务无法保证数学意义上的 exactly-once。
+发送意图与队列在同一业务事务中写入，然后由工作进程调用网关。网关先持久化 sending 再调用服务商。请求 ID 去重；超时后不主动重复调用。reconcile 只读取网关已有记录。
 
-规则未发布、四类攻击未完成、材料未复核、事实来源失效、残留直接标识、硬性禁止或已知组合风险都会阻断。`capability` 和 `risk completion/outcome` 是不同字段，不能以“接口存在”代替“检验通过”。
+规则未发布、四类攻击未完成、材料未复核、事实来源失效、残留直接标识、硬性禁止或已知组合风险都会阻断。`capability` 与 `risk completion/outcome` 不能互相替代。
+
+## 账户、服务商与复原
+
+首次启动创建 `admin` 本地账户（scrypt + 独立盐）。管理员可建立 `case_operator`、`legal_reviewer`、`approver`。不能停用或降级最后一个管理员。审计写入具名操作者。
+
+服务商档案修改后回到 `draft`，具名复核是独立动作。关键字段缺一不可复核。任务冻结 `provider_hash` 与 `pack_hash`，变化即要求重新检验。
+
+复原页并列云端假名化陈述、边侧身份回填、外发支持事实和版本化原文锚点。默认导出 `cloud_view`；`local_review_bundle` 须在逐项确认后取得绑定任务版本与产物哈希的 15 分钟具名确认。
 
 ## API
 
 - 案件与材料：`/api/v1/cases`、`/cases/{id}/documents`、`/documents/{id}/correction`、`/anchors`。
 - 事实：`/cases/{id}/facts`、`/facts/{id}`、`/extract`。
-- 任务：`/cases/{id}/tasks`、`/tasks/{id}/decisions/{fact}`、`evaluate`、`approve`、`send`、`stop`、`reconcile`。
+- 任务：`/cases/{id}/tasks`、`/tasks/{id}/decisions/{fact}`、`evaluate`、`approve`、`send`、`stop`、`reconcile`、`attacks/run`。
 - 校核：`/tasks/{id}/claims/{claim}/review`、`confirm`、`restoration`、`export?view=cloud|local`。
 - 扩展与治理：`/domains`、`/task-definitions`、`/packs/import`、`validate`、`transition`、`publish`、`/providers`、`/risk-protocols`。
 - 配置与状态：`/bootstrap`、`/settings`、`/capabilities`、`/cases/{id}/events`。
 
-所有业务接口需要本地会话。写操作校验 Origin，Host 使用白名单，前端资源不请求第三方 CDN。首次访问使用本地生成口令；浏览器会话 8 小时有效，重启 API 后需重新登录。
+业务接口需要本地会话。写操作校验 Origin，Host 白名单。浏览器会话 8 小时；重启 API 后需重新登录。
 
-## 限制与后续接入
+## 限制
 
-- 首版材料限制：20MB / 文件、200 页 / PDF；边侧提取单任务 5 万字。暂不做跨材料自动分批云端调用。
-- DOCX 的图片、嵌入对象和脚注不保证完整提取，图片证据应转换为 PDF；混合 PDF 按页检测，有文字层但仍夹杂图片的页需律师核实是否遗漏。
-- 真实攻击运行、独立盲测评分、精细语义/矛盾校核、OCR 模型精度评测和正式规则审核尚未完成。
-- 本地服务支持 CPU/GPU 的选择由适配器背后的推理服务决定；没有自动安装、下载权重或切换云端处理原文。
-- 前端的“已实现”“未配置”“未实现”与真实模型验证记录分开解释。网络隔离只在隔离部署并通过检查脚本后成立。
+- 材料：20MB / 文件、200 页 / PDF；边侧提取单任务 5 万字。
+- DOCX 图片、嵌入对象和脚注不保证完整提取；混合 PDF 有文字层但仍夹杂图片的页需律师核实。
+- 边侧小模型仅用于正式案件事实提取。演示、规则、风险、摘要和复原不增加第二个生产调用点。
+- 推理后端（CPU/GPU）由 Ollama/llama.cpp 等适配器决定；本仓库不自动下载权重。见 [MODELS.md](MODELS.md)。
+- 网络隔离只在隔离部署并通过检查脚本后成立。见 [DEPLOY.md](DEPLOY.md)。
+
+## 附录 A：隔离红队
+
+正式任务先做确定性风险检验，生成由线协议载荷、任务版本、材料版本和累计披露版本构成的 `attack_input_hash`。Worker 只把假名化 `wire_payload`、受预算限制的既往披露和声明为攻击者可见的辅助数据发给 redteam。使用独立的 `LEX_REDTEAM_SECRET`，不得与网关 HMAC 密钥复用。
+
+```bash
+LEX_REDTEAM_SECRET=replace-with-a-separate-random-secret docker compose --profile redteam up -d
+```
+
+每类结果以 `AttackRun` 持久化。只有四类均为 `resisted` 才消除红队阻断；超时、契约错误、中断或内容变化记为 `error` 或拒绝写入。
+
+## 附录 B：Ianvs 隔离实验
+
+`lexaegis bench --profile ianvs-pipl` 无输入时只报告 `input_required`，不从文本哈希构造伪向量。该 CLI 不被生产 API、worker 或 dispatch 导入。完整参数与约束见归档 [IMPLEMENTATION_V2.md](archive/IMPLEMENTATION_V2.md) 中「Ianvs 隔离实验」一节。

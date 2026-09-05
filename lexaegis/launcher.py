@@ -10,6 +10,12 @@ from .util import app_dir, restrict_mode
 
 
 def run():
+    env_file = Path.cwd() / ".env"
+    if env_file.is_file():
+        from dotenv import load_dotenv
+        load_dotenv(env_file)
+    if frontend_location() is None:
+        raise SystemExit("未找到前端构建产物。源码开发请先执行：cd frontend && pnpm build")
     root = app_dir()
     root.mkdir(parents=True, exist_ok=True)
     restrict_mode(root, 0o700)
