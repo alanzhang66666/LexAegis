@@ -82,13 +82,13 @@ services:
   edge-model:
     image: ${LEX_EDGE_IMAGE:-ghcr.io/ggml-org/llama.cpp:server}
     profiles: [edge]
-    command: [--model, /models/edge.gguf, --host, 0.0.0.0, --port, "8080", --alias, edge-small]
+    command: [--model, /models/edge.gguf, --host, 0.0.0.0, --port, "8080", --alias, edge-small, --reasoning-budget, "0", --jinja, --ctx-size, "8192"]
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     tmpfs: [/tmp]
     volumes: ["./models:/models:ro"]
-    networks: [internal]
+    networks: [internal, redteam]
 networks:
   internal: {internal: true}
   redteam: {internal: true}

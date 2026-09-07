@@ -74,6 +74,26 @@ def test_ocr_capability_distinguishes_disabled_unknown_and_available(monkeypatch
     assert ocr_capability()["status"] == "failed"
 
 
+def test_txt_paragraphs_become_source_anchors(tmp_path):
+    path = tmp_path / "synthetic.txt"
+    path.write_text("第一段主张工资12000元。\n\n第二段引用合成证据。", encoding="utf-8")
+    result = parse(path, "doc_txt")
+    assert [block["kind"] for block in result["blocks"]] == ["paragraph", "paragraph"]
+    assert result["blocks"][0]["text"] == "第一段主张工资12000元。"
+    assert result["blocks"][1]["locator"] == "段落 2"
+    assert result["needs_review"] is False
+
+
+def test_txt_crlf_blank_lines_become_multiple_chunks(tmp_path):
+    path = tmp_path / "windows.txt"
+    path.write_bytes("第一段主张工资12000元。\r\n\r\n第二段引用合成证据。".encode("utf-8"))
+    result = parse(path, "doc_txt_crlf")
+    assert [block["kind"] for block in result["blocks"]] == ["paragraph", "paragraph"]
+    assert result["blocks"][0]["text"] == "第一段主张工资12000元。"
+    assert result["blocks"][1]["text"] == "第二段引用合成证据。"
+    assert result["blocks"][1]["locator"] == "段落 2"
+
+
 def test_docx_table_has_distinct_source_anchors():
     result=parse(Path('examples/synthetic_labor.docx'),'doc_table')
     assert any(b['kind']=='table' and '行' in b['locator'] for b in result['blocks'])

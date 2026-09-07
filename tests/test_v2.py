@@ -9,7 +9,8 @@ from lexaegis.dataset import build_semisynthetic_manifest, validate_annotations
 from lexaegis.experiments import gaussian_dp, l2_clip, mia_requires_real_outputs, random_projection, rdp_gaussian, rdp_to_epsilon
 from lexaegis.registry import run_pack_regressions, validate_pack
 from lexaegis import task_engine
-from lexaegis.policy import check_claims, ensure_mappings
+from lexaegis.policy import check_claims, check_cloud_feedback, ensure_mappings, transform
+from lexaegis.task_engine import validate_cloud_result
 from lexaegis.util import digest
 from .test_workflow import formal_material
 
@@ -69,6 +70,23 @@ def test_local_timeline_extends_without_dispatch(env):
     assert task["artifact"]["provenance"]=="local_deterministic"
 
 
+def test_local_evidence_inventory_lists_evidence_facts(env):
+    case, document, _ = formal_material(env)
+    block = document["ir"]["blocks"][0]
+    env["client"].post(f"/api/v1/cases/{case['id']}/facts", json={
+        "field": "evidence", "value": "劳动合同原件", "source_ids": [block["id"]], "confirmed": True,
+    })
+    result = env["client"].post(
+        f"/api/v1/cases/{case['id']}/tasks",
+        json={"task_type": "evidence_inventory", "transport": "local"},
+    )
+    assert result.status_code == 200
+    task = result.json()
+    assert task["status"] == "complete" and task["request"] is None
+    assert task["artifact"]["provenance"] == "local_deterministic"
+    assert any(item["text"] == "劳动合同原件" for item in task["artifact"]["items"])
+
+
 def test_entrypoint_task_executes_without_service_state_machine_change(env, monkeypatch):
     class Plugin:
         @staticmethod
@@ -99,14 +117,40 @@ def test_entrypoint_task_executes_without_service_state_machine_change(env, monk
     assert result.json()["artifact"]["events"] and result.json()["status"]=="complete"
 
 
+def test_create_task_uses_v2_matrix_or_conservative_default(env):
+    case,document,_=formal_material(env)
+    with env["app"].state.store.transaction() as repo:
+        pack=next(item for item in repo.list("pack") if item.get("schema_version")==2)
+        pack["task_field_matrix"]=[{"task_id":"fact_summary","field":"event","necessity":"required","rationale":"矩阵必填"}]
+        repo.put("pack",pack)
+    block=document["ir"]["blocks"][0]
+    env["client"].post(f"/api/v1/cases/{case['id']}/facts",json={"field":"amount","value":"金额12000元","source_ids":[block["id"]],"confirmed":True})
+    task=env["client"].post(f"/api/v1/cases/{case['id']}/tasks",json={"transport":"cloud"}).json()
+    by_field={item["field"]:item for item in task["decisions"]}
+    assert by_field["event"]["necessity"]=="required" and by_field["event"]["reason"]=="矩阵必填"
+    assert by_field["amount"]["necessity"]=="uncertain" and by_field["amount"]["transform"]=="delete"
+    with env["app"].state.store.transaction() as repo:
+        pack=repo.get(task["pack_id"],"pack")
+        pack["task_field_matrix"]=[]
+        repo.put("pack",pack)
+    empty=env["client"].post(f"/api/v1/cases/{case['id']}/tasks",json={"transport":"cloud"}).json()
+    assert all(item["necessity"]=="uncertain" and item["transform"]=="delete" for item in empty["decisions"])
+
+
 def test_wire_payload_excludes_local_only_data(env):
     case=env["client"].post("/api/v1/demos",json={"scenario":"success"}).json()
     task=env["client"].post(f"/api/v1/cases/{case['id']}/tasks",json={"transport":"mock"}).json()
     evaluated=env["client"].post(f"/api/v1/tasks/{task['id']}/evaluate").json()
     wire=evaluated["request"]["wire_payload"]
     assert set(wire)=={"contract_version","task","facts"}
+    assert all(set(item)<= {"id","text","field"} and "field" in item for item in wire["facts"])
     assert "林澄" not in str(wire) and "mapping" not in str(wire).lower()
     assert "[[LEX:P0001]]" in str(wire)
+    deps=evaluated["request"]["dependencies"]
+    assert deps["dual_slot"]["primary"]["model"]=="deepseek-v4-flash"
+    assert deps["dual_slot"]["standby"]["model"]=="qwen3.8-flash"
+    assert deps["primary_model"]=="deepseek-v4-flash" and deps["standby_model"]=="qwen3.8-flash"
+    assert deps["prompt_hash"]
 
 
 def test_claim_validator_flags_unknown_direct_identifier():
@@ -133,6 +177,135 @@ def test_mapping_conflict_and_unknown_or_broken_tokens_are_explicit():
     assert any("破损" in issue for issue in claims[1]["issues"])
 
 
+def test_mapping_entry_accepts_polc_tokens_and_aliases():
+    entry = MappingEntry(entity_id="entity_0002", wire_token="[[LEX:O0002]]", display_alias="单位1",
+                         original_value="合成公司", source_ids=["b1"], mapping_version=1, aliases=["合成企业"])
+    assert entry.wire_token == "[[LEX:O0002]]" and entry.aliases == ["合成企业"]
+
+
+def test_entity_aliases_share_token_in_transform():
+    case = {"id": "case_alias0001", "mapping_entries": [], "mapping_version": 1}
+    entries = ensure_mappings(case, [
+        {"field": "entity", "value": "林甲", "source_ids": ["b1"], "aliases": ["小林", "林某甲"]},
+    ])
+    token = entries[0]["wire_token"]
+    assert entries[0]["aliases"] == ["小林", "林某甲"]
+    assert transform("小林与林某甲、林甲发生争议", "pseudonymize", entries) == f"{token}与{token}、{token}发生争议"
+
+
+def test_alias_conflict_skips_alias_and_keeps_two_tokens():
+    orders = (
+        [
+            {"field": "entity", "value": "林甲", "source_ids": ["b1"], "aliases": ["林乙"]},
+            {"field": "entity", "value": "林乙", "source_ids": ["b2"]},
+        ],
+        [
+            {"field": "entity", "value": "林乙", "source_ids": ["b2"]},
+            {"field": "entity", "value": "林甲", "source_ids": ["b1"], "aliases": ["林乙"]},
+        ],
+    )
+    for facts in orders:
+        case = {"id": "case_alias0002", "mapping_entries": [], "mapping_version": 1}
+        entries = ensure_mappings(case, facts)
+        tokens = {entry["original_value"]: entry["wire_token"] for entry in entries}
+        assert tokens["林甲"] != tokens["林乙"]
+        assert "林乙" not in next(entry for entry in entries if entry["original_value"] == "林甲").get("aliases", [])
+        assert any(item["alias"] == "林乙" and item["reason"] == "alias_conflicts_with_other_entity"
+                   for item in case["skipped_aliases"])
+        replaced = transform("林甲与林乙", "pseudonymize", entries)
+        assert replaced == f"{tokens['林甲']}与{tokens['林乙']}"
+
+
+def test_check_claims_recognizes_polc_tokens():
+    task = {"decisions": [{"fact_id": "f1", "output": "[[LEX:O0001]]与[[LEX:L0002]]签订合同"}]}
+    facts = [{"id": "f1", "source_ids": ["b1"]}]
+    claims = check_claims({"claims": [{"text": "[[LEX:O0001]]与[[LEX:L0002]]签订合同", "source_ids": ["f1"]}]}, task, facts)
+    assert claims[0]["status"] == "source_matched"
+    broken = check_claims({"claims": [{"text": "[[LEX:C0001]签订合同", "source_ids": ["f1"]}]}, task, facts)
+    assert any("破损" in issue for issue in broken[0]["issues"])
+
+
+def _feedback_task():
+    return {"decisions": [
+        {"fact_id": "f1", "output": "[[LEX:P0001]]主张工资12000元", "field": "entity"},
+        {"fact_id": "f2", "output": "2024年3月1日签订合同", "field": "date"},
+        {"fact_id": "f3", "output": "月工资8000元", "field": "amount"},
+    ], "type": "fact_summary"}
+
+
+def _feedback_facts():
+    return [{"id": fact_id, "source_ids": ["b1"]} for fact_id in ("f1", "f2", "f3")]
+
+
+def test_feedback_computes_unused_fact_ids_locally():
+    task, facts = _feedback_task(), _feedback_facts()
+    raw = {"claims": [
+        {"text": "[[LEX:P0001]]主张工资12000元", "source_ids": ["f1"]},
+        {"text": "2024年3月1日签订合同", "source_ids": ["f2"]},
+    ]}
+    claims = check_claims(raw, task, facts)
+    feedback = check_cloud_feedback(raw, task, claims)
+    assert feedback["unused_fact_ids"] == ["f3"]
+    assert feedback["gaps"] == []
+    assert feedback["feedback_issues"] == []
+
+
+def test_feedback_unused_mismatch_keeps_claims():
+    task, facts = _feedback_task(), _feedback_facts()
+    raw = {"claims": [
+        {"text": "[[LEX:P0001]]主张工资12000元", "source_ids": ["f1"]},
+        {"text": "2024年3月1日签订合同", "source_ids": ["f2"]},
+    ], "unused_fact_ids": ["f1"]}
+    result = validate_cloud_result("fact_summary", raw, task, facts)
+    assert result["unused_fact_ids"] == ["f3"]
+    assert len(result["claims"]) == 2
+    assert any("不一致" in issue for issue in result["feedback_issues"])
+
+
+def test_feedback_gap_unknown_id_and_identifier_leak():
+    task, facts = _feedback_task(), _feedback_facts()
+    raw = {"claims": [{"text": "[[LEX:P0001]]主张工资12000元", "source_ids": ["f1"]}],
+           "gaps": [
+               {"code": "missing_field", "detail": "缺少争议发生地", "fact_ids": ["missing"]},
+               {"code": "other", "detail": "联系电话13800138000", "fact_ids": ["f3"]},
+           ]}
+    result = validate_cloud_result("fact_summary", raw, task, facts)
+    assert result["unused_fact_ids"] == ["f2", "f3"]
+    assert result["gaps"] == []
+    assert any("未外发" in issue for issue in result["feedback_issues"])
+    assert any("直接标识" in issue for issue in result["feedback_issues"])
+
+
+def test_initialize_backfills_empty_edge_model_from_env(tmp_path, monkeypatch):
+    from lexaegis.storage import Store
+    from lexaegis import service
+    store = Store(tmp_path / "app.sqlite")
+    monkeypatch.delenv("LEX_EDGE_MODEL", raising=False)
+    service.initialize(store)
+    with store.transaction() as repo:
+        settings = repo.get("settings")
+        assert not settings.get("edge_model")
+        settings["edge_model"] = "already-saved"
+        settings["edge_url"] = "http://127.0.0.1:11434/v1"
+        repo.put("settings", settings)
+    monkeypatch.setenv("LEX_EDGE_MODEL", "edge-small")
+    monkeypatch.setenv("LEX_EDGE_URL", "http://127.0.0.1:8080/v1")
+    service.initialize(store)
+    with store.read() as repo:
+        kept = repo.get("settings")
+        assert kept["edge_model"] == "already-saved"
+        assert kept["edge_url"] == "http://127.0.0.1:11434/v1"
+    with store.transaction() as repo:
+        settings = repo.get("settings")
+        settings["edge_model"] = ""
+        repo.put("settings", settings)
+    service.initialize(store)
+    with store.read() as repo:
+        filled = repo.get("settings")
+        assert filled["edge_model"] == "edge-small"
+        assert filled["edge_url"] == "http://127.0.0.1:8080/v1"
+
+
 def test_dp_budget_projection_and_real_mia_inputs():
     assert math.isclose(math.sqrt(sum(value*value for value in l2_clip([3,4],2))),2)
     one=gaussian_dp([3,4],max_norm=2,noise_multiplier=.5,seed=7)
@@ -157,6 +330,9 @@ def test_capabilities_report_separate_axes(env):
     result=env["client"].get("/api/v1/capabilities").json()
     assert {"technical","runtime","legal","validation"} <= result.keys()
     assert result["legal"]["status"]!="available"
+    assert result["validation"]["status"] == "unconfigured"
+    assert result["validation"]["cloud_outbound"] == "not_verified"
+    assert result["validation"]["formal_dispatch"] == "blocked"
 
 
 def test_semisynthetic_scaffold_has_frozen_split_but_never_fake_labels():

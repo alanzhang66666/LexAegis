@@ -4,10 +4,12 @@ import sys
 import pytest
 
 from lexaegis.cli import main
+from lexaegis.data_registry import default_data_root, validate_tree
 from lexaegis.dataset import (
     GROUPS,
     build_mock_corpus,
     freeze_mock_corpus,
+    read_records_jsonl,
     run_mock_comparison,
     transform_mock_record,
 )
@@ -79,3 +81,43 @@ def test_dataset_cli_generates_freezes_and_runs_without_overwrite(tmp_path, monk
     assert json.loads(report.read_text(encoding="utf-8"))["status"] == "complete_technical_mock_only"
     with pytest.raises(FileExistsError):
         main()
+
+
+def test_repo_catalog_and_mock_labor_hashes_are_stable():
+    records = build_mock_corpus()
+    frozen = freeze_mock_corpus(records)
+    root = default_data_root()
+    stored = read_records_jsonl(root / "mock_labor_v1" / "records.jsonl")
+    catalog = json.loads((root / "catalog.json").read_text(encoding="utf-8"))
+    manifest = json.loads((root / "mock_labor_v1" / "dataset.json").read_text(encoding="utf-8"))
+    assert freeze_mock_corpus(stored)["freeze_hash"] == frozen["freeze_hash"]
+    assert catalog["datasets"][0]["freeze_hash"] == frozen["freeze_hash"]
+    assert manifest["freeze_hash"] == frozen["freeze_hash"]
+    assert manifest["records_hash"] == frozen["records_hash"]
+    assert manifest["kind"] == "fully_synthetic"
+    assert manifest["dispatch_allowed"] is False
+    assert manifest["provenance"]["contains_real_case_content"] is False
+    assert validate_tree()["ok"] is True
+
+
+def test_validate_tree_rejects_tampered_records(tmp_path):
+    import shutil
+    dest = tmp_path / "data"
+    shutil.copytree(default_data_root(), dest)
+    path = dest / "mock_labor_v1" / "records.jsonl"
+    path.write_text(path.read_text(encoding="utf-8").replace("合成人物", "篡改人物", 1), encoding="utf-8")
+    report = validate_tree(dest)
+    assert report["ok"] is False
+    assert any("哈希" in problem for problem in report["problems"])
+
+
+def test_dataset_cli_list_and_validate(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["lexaegis", "dataset", "list"])
+    main()
+    listed = json.loads(capsys.readouterr().out)
+    assert any(item["id"] == "mock_labor" and item["freeze_hash"] for item in listed)
+    monkeypatch.setattr(sys, "argv", ["lexaegis", "dataset", "validate"])
+    with pytest.raises(SystemExit) as exited:
+        main()
+    assert exited.value.code == 0
+    assert json.loads(capsys.readouterr().out)["ok"] is True

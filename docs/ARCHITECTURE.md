@@ -8,7 +8,7 @@ LexAegis 0.2 使用模块化单体和独立外发网关。所有敏感原文留�
 - v1 包只作为 draft/demo 读取；V2 包按生命周期冻结哈希，同版本不能覆盖。
 - 正式案件外发只使用 `[[LEX:P0001]]` 线 token；mapping、原文、anchors 与 `local_text` 不进入 V2 wire payload 或网关账本。
 - 确定性 PII 坐标、重叠合并、敏感性与冻结权重风险信号；不自动作法律结论。
-- `fact_summary` 走通用任务定义；`timeline` 可本地确定性执行；证据整理与争点提取明确未实现。
+- `fact_summary` 走通用任务定义；`timeline` 与 `evidence_inventory` 可本地确定性执行；争点提取明确未实现。云端回写的未使用事实与缺口写入案件 `followups`，可忽略或据此创建后续披露，不自动二次调用边侧模型。
 - 默认导出 `cloud_view`；含身份与锚点的 `local_review_bundle` 要求结果确认及具名二次确认。
 - 跨平台 CLI：`lexaegis start|doctor|backup|restore|check-isolation`；Compose 提供 native/isolated/edge/benchmark/redteam 拓扑。
 
@@ -24,7 +24,8 @@ LexAegis 0.2 使用模块化单体和独立外发网关。所有敏感原文留�
 | `lexaegis/storage.py` | SQLAlchemy 聚合存储、SQLite WAL、Alembic 迁移 |
 | `lexaegis/parsing.py` | DOCX、PDF、扫描识别和可选本地 OCR |
 | `lexaegis/policy.py` | 标识检测、映射、披露变换、门禁及结果检查 |
-| `lexaegis/providers.py` | 边侧和云端 HTTP 适配器，无服务商自动回退 |
+| `lexaegis/providers.py` | 边侧适配器；云端 `OpenAICompatibleProvider` 委托网关流式装配 |
+| `lexaegis/cloud.py` | DeepSeek 主 / 百炼备双槽、网关内流式拼 JSON |
 | `lexaegis/gateway.py` | 签名核验、目标白名单、独立请求账本与实际调用 |
 | `lexaegis/worker.py` | 单进程队列、解析、提取、发送与恢复 |
 | `lexaegis/detection.py` | 坐标化 PII、敏感性与冻结权重风险信号 |
@@ -43,9 +44,10 @@ LexAegis 0.2 使用模块化单体和独立外发网关。所有敏感原文留�
 - `Fact` 保存字段、陈述、来源列表、提取来源和确认状态。不同或矛盾陈述并存，不自动覆盖。
 - `DisclosureDecision` 分离必要性、变换方式、外发状态和依据。正式规则和硬性禁止不能被界面调整绕过。
 - `DomainPack` 与 `TaskDefinition` 独立注册，任务冻结其版本。一案选择一个案由，不自动合并多案由规则。`DomainPackV2` 保存任务—字段—必要性矩阵；草案缺矩阵时只生成 `uncertain` 保守项。
-- `ApprovedRequest` 冻结模型、地址、消息、参数及材料、配置、规则、任务和累计披露版本。审批本身不执行发送。
-- 网关使用 HMAC 验证请求与具名审批，检查依赖、有效期、V2 wire contract 和目标白名单。
-- 摘要按条目返回 `text/source_ids`；原文锚点和真实身份只在边侧解析。
+- `ApprovedRequest` 冻结模型、地址、消息、参数及材料、配置、规则、任务和累计披露版本。云端请求必须冻结 `dual_slot` 两侧（primary/standby 的 target 与 model）；运行时选用写入账本，不改 `request_hash`。审批本身不执行发送。
+- 网关使用 HMAC 验证请求与具名审批，检查依赖、有效期、V2 wire contract 和目标白名单。V2 wire 顶层仍是 `{contract_version,task,facts}`；facts 项可含 `field`，禁止 `mapping` / `original_value` / `local_text` / `anchors`。
+- 生成开始后禁止回退：仅尚未收到 content/reasoning token 时可从主槽切到已批准的备槽；JSON 不合格或断流且已有 token 记 `unknown`，不自动重发。
+- 摘要按条目返回 `text/source_ids`；原文锚点和真实身份只在边侧解析。入站结果可带 `unused_fact_ids` 与 `gaps`；未使用事实 id 由边侧按外发集合减去引用计算，云端回写不一致只记 `feedback_issues`，不整单作废、不自动重发。
 
 `TaskDefinitionV2` 使用受限 JSON Schema；本地确定性任务通过 `lexaegis.tasks` entry point 提供 `definition()` 与 `run(payload)`。UI 渲染器只能从契约白名单选择，扩展不能注入前端代码。案由包只允许声明式数据。
 
@@ -80,7 +82,7 @@ LexAegis 0.2 使用模块化单体和独立外发网关。所有敏感原文留�
 
 ## 限制
 
-- 材料：20MB / 文件、200 页 / PDF；边侧提取单任务 5 万字。
+- 材料：20MB / 文件、200 页 / PDF；边侧提取单任务 5 万字；正式案可上传 TXT。跨轮外发另有工程预算（默认 5 万字 / 20 条，`LEX_DISCLOSURE_BUDGET_*` 或运行配置），超限评估阻断，不写入法学包。
 - DOCX 图片、嵌入对象和脚注不保证完整提取；混合 PDF 有文字层但仍夹杂图片的页需律师核实。
 - 边侧小模型仅用于正式案件事实提取。演示、规则、风险、摘要和复原不增加第二个生产调用点。
 - 推理后端（CPU/GPU）由 Ollama/llama.cpp 等适配器决定；本仓库不自动下载权重。见 [MODELS.md](MODELS.md)。

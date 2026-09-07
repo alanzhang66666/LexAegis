@@ -1,0 +1,12 @@
+{
+  "id": "edge.qwen3-8b.q4_k_m.nothink",
+  "role": "fact_extraction_only",
+  "runtime": "llamacpp",
+  "served_model_id": "edge-small",
+  "quant": "Q4_K_M",
+  "vram": "8GB",
+  "context": 8192,
+  "json_object": "required",
+  "thinking": "disabled",
+  "second_call_site": "forbidden"
+}

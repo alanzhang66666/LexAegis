@@ -28,6 +28,8 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("LEX_GATEWAY_SECRET", "unit-test-secret-32-characters-long")
     monkeypatch.setenv("LEX_GATEWAY_URL", "http://testserver")
     monkeypatch.delenv("LEX_CLOUD_API_KEY", raising=False)
+    monkeypatch.delenv("LEX_CLOUD_PRIMARY_KEY", raising=False)
+    monkeypatch.delenv("LEX_CLOUD_STANDBY_KEY", raising=False)
     monkeypatch.delenv("LEX_EDGE_MODEL", raising=False)
     monkeypatch.setenv("LEX_OCR_ENABLED", "0")
     app = create_app(tmp_path / "app", password="unit-test-password")

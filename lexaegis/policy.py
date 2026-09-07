@@ -1,23 +1,54 @@
+import json
+import os
 import re
 from .detection import DEFAULT_PATTERNS, bind_source_spans, detect_text, risk_signals, sensitivity_signals
 from .util import digest
 
+DEFAULT_DISCLOSURE_BUDGET_CHARS = 50000
+DEFAULT_DISCLOSURE_BUDGET_ENTRIES = 20
+_DEMO_COMBINATION_TERMS = frozenset({"唯一", "公开获奖"})
+_DEMO_COMBINATION_BLOCKER = "组合线索风险：唯一岗位或公开事件仍保留"
+
 ATTACKS = ["identity", "candidate_set", "sensitive_inference", "cross_round"]
 PATTERNS = {item["category"]: item["pattern"] for item in DEFAULT_PATTERNS}
-TOKEN = re.compile(r"\[\[LEX:P\d{4,}\]\]")
+TOKEN = re.compile(r"\[\[LEX:[POLC]\d{4,}\]\]")
 
 
 def detect(text, pack=None):
     return list(dict.fromkeys(finding["category"] for finding in detect_text(text, pack=pack)))
 
 
+def _fact_aliases(fact):
+    raw = fact.get("aliases")
+    if raw is None and isinstance(fact.get("model_suggestion"), dict):
+        raw = fact["model_suggestion"].get("aliases")
+    return [item for item in (raw or []) if isinstance(item, str) and item]
+
+
+def _mapping_names(entry):
+    names = [entry.get("original_value")]
+    names.extend(entry.get("aliases") or [])
+    return [name for name in names if name]
+
+
+def _replacement_pairs(mappings):
+    if isinstance(mappings, list):
+        pairs = []
+        for entry in mappings:
+            token = entry["wire_token"]
+            pairs.append((entry["original_value"], token))
+            pairs.extend((alias, token) for alias in entry.get("aliases") or [] if alias)
+        return pairs
+    return list(mappings.items())
+
+
 def transform(value, method, mappings):
     if method == "delete":
         return ""
     if method in ("pseudonymize", "generalize"):
-        pairs = ((entry["original_value"], entry["wire_token"]) for entry in mappings) if isinstance(mappings, list) else mappings.items()
-        for original, alias in sorted(pairs, key=lambda pair: -len(pair[0])):
-            value = value.replace(original, alias)
+        for original, alias in sorted(_replacement_pairs(mappings), key=lambda pair: -len(pair[0])):
+            if original:
+                value = value.replace(original, alias)
         for name, pattern in PATTERNS.items():
             value = re.sub(pattern, f"[{name}已隐去]", value)
     if method == "generalize":
@@ -31,31 +62,110 @@ def ensure_mappings(case, facts):
     tokens = [entry.get("wire_token") for entry in entries]
     originals = [entry.get("original_value") for entry in entries]
     entity_ids = [entry.get("entity_id") for entry in entries]
+    claimed = [name for entry in entries for name in _mapping_names(entry)]
     if (len(tokens) != len(set(tokens)) or len(originals) != len(set(originals))
-            or len(entity_ids) != len(set(entity_ids))
+            or len(entity_ids) != len(set(entity_ids)) or len(claimed) != len(set(claimed))
             or any(not isinstance(token, str) or TOKEN.fullmatch(token) is None for token in tokens)):
         raise ValueError("本地身份映射存在 token、主体或原值冲突；禁止继续生成披露内容")
     by_original = {entry["original_value"]: entry for entry in entries}
     mapping_version = int(case.get("mapping_version", 1))
+    skipped = []
+
+    def others_names(current):
+        names = set()
+        for entry in entries:
+            if entry is not current:
+                names.update(_mapping_names(entry))
+        return names
+
+    def attach_aliases(current, aliases):
+        accepted = list(current.get("aliases") or [])
+        blocked = others_names(current)
+        blocked.add(current["original_value"])
+        for alias in aliases:
+            if alias in accepted:
+                continue
+            if alias in blocked:
+                skipped.append({"alias": alias, "entity_id": current["entity_id"],
+                                "reason": "alias_conflicts_with_other_entity"})
+                continue
+            accepted.append(alias)
+        current["aliases"] = accepted
+
     for fact in facts:
-        if fact["field"] == "entity" and fact["value"] not in by_original:
+        if fact["field"] != "entity":
+            continue
+        value = fact["value"]
+        aliases = _fact_aliases(fact)
+        if value not in by_original:
+            for entry in entries:
+                existing = list(entry.get("aliases") or [])
+                if value in existing:
+                    entry["aliases"] = [item for item in existing if item != value]
+                    skipped.append({"alias": value, "entity_id": entry["entity_id"],
+                                    "reason": "alias_conflicts_with_other_entity"})
             number = len(entries) + 1
             mapping_version += 1
             entry = {"entity_id": f"entity_{number:04d}", "wire_token": f"[[LEX:P{number:04d}]]",
-                     "display_alias": f"主体{number}（{case['id'][-4:]}）", "original_value": fact["value"],
-                     "source_ids": list(fact.get("source_ids", [])), "mapping_version": mapping_version}
+                     "display_alias": f"主体{number}（{case['id'][-4:]}）", "original_value": value,
+                     "source_ids": list(fact.get("source_ids", [])), "mapping_version": mapping_version,
+                     "aliases": []}
             entries.append(entry)
-            by_original[fact["value"]] = entry
-        elif fact["field"] == "entity":
-            current = by_original[fact["value"]]
+            by_original[value] = entry
+            attach_aliases(entry, aliases)
+        else:
+            current = by_original[value]
             current["source_ids"] = sorted(set(current.get("source_ids", [])) | set(fact.get("source_ids", [])))
-    # Compatibility projection for 0.1 readers. New code uses mapping_entries.
-    case["mapping"] = {entry["original_value"]: entry["wire_token"] for entry in entries}
+            attach_aliases(current, aliases)
+    case["skipped_aliases"] = skipped
+    case["mapping"] = {name: entry["wire_token"] for entry in entries for name in _mapping_names(entry)}
     case["mapping_version"] = mapping_version
     return entries
 
 
-def assess(case, pack, facts, decisions, docs, ledger, transport, provider_results=None, attacks=None, isolation_verified=False):
+def _positive_int(value):
+    if value in (None, ""):
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed <= 0:
+        return None
+    return parsed
+
+
+def resolve_disclosure_budget(chars=None, entries=None):
+    env_chars = _positive_int(os.getenv("LEX_DISCLOSURE_BUDGET_CHARS"))
+    env_entries = _positive_int(os.getenv("LEX_DISCLOSURE_BUDGET_ENTRIES"))
+    resolved_chars = env_chars if env_chars is not None else _positive_int(chars)
+    resolved_entries = env_entries if env_entries is not None else _positive_int(entries)
+    if resolved_chars is None:
+        resolved_chars = DEFAULT_DISCLOSURE_BUDGET_CHARS
+    if resolved_entries is None:
+        resolved_entries = DEFAULT_DISCLOSURE_BUDGET_ENTRIES
+    return resolved_chars, resolved_entries
+
+
+def _combination_blocker(matched):
+    if set(matched) <= _DEMO_COMBINATION_TERMS:
+        return _DEMO_COMBINATION_BLOCKER
+    return "组合线索风险：" + "、".join(matched) + "仍保留"
+
+
+def ledger_usage(ledger):
+    count = len(ledger or [])
+    chars = 0
+    for item in ledger or []:
+        request = item.get("request") or {}
+        payload = request.get("wire_payload")
+        if payload is None:
+            payload = request
+        chars += len(json.dumps(payload, ensure_ascii=False)) if payload else 0
+    return count, chars
+
+
+def assess(case, pack, facts, decisions, docs, ledger, transport, provider_results=None, attacks=None, isolation_verified=False, budget_chars=None, budget_entries=None):
     findings, blockers = [], []
     emitted = "\n".join(d["output"] for d in decisions if d["output"])
     fact_by_id = {fact["id"]: fact for fact in facts}
@@ -70,7 +180,8 @@ def assess(case, pack, facts, decisions, docs, ledger, transport, provider_resul
     detected = list(dict.fromkeys(finding["category"] for finding in detected_findings))
     if detected:
         blockers.append("仍包含直接标识：" + "、".join(detected))
-    for original in [entry["original_value"] for entry in case.get("mapping_entries", [])] or case.get("mapping", {}):
+    registered = [name for entry in case.get("mapping_entries", []) for name in _mapping_names(entry)]
+    for original in registered or case.get("mapping", {}):
         if original and original in emitted:
             blockers.append("仍包含未替换的登记主体")
             break
@@ -84,8 +195,14 @@ def assess(case, pack, facts, decisions, docs, ledger, transport, provider_resul
         blockers.append("事实尚未确认或来源版本已更新")
     if any(d["status"] != "ready" or d.get("ir", {}).get("needs_review") for d in docs):
         blockers.append("材料解析或 OCR 复核未完成")
-    if "唯一" in emitted or "公开获奖" in emitted:
-        blockers.append("组合线索风险：唯一岗位或公开事件仍保留")
+    terms = [term for term in (pack or {}).get("forbidden_terms") or [] if term]
+    matched = [term for term in terms if term in emitted]
+    if matched:
+        blockers.append(_combination_blocker(matched))
+    limit_chars, limit_entries = resolve_disclosure_budget(budget_chars, budget_entries)
+    used_entries, used_chars = ledger_usage(ledger)
+    if used_chars + len(emitted) > limit_chars or used_entries >= limit_entries:
+        blockers.append("跨轮外发已超过工程预算（字符或条数）")
     if ledger:
         findings.append(f"已纳入 {len(ledger)} 条已发送或结果不明的历史披露；须按冻结协议重新运行跨轮攻击。")
     demo = case["mode"] == "demo"
@@ -156,3 +273,69 @@ def check_claims(raw, task, facts):
     if not results:
         raise ValueError("模型未返回任何事实陈述")
     return results
+
+
+GAP_CODES = {"missing_field", "insufficient_support", "ambiguous_reference", "other"}
+MAX_GAPS = 32
+MAX_GAP_DETAIL = 500
+MAX_GAP_FACTS = 20
+
+
+def check_cloud_feedback(raw, task, claims):
+    issues = []
+    sent = [decision["fact_id"] for decision in task.get("decisions") or [] if decision.get("output")]
+    sent_set = set(sent)
+    cited = {source_id for claim in claims for source_id in claim.get("source_ids") or []}
+    unused = [fact_id for fact_id in sent if fact_id not in cited]
+    cloud_unused = raw.get("unused_fact_ids") if isinstance(raw, dict) else None
+    if cloud_unused is not None:
+        if not isinstance(cloud_unused, list) or any(not isinstance(item, str) for item in cloud_unused):
+            issues.append("云端 unused_fact_ids 格式无效")
+        else:
+            if any(item not in sent_set for item in cloud_unused):
+                issues.append("云端 unused_fact_ids 包含未外发事实")
+            if set(cloud_unused) != set(unused):
+                issues.append("云端 unused_fact_ids 与边侧计算不一致")
+    raw_gaps = raw.get("gaps") if isinstance(raw, dict) else None
+    if raw_gaps is None:
+        raw_gaps = []
+    gaps = []
+    if not isinstance(raw_gaps, list):
+        issues.append("云端 gaps 格式无效")
+        raw_gaps = []
+    elif len(raw_gaps) > MAX_GAPS:
+        issues.append("云端 gaps 超过 32 条上限")
+        raw_gaps = raw_gaps[:MAX_GAPS]
+    support_all = "\n".join(decision["output"] for decision in task.get("decisions") or [] if decision.get("output"))
+    for item in raw_gaps:
+        if not isinstance(item, dict):
+            issues.append("云端 gap 条目格式无效")
+            continue
+        code = item.get("code")
+        detail = item.get("detail")
+        fact_ids = item.get("fact_ids", [])
+        if code not in GAP_CODES:
+            issues.append("云端 gap 使用了未声明的 code")
+            continue
+        if not isinstance(detail, str) or not detail.strip():
+            issues.append("云端 gap 缺少有效 detail")
+            continue
+        if len(detail) > MAX_GAP_DETAIL:
+            issues.append("云端 gap detail 超出长度上限")
+            continue
+        if fact_ids is None:
+            fact_ids = []
+        if not isinstance(fact_ids, list) or any(not isinstance(fact_id, str) for fact_id in fact_ids):
+            issues.append("云端 gap fact_ids 格式无效")
+            continue
+        if len(fact_ids) > MAX_GAP_FACTS:
+            issues.append("云端 gap fact_ids 超过上限")
+            continue
+        if any(fact_id not in sent_set for fact_id in fact_ids):
+            issues.append("云端 gap 引用了未外发事实")
+            continue
+        if any(finding["value"] not in support_all for finding in detect_text(detail)):
+            issues.append("云端 gap 包含未在外发事实中出现的直接标识")
+            continue
+        gaps.append({"code": code, "detail": detail, "fact_ids": fact_ids})
+    return {"unused_fact_ids": unused, "gaps": gaps, "feedback_issues": list(dict.fromkeys(issues))}

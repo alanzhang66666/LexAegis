@@ -1,0 +1,269 @@
+import json
+
+import httpx
+from fastapi.testclient import TestClient
+
+from lexaegis import launcher
+from lexaegis.cloud import (
+    DEFAULT_CLOUD_HOSTS,
+    DualSlotProvider,
+    allowed_cloud_hosts,
+    approved_dual_slot,
+    assemble_chat_completion,
+    standby_host,
+    wire_contract_error,
+)
+from lexaegis.gateway import create_gateway
+from lexaegis.worker import process_one
+from .conftest import approve, demo_task
+from .test_workflow import task_state
+
+
+def _claims(text="[[LEX:P0001]]", source="f1"):
+    return {"claims": [{"text": text, "source_ids": [source]}]}
+
+
+def _sse(payload, usage=None, reasoning=None):
+    content = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False)
+    lines = []
+    if reasoning:
+        lines.append("data: " + json.dumps({"choices": [{"delta": {"reasoning_content": reasoning}}]}) + "\n")
+    for index in range(0, len(content), 8):
+        lines.append("data: " + json.dumps({"choices": [{"delta": {"content": content[index:index + 8]}}]}) + "\n")
+    if usage:
+        lines.append("data: " + json.dumps({"choices": [], "usage": usage}) + "\n")
+    lines.append("data: [DONE]\n")
+    return httpx.Response(200, content="".join(lines), headers={"content-type": "text/event-stream"})
+
+
+class ScriptedTransport(httpx.BaseTransport):
+    def __init__(self, scripts):
+        self.scripts = list(scripts)
+        self.calls = []
+        self.bodies = []
+
+    def handle_request(self, request):
+        self.calls.append(str(request.url))
+        self.bodies.append(json.loads(request.content.decode()) if request.content else {})
+        script = self.scripts.pop(0)
+        if isinstance(script, Exception):
+            raise script
+        if callable(script):
+            return script(request)
+        return script
+
+
+class InterruptAfterContent:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    status_code = 200
+    headers = {"content-type": "text/event-stream"}
+
+    def iter_lines(self):
+        yield 'data: {"choices":[{"delta":{"content":"{\\"claims\\":"}}]}'
+        raise httpx.ReadError("cut")
+
+
+class InterruptClient:
+    def stream(self, *args, **kwargs):
+        return InterruptAfterContent()
+
+
+def _provider(*scripts, primary="primary-key", standby="standby-key"):
+    transport = ScriptedTransport(scripts)
+    client = httpx.Client(transport=transport, timeout=5, follow_redirects=False, trust_env=False)
+    return DualSlotProvider(primary, standby, client=client), transport
+
+
+def _send_cloud(env, provider, label):
+    gateway_app = create_gateway(env["temp"] / label, secret="unit-test-secret-32-characters-long", provider=provider)
+    gateway = TestClient(gateway_app)
+    env["client"].put("/api/v1/settings", json={
+        "cloud_url": "https://api.openai.com/v1", "cloud_model": "test-model",
+        "edge_url": "http://localhost:11434/v1", "edge_model": "",
+    })
+    case, task = demo_task(env, transport="cloud")
+    task = approve(env, task)
+    env["client"].post(f"/api/v1/tasks/{task['id']}/send")
+    process_one(env["app"].state.store, env["root"], gateway)
+    with gateway_app.state.store.read() as repo:
+        record = repo.get(task["request"]["request_id"], "send")
+    return case, task, record
+
+
+def test_default_allowlist_includes_dual_hosts():
+    assert {"api.deepseek.com", "dashscope.aliyuncs.com"} <= allowed_cloud_hosts()
+    assert "api.deepseek.com" in DEFAULT_CLOUD_HOSTS
+
+
+def test_standby_accepts_allowlisted_maas_host(monkeypatch):
+    host = "workspace.cn-beijing.maas.aliyuncs.com"
+    monkeypatch.setenv("LEX_CLOUD_STANDBY_HOST", host)
+    monkeypatch.setenv("LEX_CLOUD_ALLOWED_HOSTS", f"api.deepseek.com,{host}")
+    assert standby_host() == host
+    assert approved_dual_slot()["standby"]["target"] == f"https://{host}/compatible-mode/v1/chat/completions"
+
+
+def test_standby_rejects_unlisted_or_non_maas_host(monkeypatch):
+    monkeypatch.setenv("LEX_CLOUD_STANDBY_HOST", "evil.example.com")
+    monkeypatch.setenv("LEX_CLOUD_ALLOWED_HOSTS", "api.deepseek.com,evil.example.com")
+    assert standby_host() == "dashscope.aliyuncs.com"
+    monkeypatch.setenv("LEX_CLOUD_STANDBY_HOST", "workspace.cn-beijing.maas.aliyuncs.com")
+    monkeypatch.delenv("LEX_CLOUD_ALLOWED_HOSTS", raising=False)
+    assert standby_host() == "dashscope.aliyuncs.com"
+
+
+def test_wire_allows_field_but_rejects_local_keys():
+    wire = {"contract_version": 2, "task": {"id": "fact_summary", "version": "2.0"},
+            "facts": [{"id": "f1", "text": "[[LEX:P0001]]", "field": "entity"}]}
+    assert wire_contract_error(wire) is None
+    leaked = {"contract_version": 2, "task": {"id": "fact_summary", "version": "2.0"},
+              "facts": [{"id": "f1", "text": "x", "mapping": {"a": "b"}}]}
+    assert wire_contract_error(leaked)
+
+
+def test_pre_generation_401_failsover_to_standby_and_completes():
+    claims = _claims()
+    provider, transport = _provider(httpx.Response(401, json={"error": "no"}), _sse(claims))
+    outcome = provider.dispatch("https://api.deepseek.com/v1/chat/completions", {
+        "model": "deepseek-v4-flash", "messages": [{"role": "user", "content": "{}"}],
+    }, dual_slot=provider_slot())
+    assert outcome.status == "complete"
+    assert outcome.selected_slot == "standby"
+    assert outcome.failover_reason == "unauthorized"
+    assert outcome.result == claims
+    assert "deepseek" in transport.calls[0] and "dashscope" in transport.calls[1]
+    assert transport.bodies[0].get("thinking") == {"type": "disabled"}
+    assert "enable_thinking" not in transport.bodies[1]
+
+
+def test_connect_failure_failsover_before_generation():
+    claims = _claims()
+    provider, transport = _provider(httpx.ConnectError("refused"), _sse(claims))
+    outcome = provider.dispatch("https://api.deepseek.com/v1/chat/completions", {"model": "deepseek-v4-flash", "messages": []})
+    assert outcome.status == "complete" and outcome.selected_slot == "standby"
+    assert len(transport.calls) == 2
+
+
+def test_generation_started_does_not_call_standby():
+    provider, transport = _provider(_sse("{", reasoning="scratch"), _sse(_claims()))
+    outcome = provider.dispatch("https://api.deepseek.com/v1/chat/completions", {"model": "deepseek-v4-flash", "messages": []})
+    assert outcome.status == "unknown"
+    assert outcome.generation_started is True
+    assert outcome.selected_slot == "primary"
+    assert len(transport.calls) == 1
+
+
+def test_invalid_json_does_not_failover():
+    provider, transport = _provider(_sse("{not-json"), _sse(_claims()))
+    outcome = provider.dispatch("https://api.deepseek.com/v1/chat/completions", {"model": "deepseek-v4-flash", "messages": []})
+    assert outcome.status == "unknown"
+    assert outcome.generation_started is True
+    assert len(transport.calls) == 1
+
+
+def test_stream_interrupt_after_tokens_is_unknown():
+    provider = DualSlotProvider("primary-key", "standby-key", client=InterruptClient())
+    outcome = provider.dispatch("https://api.deepseek.com/v1/chat/completions", {"model": "deepseek-v4-flash", "messages": []})
+    assert outcome.status == "unknown"
+    assert outcome.generation_started is True
+    assert outcome.selected_slot == "primary"
+
+
+def test_usage_is_copied_to_outcome():
+    usage = {"prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8}
+    provider, _ = _provider(_sse(_claims(), usage=usage), standby="")
+    outcome = provider.dispatch("https://api.deepseek.com/v1/chat/completions", {"model": "deepseek-v4-flash", "messages": []})
+    assert outcome.status == "complete"
+    assert outcome.ledger_fields()["total_tokens"] == 8
+
+
+def test_assemble_does_not_keep_reasoning_content():
+    claims = _claims()
+    provider, _ = _provider(_sse(claims, reasoning="内部思考"), standby="")
+    result, started, _ = assemble_chat_completion(
+        "https://api.deepseek.com/v1/chat/completions",
+        {"model": "deepseek-v4-flash", "messages": []},
+        "primary-key",
+        client=provider._client,
+    )
+    assert started is True
+    assert result == claims
+
+
+def test_gateway_failover_completes_and_records_slot(env):
+    provider, transport = _provider(httpx.Response(401, json={"error": "no"}), None)
+
+    def standby_ok(request):
+        body = json.loads(request.content.decode())
+        facts = json.loads(body["messages"][1]["content"])["facts"]
+        return _sse({"claims": [{"text": facts[0]["text"], "source_ids": [facts[0]["id"]]}]})
+
+    transport.scripts[1] = standby_ok
+    case, task, record = _send_cloud(env, provider, "gw-failover")
+    assert record["status"] == "complete"
+    assert record["selected_slot"] == "standby"
+    assert record["failover_reason"] == "unauthorized"
+    assert record["result"]["claims"]
+    assert "mapping" not in json.dumps(record)
+    assert task_state(env, case["id"], task["id"])["status"] == "complete"
+    assert len(transport.calls) == 2
+
+
+def test_gateway_unknown_after_content_does_not_hit_standby(env):
+    provider, transport = _provider(_sse("{broken"), _sse(_claims()))
+    case, task, record = _send_cloud(env, provider, "gw-broken-json")
+    assert record["status"] == "unknown"
+    assert record["generation_started"] is True
+    assert record["selected_slot"] == "primary"
+    assert record["result"] is None
+    assert len(transport.calls) == 1
+    assert task_state(env, case["id"], task["id"])["status"] == "unknown"
+
+
+def test_mock_demo_path_unchanged(env):
+    case, task = demo_task(env)
+    task = approve(env, task)
+    assert env["client"].post(f"/api/v1/tasks/{task['id']}/send").status_code == 200
+    assert process_one(env["app"].state.store, env["root"], env["gate"])
+    finished = task_state(env, case["id"], task["id"])
+    assert finished["status"] == "complete"
+    assert finished["artifact"]["provenance"] == "simulation"
+
+
+def test_launcher_service_ports_follow_env(monkeypatch):
+    monkeypatch.setenv("LEX_API_PORT", "18765")
+    monkeypatch.setenv("LEX_GATEWAY_PORT", "18766")
+    assert launcher.service_ports() == ("18765", "18766")
+
+
+def test_align_local_gateway_url_rewrites_loopback_port_mismatch():
+    assert launcher.align_local_gateway_url("http://127.0.0.1:8766", "18766") == "http://127.0.0.1:18766"
+    assert launcher.align_local_gateway_url("http://localhost:8766", "18766") == "http://localhost:18766"
+    assert launcher.align_local_gateway_url("http://127.0.0.1:18766", "18766") == "http://127.0.0.1:18766"
+    assert launcher.align_local_gateway_url("http://[::1]:8766", "18766") == "http://[::1]:18766"
+    assert launcher.align_local_gateway_url(None, "8766") == "http://127.0.0.1:8766"
+    assert launcher.align_local_gateway_url("https://gateway.example.com:8766", "18766") == "https://gateway.example.com:8766"
+
+
+def test_launcher_strips_cloud_keys_from_api_env():
+    env = {
+        "PATH": "/bin", "LEX_GATEWAY_SECRET": "gate",
+        "LEX_CLOUD_API_KEY": "legacy", "LEX_CLOUD_PRIMARY_KEY": "primary", "LEX_CLOUD_STANDBY_KEY": "standby",
+    }
+    stripped = launcher.app_process_env(env)
+    assert stripped["LEX_GATEWAY_SECRET"] == "gate"
+    assert "LEX_CLOUD_API_KEY" not in stripped
+    assert "LEX_CLOUD_PRIMARY_KEY" not in stripped
+    assert "LEX_CLOUD_STANDBY_KEY" not in stripped
+
+
+def provider_slot():
+    return {
+        "primary": {"host": "api.deepseek.com", "target": "https://api.deepseek.com/v1/chat/completions", "model": "deepseek-v4-flash"},
+        "standby": {"host": "dashscope.aliyuncs.com", "target": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions", "model": "qwen3.8-flash"},
+    }

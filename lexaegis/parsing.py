@@ -1,6 +1,7 @@
 import importlib.util
 import hashlib
 import os
+import re
 from pathlib import Path
 from typing import Iterable, Protocol
 from .contracts import DocumentIRV2, SourceAnchor
@@ -168,6 +169,21 @@ def parse(path: Path, document_id: str, version=1, ocr_provider=_DEFAULT_PROVIDE
                 page.close()
         finally:
             pdf.close()
+    elif path.suffix.lower() == ".txt":
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError as error:
+            raise ValueError("文本文件须为 UTF-8") from error
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        chunks = [part.strip() for part in re.split(r"\n\s*\n", text) if part.strip()]
+        if not chunks:
+            chunks = [line.strip() for line in text.splitlines() if line.strip()]
+        if not chunks and text.strip():
+            chunks = [text.strip()]
+        if not chunks:
+            warnings.append("未提取到文本，文本文件为空。")
+        for index, chunk in enumerate(chunks, 1):
+            add("paragraph", chunk, locator=f"段落 {index}")
     elif path.suffix.lower() in (".png", ".jpg", ".jpeg"):
         from PIL import Image
         with Image.open(path) as source:
@@ -188,7 +204,7 @@ def parse(path: Path, document_id: str, version=1, ocr_provider=_DEFAULT_PROVIDE
                 add("scan", "", page=1, bbox=[0, 0, 1, 1], locator="第 1 页 · 扫描页")
                 warnings.append("图片需要本地 OCR，当前未配置；请人工转录。")
     else:
-        raise ValueError("仅支持 DOCX、PDF、PNG 和 JPEG")
+        raise ValueError("仅支持 DOCX、PDF、PNG、JPEG 和 TXT")
     needs_review = not blocks or any(block.kind in ("ocr", "scan") and not block.reviewed for block in blocks)
     return DocumentIRV2(document_id=document_id, version=version, blocks=blocks, material_hash=hashlib.sha256(path.read_bytes()).hexdigest(),
                         warnings=warnings, needs_review=needs_review, review_status="pending" if needs_review else "reviewed").model_dump()

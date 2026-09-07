@@ -5,7 +5,7 @@
   "version": "2.0.0-draft.1",
   "status": "draft",
   "compatible_core": ">=0.2,<2",
-  "task_ids": ["fact_summary", "timeline"],
+  "task_ids": ["fact_summary", "timeline", "evidence_inventory"],
   "fact_fields": [
     {"id": "entity", "label": "主体", "value_type": "entity", "description": "当事人或其他主体"},
     {"id": "relation", "label": "关系", "value_type": "text", "description": "劳动关系"},
@@ -26,7 +26,13 @@
     {"task_id": "timeline", "field": "event", "necessity": "uncertain", "rationale": "待法学团队确认"},
     {"task_id": "timeline", "field": "date", "necessity": "uncertain", "rationale": "待法学团队确认"},
     {"task_id": "timeline", "field": "amount", "necessity": "uncertain", "rationale": "待法学团队确认"},
-    {"task_id": "timeline", "field": "evidence", "necessity": "uncertain", "rationale": "待法学团队确认"}
+    {"task_id": "timeline", "field": "evidence", "necessity": "uncertain", "rationale": "待法学团队确认"},
+    {"task_id": "evidence_inventory", "field": "entity", "necessity": "uncertain", "rationale": "待法学团队确认"},
+    {"task_id": "evidence_inventory", "field": "relation", "necessity": "uncertain", "rationale": "待法学团队确认"},
+    {"task_id": "evidence_inventory", "field": "event", "necessity": "uncertain", "rationale": "待法学团队确认"},
+    {"task_id": "evidence_inventory", "field": "date", "necessity": "uncertain", "rationale": "待法学团队确认"},
+    {"task_id": "evidence_inventory", "field": "amount", "necessity": "uncertain", "rationale": "待法学团队确认"},
+    {"task_id": "evidence_inventory", "field": "evidence", "necessity": "uncertain", "rationale": "待法学团队确认"}
   ],
   "rules": [
     {"field": "entity", "necessity": "uncertain", "transform": "delete", "reason": "法学规则尚未审核", "forbidden": false},

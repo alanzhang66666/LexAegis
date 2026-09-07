@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "id": "mock_labor",
+  "name": "劳动争议完全合成评测集",
+  "version": "1.0.0",
+  "kind": "fully_synthetic",
+  "status": "frozen",
+  "domain_id": "labor",
+  "compatible_core": ">=0.2,<2",
+  "task_ids": [
+    "fact_summary"
+  ],
+  "seed": 20260905,
+  "generator_id": "lexaegis.mock_labor.v1",
+  "generator_version": "lexaegis.mock_labor.v1",
+  "records_hash": "90277e144e5ec4b8da80c5d74f828c8bde8396cf607461fc16da05b694e8eaa3",
+  "freeze_hash": "5d73a03f702ce89ce43dc76ae162f8433bd0d1b35f61d8fee22763f085c35fe2",
+  "record_hashes": {
+    "mock_labor_001": "3a9bff23fcc7c9ab6e33cf5705343e97181c79f96f887b6898708e35bf2eb5d8",
+    "mock_labor_002": "409ff9e9163644fb1a5e77723de475b00e980bb15eaa3843783ad75f3a31ec7a",
+    "mock_labor_003": "c07b803420a45842fe885a3118dcad66fd2bc303984f16beb0525f09028fac97",
+    "mock_labor_004": "df66525602afb260932aac5a1240eea01aa640266f5dfceb64729d557bf616a6",
+    "mock_labor_005": "d0c7bbc83ccc588addbf39ed16b1055ac2af350a616f5721f0625ca0deff9ef6",
+    "mock_labor_006": "8df5f8535e2a202b71b521f78762388e0eba16ec3419ce67e86a342be8ede4f0",
+    "mock_labor_007": "8722a58d7dba872d76fa49c918102654fb2a79f654da5ff5ce78a6ba3c96609d",
+    "mock_labor_008": "43d2bcf105e15571eba3cbafe2cb15674a11037fbf80b71ad559dde675c59ca5"
+  },
+  "dependency_hash": "unrecorded",
+  "split": {
+    "mock_labor_004": "development",
+    "mock_labor_007": "development",
+    "mock_labor_002": "development",
+    "mock_labor_003": "development",
+    "mock_labor_008": "development",
+    "mock_labor_006": "development",
+    "mock_labor_001": "blind",
+    "mock_labor_005": "blind"
+  },
+  "provenance": {
+    "method": "deterministic_ai_authored_template",
+    "contains_real_case_content": false,
+    "structure_source": "none"
+  },
+  "legal_annotation_status": "pending",
+  "dispatch_allowed": false,
+  "groups": [
+    "original",
+    "find_replace",
+    "consistent_pseudonym",
+    "task_minimal",
+    "ianvs_experimental"
+  ],
+  "count": 8,
+  "records_path": "records.jsonl",
+  "generation_artifact": {
+    "method": "deterministic_ai_authored_template",
+    "template_hash": "0e2fefeedc9f756332a2e52e3a5655c11c0187a2f6246bbda9c1bcba62c96f63",
+    "runtime_model_hash": "not_applicable",
+    "runtime_prompt_hash": "not_applicable"
+  },
+  "freeze_status": "frozen_technical_mock"
+}

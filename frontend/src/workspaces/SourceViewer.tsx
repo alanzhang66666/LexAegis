@@ -21,8 +21,8 @@ export function SourceViewer({ data, currentCase, caseId, busy, activeSource, bl
           onClick={event => event.stopPropagation()} title="下载原件"><Download size={14}/></a>}
       </button>)}</div>
     {currentCase.mode === "formal" && <label className="upload"><Upload size={17}/><span>
-      上传 DOCX / PDF / 图片<small>PNG/JPEG 可选本地 OCR · 最大 20 MB</small></span>
-      <input type="file" accept=".docx,.pdf,.png,.jpg,.jpeg" disabled={busy}
+      上传 DOCX / PDF / 文本 / 图片<small>TXT 按段落切块 · PNG/JPEG 可选本地 OCR · 最大 20 MB</small></span>
+      <input type="file" accept=".docx,.pdf,.txt,.png,.jpg,.jpeg" disabled={busy}
         onChange={event => {
           const file = event.target.files?.[0];
           if (file) onUpload(file);

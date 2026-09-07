@@ -11,6 +11,22 @@ from .providers import EdgeClient
 from .storage import Store
 from .util import app_dir, audit, digest, exclusive_lock, now, sign, uid
 
+EXTRACT_CHUNK_CHARS = 6000
+
+
+def chunk_extract_blocks(blocks, max_chars=EXTRACT_CHUNK_CHARS):
+    batches, current, size = [], [], 0
+    for block in blocks:
+        length = len((block or {}).get("text") or "")
+        if current and size + length > max_chars:
+            batches.append(current)
+            current, size = [], 0
+        current.append(block)
+        size += length
+    if current:
+        batches.append(current)
+    return batches
+
 
 def finish_response(repo, task, record):
     status = record["status"]
@@ -20,10 +36,11 @@ def finish_response(repo, task, record):
             validated = validate_cloud_result(task["type"], record["result"], task, task["fact_snapshot"])
             case = service.get_case(repo, task["case_id"])
             provenance = "simulation" if task["transport"] == "mock" else "cloud"
-            if isinstance(validated, list):
+            claims = validated.get("claims") if isinstance(validated, dict) else validated
+            if isinstance(claims, list):
                 all_anchors = service.anchor_index(repo, task["case_id"], current_only=False)
                 current_anchors = service.anchor_index(repo, task["case_id"], current_only=True)
-                for claim in validated:
+                for claim in claims:
                     display = claim["text"]
                     entries = case.get("mapping_entries", [])
                     if entries:
@@ -38,10 +55,18 @@ def finish_response(repo, task, record):
                     if any(anchor_id not in current_anchors for anchor_id in anchor_ids):
                         claim["issues"].append("引用包含历史材料版本锚点，确认前须显式核对")
                         claim["status"] = "needs_review"
-                task["artifact"] = {"schema_version": 2, "claims": validated, "provenance": provenance, "confirmed": False}
+                extra = validated if isinstance(validated, dict) else {}
+                task["artifact"] = {
+                    "schema_version": 2, "claims": claims, "provenance": provenance, "confirmed": False,
+                    "unused_fact_ids": list(extra.get("unused_fact_ids") or []),
+                    "gaps": list(extra.get("gaps") or []),
+                    "feedback_issues": list(extra.get("feedback_issues") or []),
+                }
             else:
                 task["artifact"] = {"schema_version": 2, "result": validated, "provenance": provenance, "confirmed": False}
             task["status"] = "complete"
+            if isinstance(task.get("artifact"), dict) and "claims" in task["artifact"]:
+                service.seed_followups(repo, case, task)
         except ValueError as error:
             task.update(status="failed", error=str(error))
         disclosure["status"] = "sent"
@@ -118,13 +143,24 @@ def process_one(store, root, gateway_client=None, redteam_client=None):
         elif job["kind"] == "extract":
             with store.read() as repo:
                 settings = repo.get("settings")
-            facts = EdgeClient(settings["edge_url"], settings["edge_model"]).extract(job["payload"]["blocks"])
+            client = EdgeClient(settings["edge_url"], settings["edge_model"])
+            facts = []
+            for batch in chunk_extract_blocks(job["payload"]["blocks"]):
+                facts.extend(client.extract(batch))
             with store.transaction() as repo:
                 case = service.get_case(repo, job["case_id"])
                 if case["revision"] != job["payload"]["revision"]:
                     raise ValueError("提取期间材料已变化，结果未写入")
                 for fact in facts:
-                    service.save_fact(repo, case["id"], {"field": fact["field"], "value": fact["value"], "source_ids": fact["source_ids"], "confirmed": False, "model_suggestion": {"transform": fact["suggested_transform"], "reason": fact["disclosure_reason"]}}, origin="edge_model")
+                    suggestion = {"transform": fact["suggested_transform"], "reason": fact["disclosure_reason"],
+                                  "aliases": fact.get("aliases") or [], "role": fact.get("role") or "unknown",
+                                  "normalized": fact.get("normalized")}
+                    service.save_fact(repo, case["id"], {"field": fact["field"], "value": fact["value"],
+                                                         "source_ids": fact["source_ids"], "confirmed": False,
+                                                         "aliases": fact.get("aliases") or [],
+                                                         "role": fact.get("role") or "unknown",
+                                                         "normalized": fact.get("normalized"),
+                                                         "model_suggestion": suggestion}, origin="edge_model")
         elif job["kind"] == "redteam":
             with store.read() as repo:
                 task = repo.get(job["payload"]["task_id"], "task")

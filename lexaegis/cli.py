@@ -95,6 +95,8 @@ def main():
     p.add_argument("--target", type=Path, required=True)
     p.add_argument("--gateway-target", type=Path, required=True)
     commands.add_parser("start", help="启动本机 API、worker 和独立网关")
+    p = commands.add_parser("edge", help="探测或拉起本机边侧 llama-server")
+    p.add_argument("--start", action="store_true", help="端口未监听时尝试启动本机 llama-server")
     commands.add_parser("doctor", help="检查平台、目录、前端和可选能力")
     commands.add_parser("check-isolation", help="从宿主机验证 Compose 出口与卷/密钥隔离并记录结果")
     commands.add_parser("_record-isolation", help=argparse.SUPPRESS)
@@ -110,7 +112,7 @@ def main():
     p.add_argument("--delta", type=float, default=1e-5)
     p.add_argument("--mask-fraction", type=float, default=.25)
     p.add_argument("--epsilon-budget", type=float)
-    p = commands.add_parser("dataset", help="生成、冻结并运行小规模纯模拟数据对照")
+    p = commands.add_parser("dataset", help="生成、冻结、校验仓库内评测数据集")
     dataset_commands = p.add_subparsers(dest="dataset_command", required=True)
     p = dataset_commands.add_parser("generate-mock")
     p.add_argument("--output", type=Path, required=True)
@@ -125,6 +127,13 @@ def main():
     p.add_argument("--input", type=Path, required=True)
     p.add_argument("--manifest", type=Path, required=True)
     p.add_argument("--output", type=Path, required=True)
+    dataset_commands.add_parser("list", help="列出仓库 data/ 中的评测数据集")
+    dataset_commands.add_parser("validate", help="校验 data/ 哈希、合成门禁与 catalog")
+    p = dataset_commands.add_parser("show", help="显示指定数据集清单")
+    p.add_argument("dataset_id", metavar="id")
+    p = dataset_commands.add_parser("probe-edge", help="对仓库合成集跑边侧抽取工程指标，无法学分")
+    p.add_argument("--dataset-id", default="mock_labor")
+    p.add_argument("--output", type=Path)
     args = parser.parse_args()
     if args.command == "import-pack":
         store = Store(app_dir()/"app.sqlite")
@@ -140,6 +149,18 @@ def main():
     elif args.command == "start":
         from .launcher import run
         run()
+    elif args.command == "edge":
+        from .edge_runtime import edge_status, start_edge
+        if args.start:
+            try:
+                report = start_edge()
+            except (FileNotFoundError, RuntimeError, TimeoutError) as error:
+                print(json.dumps({"status": "unconfigured", "detail": str(error)}, ensure_ascii=False, indent=2))
+                raise SystemExit(2)
+        else:
+            report = edge_status()
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        raise SystemExit(0)
     elif args.command == "doctor":
         from .diagnostics import doctor_report
         report = doctor_report()
@@ -229,11 +250,29 @@ def main():
                 records, seed=args.seed, dependency_hash=dependency_hash,
             ))
             print("Technical mock freeze created:", args.output)
-        else:
+        elif args.dataset_command == "run":
             records = read_json(args.input)["records"]
             manifest = read_json(args.manifest)
             write_once(args.output, run_mock_comparison(records, manifest))
             print("Technical mock comparison report created:", args.output)
+        elif args.dataset_command == "list":
+            from .data_registry import list_datasets
+            print(json.dumps(list_datasets(), ensure_ascii=False, indent=2))
+        elif args.dataset_command == "validate":
+            from .data_registry import validate_tree
+            report = validate_tree()
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+            raise SystemExit(0 if report["ok"] else 1)
+        elif args.dataset_command == "show":
+            from .data_registry import find_dataset
+            path, _manifest = find_dataset(args.dataset_id)
+            print(path.read_text(encoding="utf-8"), end="")
+        elif args.dataset_command == "probe-edge":
+            from .edge_eval import probe_edge, write_probe_report
+            report = probe_edge(args.dataset_id)
+            path = write_probe_report(report, args.output)
+            print(json.dumps({**report, "output": str(path)}, ensure_ascii=False, indent=2))
+            raise SystemExit(0)
 
 
 if __name__ == "__main__":

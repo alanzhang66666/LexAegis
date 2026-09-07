@@ -3,11 +3,10 @@ import hmac
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urlparse
 from fastapi import FastAPI, HTTPException, Header
 from pydantic import BaseModel
+from .cloud import DualSlotProvider, cloud_endpoint_allowed, wire_contract_error
 from .contracts import ApprovedRequest
-from .providers import OpenAICompatibleProvider
 from .storage import Store
 from .util import digest, now, restrict_mode, sign
 
@@ -24,7 +23,7 @@ def create_gateway(data_dir=None, secret=None, provider=None):
     restrict_mode(root, 0o700)
     store = Store(root / "gateway.sqlite")
     secret = secret or os.getenv("LEX_GATEWAY_SECRET", "")
-    provider = provider or OpenAICompatibleProvider(os.getenv("LEX_CLOUD_API_KEY", ""))
+    provider = provider or DualSlotProvider.from_env()
     app = FastAPI(title="LexAegis Egress Gateway", docs_url=None, redoc_url=None)
     app.state.store = store
 
@@ -32,10 +31,22 @@ def create_gateway(data_dir=None, secret=None, provider=None):
         if not secret or not hmac.compare_digest(sign(value, secret), signature):
             raise HTTPException(403, "Invalid gateway signature")
 
+    def cloud_ready():
+        return bool(getattr(provider, "api_key", None) or getattr(provider, "primary_key", None))
+
     @app.get("/health")
     def health(x_gateway_signature: str = Header(default="")):
         auth({"op": "health"}, x_gateway_signature)
-        return {"status": "available" if getattr(provider, "api_key", None) else "unconfigured", "detail": "云端密钥已配置" if getattr(provider, "api_key", None) else "云端密钥未配置"}
+        primary = cloud_ready()
+        standby = bool(getattr(provider, "standby_key", ""))
+        if primary and standby:
+            detail = "云端主备密钥已配置"
+        elif primary:
+            detail = "云端密钥已配置；备用槽未配置，仅走主槽"
+        else:
+            detail = "云端密钥未配置"
+        return {"status": "available" if primary else "unconfigured", "primary": "available" if primary else "unconfigured",
+                "standby": "available" if standby else "unconfigured", "detail": detail}
 
     @app.get("/requests/{request_id}")
     def status(request_id: str, x_gateway_signature: str = Header(default="")):
@@ -65,20 +76,24 @@ def create_gateway(data_dir=None, secret=None, provider=None):
         if expired or not request["policy"].get("approved_for_dispatch"):
             raise HTTPException(403, "Approval expired or policy blocked")
         wire = request.get("wire_payload") or {}
-        if set(wire) != {"contract_version", "task", "facts"} or wire.get("contract_version") != 2:
-            raise HTTPException(403, "Invalid cloud wire contract")
-        if any(key in str(wire).lower() for key in ("mapping", "original_value", "local_text", "anchors")):
-            raise HTTPException(403, "Local-only fields are forbidden on the wire")
+        wire_error = wire_contract_error(wire)
+        if wire_error:
+            raise HTTPException(403, wire_error)
         if request["mode"] == "formal" and (request["policy"].get("risk_completion") != "complete" or request["policy"].get("demo_exception")):
             raise HTTPException(403, "Formal dispatch gates are incomplete")
         if request["mode"] == "demo" and not request["policy"].get("demo_exception"):
             raise HTTPException(403, "Missing synthetic demonstration scope")
+        dual_slot = (request.get("dependencies") or {}).get("dual_slot") if request["transport"] == "cloud" else None
         if request["transport"] == "cloud":
-            url = urlparse(request["target"])
-            allowed = {h.strip() for h in os.getenv("LEX_CLOUD_ALLOWED_HOSTS", "api.openai.com").split(",")}
-            if url.scheme != "https" or url.hostname not in allowed or url.username or url.password or url.query or url.fragment or url.port not in (None, 443) or not url.path.endswith("/chat/completions"):
+            targets = [request["target"]]
+            if isinstance(dual_slot, dict):
+                for name in ("primary", "standby"):
+                    slot = dual_slot.get(name) or {}
+                    if slot.get("target"):
+                        targets.append(slot["target"])
+            if any(not cloud_endpoint_allowed(target) for target in targets):
                 raise HTTPException(403, "Cloud endpoint is outside gateway allowlist")
-            if not getattr(provider, "api_key", None):
+            if not cloud_ready():
                 raise HTTPException(409, "Cloud credential is not configured")
         with store.transaction() as repo:
             try:
@@ -94,10 +109,19 @@ def create_gateway(data_dir=None, secret=None, provider=None):
             if request["transport"] == "mock":
                 import json
                 facts = json.loads(request["body"]["messages"][1]["content"])["facts"]
-                result = {"claims": [{"text": f["text"], "source_ids": [f["id"]]} for f in facts]}
+                result = {"claims": [{"text": f["text"], "source_ids": [f["id"]]} for f in facts],
+                          "unused_fact_ids": [], "gaps": []}
+                record.update(status="complete", result=result)
+            elif hasattr(provider, "dispatch"):
+                outcome = provider.dispatch(request["target"], request["body"], dual_slot=dual_slot)
+                record.update(outcome.ledger_fields())
+                if outcome.status == "complete":
+                    record.update(status="complete", result=outcome.result)
+                else:
+                    record.update(status="unknown", error="调用后结果不明；禁止自动重发，请核对服务商记录")
             else:
                 result = provider.send(request["target"], request["body"])
-            record.update(status="complete", result=result)
+                record.update(status="complete", result=result)
         except Exception:
             # Never log request contents, keys, or provider error bodies.
             record.update(status="unknown", error="调用后结果不明；禁止自动重发，请核对服务商记录")

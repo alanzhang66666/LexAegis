@@ -6,7 +6,9 @@ remain unlabelled until the legal study protocol is approved.
 """
 from __future__ import annotations
 
+import json
 import random
+from pathlib import Path
 
 from .experiments import run_ianvs_profile
 from .util import digest
@@ -195,6 +197,24 @@ def freeze_mock_corpus(records: list[dict], *, seed: int = 20260905,
         "freeze_status": "frozen_technical_mock",
     }
     return {**core, "freeze_hash": digest(core)}
+
+
+def write_records_jsonl(path: Path, records: list[dict]) -> None:
+    """Write records as JSONL; refuse to overwrite an existing file."""
+    ordered = sorted(records, key=lambda item: item["id"])
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("x", encoding="utf-8") as stream:
+        for record in ordered:
+            stream.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+
+
+def read_records_jsonl(path: Path) -> list[dict]:
+    records = []
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            records.append(json.loads(line))
+    return records
 
 
 def _replace_identifiers(text: str, record: dict, replacements: dict[str, str]) -> str:

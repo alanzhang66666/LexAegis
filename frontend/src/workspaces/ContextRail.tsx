@@ -18,6 +18,7 @@ export function ContextRail({ currentCase, task, caseId, audit, busy, onClose, o
       <dt>规则版本</dt><dd>{task?.pack_id || "尚未绑定"}</dd>
       <dt>调用方式</dt><dd>{task ? task.transport === "mock" ? "模拟调用（不访问云端）" :
         task.transport === "local" ? "本地确定性" : "云端大模型 API" : "待创建任务"}</dd>
+      <dt>回写待办</dt><dd>{(currentCase.followups || []).filter((item: Obj) => item.status === "open").length} 项未处理</dd>
     </dl>
     {currentCase.mode === "demo" && <button className="secondary full" disabled={busy} onClick={onStartCloud}>
       <ExternalLink size={14}/>新建真实 API 演示任务</button>}

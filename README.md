@@ -4,7 +4,7 @@
 
 **当前版本：0.2.0。** 工作台、V2 契约、稳定 wire token、门禁与跨平台 CLI 已进入代码。法学规则尚未发布、真实攻击与隔离尚未验收，因此**正式案件的外发保持阻断**。演示只接受内置合成材料。
 
-文档地图见 [docs/README.md](docs/README.md)。架构与门禁见 [架构说明](docs/ARCHITECTURE.md)。
+文档地图见 [docs/README.md](docs/README.md)。架构与门禁见 [架构说明](docs/ARCHITECTURE.md)。评测语料见 [data/README.md](data/README.md)。边侧声明见 [models/catalog/README.md](models/catalog/README.md)。
 
 ## 快速启动
 
@@ -39,23 +39,36 @@ lexaegis start
 
 若激活脚本被拦截：`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`。端口占用或文件锁失败时，先结束旧进程，见 [部署说明](docs/DEPLOY.md)。
 
-打开工作台后输入终端中的本地访问口令。`Ctrl+C` 停止三个服务。不配置模型即可体验三个固定合成案例：
+打开工作台后输入终端中的本地访问口令。`Ctrl+C` 停止三个服务。不配置模型、不下边侧权重，即可体验三个固定合成案例：
 
 1. 生成披露方案。
 2. 检验风险并查看完整请求。四类攻击显示“未运行”不得当作正式通过。
 3. 批准后执行模拟调用（模拟器组装已披露事实，不声称模型生成）。
 4. 逐项回链并确认最终结果。
 
-「组合线索风险」和「主动停止」默认阻断审批。正式案件可上传 `examples/` 下合成 DOCX/PDF，体验解析与正式外发阻断。
+「组合线索风险」和「主动停止」默认阻断审批。正式案件可上传 `examples/` 下合成 DOCX/PDF，或 UTF-8 文本，体验解析与正式外发阻断。边侧未监听时 `lexaegis start` 会提示，或运行 `lexaegis edge --start`。
+
+## 评测语料、边侧与云端
+
+| 项 | 现状 |
+| --- | --- |
+| `data/` | 评测语料可作为仓库资产，与运行期 `.data/` 分开。当前 `data/mock_labor_v1` 为 8 条完全合成劳动争议记录。`lexaegis dataset list \| validate \| show \| probe-edge`；`generate-mock \| freeze \| run` 仍写到指定路径。`probe-edge` 只记工程指标，无法学分。`dispatch_allowed` 恒为 false。真实案件与运行库不进 git。 |
+| 边侧 | 生产只做事实提取。推荐本机单模型 Qwen3-8B Q4_K_M 非思考（Ollama `qwen3-8b-nothink`，或 Compose `edge-small`：`--reasoning-budget 0 --jinja --ctx-size 8192`）。约 8GB 显存，按块抽取；别名进入同一映射 token。权重不入库，声明在 `models/catalog/`。演示不调边侧。 |
+| 云端双槽 | 主 DeepSeek V4 Flash（`deepseek-v4-flash`），备阿里云百炼 Qwen3.8-Flash（`qwen3.8-flash`）。流式只在网关拼完整 JSON，不进工作台。备用仅当主模型尚未开始生成时可用；一旦有 token，失败记 unknown，禁止自动换模、禁止自动重发。思考关闭。 |
+| 密钥 | 只在网关：`LEX_CLOUD_PRIMARY_KEY`（兼容旧名 `LEX_CLOUD_API_KEY`）、`LEX_CLOUD_STANDBY_KEY`。`lexaegis start` 不把云端密钥传给 API/worker。 |
+| 工作台 | 运行配置可填主/备并回显；外发目标仍走网关冻结双槽与白名单。审批展示主/备及上述故障转移说明。披露方案可显示「模型建议 · 非规则」。 |
 
 ## 配置与运维（摘要）
 
 | 主题 | 文档 |
 | --- | --- |
-| 边侧小模型、云端 API、OCR | [docs/MODELS.md](docs/MODELS.md) |
+| 边侧小模型、云端双槽、OCR | [docs/MODELS.md](docs/MODELS.md) |
+| 边侧模型声明（无权重） | [models/catalog/README.md](models/catalog/README.md) |
+| 评测语料 `data/` | [data/README.md](data/README.md)；`lexaegis dataset list \| validate \| show` |
+| 云端双槽密钥 | `.env.example`：`LEX_CLOUD_PRIMARY_KEY`（兼容 `LEX_CLOUD_API_KEY`）、`LEX_CLOUD_STANDBY_KEY`；只进网关 |
 | 数据目录、备份、Compose 隔离 | [docs/DEPLOY.md](docs/DEPLOY.md) |
 | 案由包 `packs/`、任务扩展 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
-| 模拟数据集 CLI | `lexaegis dataset generate-mock \| freeze \| run`，报告不作正式效果宣传 |
+| 模拟对照 CLI | `lexaegis dataset generate-mock \| freeze \| run`，报告不作正式效果宣传 |
 | 验证命令与本机证据 | [docs/VALIDATION.md](docs/VALIDATION.md) |
 | 来源与许可 | [docs/PROVENANCE.md](docs/PROVENANCE.md)、[NOTICE](NOTICE) |
 | 界面规范 | [docs/DESIGN.md](docs/DESIGN.md) |
@@ -66,4 +79,4 @@ python -m pytest -q
 cd frontend && pnpm build && pnpm exec playwright test
 ```
 
-本机验证为 **75** 项后端测试通过，前端构建与五视口浏览器检查通过。容器隔离与三平台远端 CI 仍待目标环境取证。仓库不分发模型权重、真实案件或效果数字。
+本机后端测试以 `python -m pytest -q` 为准（仓库现 129 项）。[VALIDATION.md](docs/VALIDATION.md) 记 2026-09-07 的 pytest、前端构建与 `desktop-1280` Playwright。容器隔离、三平台远端 CI 与真实云端 API 仍待目标环境取证。仓库不分发模型权重、真实案件或效果数字。

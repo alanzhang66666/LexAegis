@@ -24,6 +24,7 @@ test("synthetic case: disclosure, explicit approval, dispatch and source-linked 
   await page.getByRole("button", { name: "执行模拟调用" }).click();
   await page.getByRole("button", { name: "查看摘要与回链" }).click();
   await expect(page.getByText("模拟结果 · 非模型生成")).toBeVisible();
+  await expect(page.getByText("外发事实均已被引用。")).toBeVisible();
   const reviews = page.getByRole("button", { name: "已核对本项", exact: true });
   while (await reviews.count()) {
     await reviews.first().click();
@@ -33,6 +34,11 @@ test("synthetic case: disclosure, explicit approval, dispatch and source-linked 
   await expect(
     page.getByRole("button", { name: "结果已确认", exact: true }),
   ).toBeDisabled();
+  if (!(await page.getByText("回写待办").isVisible())) {
+    await page.getByRole("button", { name: "依据与留痕" }).click();
+  }
+  await expect(page.getByText("回写待办")).toBeVisible();
+  await expect(page.getByText("0 项未处理")).toBeVisible();
   await page.getByRole("button", { name: "回到原文" }).first().click();
   await expect(page.locator(".source-text")).toContainText("林澄");
   await page.evaluate(() => window.scrollTo(0, 0));
@@ -40,6 +46,16 @@ test("synthetic case: disclosure, explicit approval, dispatch and source-linked 
     path: "../.data/acceptance-result.png",
     fullPage: true,
   });
+});
+
+test("restoration empty state before dispatch", async ({ page }) => {
+  await page.getByRole("button", { name: /01 完整披露流程/ }).click();
+  await expect(page.getByRole("heading", { name: "事实与证据" })).toBeVisible();
+  await page.getByRole("button", { name: "生成披露方案", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "逐项披露方案" })).toBeVisible();
+  await page.getByRole("button", { name: /04\s*摘要与回链/ }).click();
+  await expect(page.getByRole("heading", { name: "尚无摘要结果" })).toBeVisible();
+  await expect(page.getByText("完成审批和调用后，结果会在此进入来源校核。")).toBeVisible();
 });
 
 test("combination clues block approval without faking a risk pass", async ({

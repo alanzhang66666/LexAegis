@@ -4,7 +4,7 @@
   "name": "劳动争议",
   "version": "0.1.0-demo",
   "status": "demo",
-  "task_ids": ["fact_summary"],
+  "task_ids": ["fact_summary", "evidence_inventory"],
   "fact_fields": ["entity", "relation", "event", "date", "amount", "evidence"],
   "rules": [
     {"field":"entity","necessity":"conditional","transform":"pseudonymize","reason":"演示：保留主体关系，替换直接身份。"},
@@ -14,6 +14,7 @@
     {"field":"amount","necessity":"conditional","transform":"keep","reason":"演示：事实摘要中的金额需逐项核实。"},
     {"field":"evidence","necessity":"conditional","transform":"pseudonymize","reason":"演示：保留证据归属并替换已登记主体。"}
   ],
+  "forbidden_terms": ["唯一", "公开获奖"],
   "references": ["纯合成演示规则，不是经过审核的法律意见或正式规则资产。"],
   "review_record": null,
   "required_attacks": ["identity", "candidate_set", "sensitive_inference", "cross_round"]

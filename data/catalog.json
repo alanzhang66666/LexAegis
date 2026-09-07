@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "datasets": [
+    {
+      "id": "mock_labor",
+      "version": "1.0.0",
+      "kind": "fully_synthetic",
+      "status": "frozen",
+      "path": "mock_labor_v1",
+      "freeze_hash": "5d73a03f702ce89ce43dc76ae162f8433bd0d1b35f61d8fee22763f085c35fe2"
+    }
+  ]
+}

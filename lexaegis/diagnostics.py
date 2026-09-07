@@ -10,6 +10,27 @@ from .launcher import frontend_location
 from .util import app_dir
 
 
+def edge_json_probe(timeout=8) -> dict:
+    """Synthetic-block JSON probe. Does not read case material. Edge remains optional."""
+    model = os.getenv("LEX_EDGE_MODEL", "")
+    url = os.getenv("LEX_EDGE_URL", "http://127.0.0.1:8080/v1")
+    if not model:
+        return {"ok": True, "status": "unconfigured", "detail": "边侧未配置，跳过 JSON 探测"}
+    try:
+        from .providers import EdgeClient
+        client = EdgeClient(url, model)
+        health = client.health()
+        if health.get("status") != "available":
+            return {"ok": True, "status": "unconfigured", "detail": health.get("detail") or "边侧服务未启动，跳过 JSON 探测"}
+        facts = client.extract(
+            [{"id": "probe:synth:b1", "text": "合成探测：劳动者甲主张工资。"}],
+            timeout=timeout,
+        )
+        return {"ok": True, "status": "available", "detail": f"合成块 JSON 探测通过（{len(facts)} 条）"}
+    except Exception:
+        return {"ok": False, "status": "failed", "detail": "边侧 JSON 探测失败；边侧仍为可选能力"}
+
+
 def doctor_report() -> dict:
     root = app_dir()
     checks = {
@@ -19,8 +40,10 @@ def doctor_report() -> dict:
         "frontend": {"ok": frontend_location() is not None, "detail": str(frontend_location() or "未构建")},
         "deployment_mode": {"ok": os.getenv("LEX_DEPLOYMENT_MODE", "native") in ("native", "isolated"), "detail": os.getenv("LEX_DEPLOYMENT_MODE", "native")},
         "edge_model": {"ok": bool(os.getenv("LEX_EDGE_MODEL")), "detail": "已配置" if os.getenv("LEX_EDGE_MODEL") else "可选，未配置时人工录入事实"},
+        "edge_json": edge_json_probe(),
     }
-    return {"ok": all(item["ok"] for key, item in checks.items() if key != "edge_model"), "checks": checks}
+    optional = {"edge_model", "edge_json"}
+    return {"ok": all(item["ok"] for key, item in checks.items() if key not in optional), "checks": checks}
 
 
 def isolation_report(timeout=.4) -> dict:

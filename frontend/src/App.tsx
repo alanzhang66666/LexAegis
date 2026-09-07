@@ -38,6 +38,12 @@ const labels: Record<string, string> = {
   date: "日期",
   amount: "金额",
   evidence: "证据",
+  fact_summary: "事实摘要",
+  timeline: "时间线",
+  evidence_inventory: "证据整理",
+  unused_fact: "未使用事实",
+  gap: "云端缺口",
+  feedback_issue: "回写问题",
   keep: "保留",
   pseudonymize: "假名化",
   generalize: "泛化",
@@ -163,6 +169,7 @@ export default function App() {
   };
   const task =
     data?.tasks.find((t: Obj) => t.id === taskId) || data?.tasks.at(-1);
+  const approveSlots = approvalSlots(task);
   const blocks: Obj[] =
     data?.documents.flatMap((d: Obj) => d.ir?.blocks || []) || [];
   const activeSource = source || blocks[0] || null;
@@ -235,8 +242,19 @@ export default function App() {
     run(async () => {
       const t = await api(`/cases/${caseId}/tasks`, "POST", { transport, task_type: taskType });
       setTaskId(t.id);
-      setTab(taskType === "timeline" ? "result" : "disclosure");
-    }, taskType === "timeline" ? "本地时间线已生成，未发生外发。" : "披露方案已生成，请逐项核对。");
+      setTab(taskType === "timeline" || taskType === "evidence_inventory" ? "result" : "disclosure");
+    }, taskType === "timeline" ? "本地时间线已生成，未发生外发。"
+      : taskType === "evidence_inventory" ? "本地证据清单已生成，未发生外发。"
+      : "披露方案已生成，请逐项核对。");
+  const startFollowupTask = () =>
+    run(async () => {
+      const t = await api(`/cases/${caseId}/followups/task`, "POST", {
+        transport: currentCase?.mode === "demo" ? "mock" : "cloud",
+        task_type: "fact_summary",
+      });
+      setTaskId(t.id);
+      setTab("disclosure");
+    }, "已根据未使用事实创建后续披露，请逐项核对。");
   const editDecision = (d: Obj, updates: Obj) =>
     run(() =>
       api(`/tasks/${task.id}/decisions/${d.fact_id}`, "PATCH", {
@@ -696,7 +714,7 @@ export default function App() {
                         ? "逐项披露方案"
                         : tab === "risk"
                           ? "风险检验与审批"
-                          : "事实摘要"}
+                          : task ? txt(task.type) : "结果"}
                   </h3>
                   {task && tab !== "facts" && (
                     <Tag
@@ -719,6 +737,7 @@ export default function App() {
                   onOpen={openFact} onLocate={locate}
                   onDelete={(fact) => { setForm(fact); setModal("deleteFact"); }}
                   onTimeline={() => startTask("local", "timeline")}
+                  onEvidence={() => startTask("local", "evidence_inventory")}
                   onSummary={() => startTask(currentCase.mode === "demo" ? "mock" : "cloud")}/>}
 
                 {tab !== "facts" && !task && (
@@ -776,7 +795,10 @@ export default function App() {
                     )}
 
                     {tab === "result" && (
-                      <RestorationWorkspace task={task} busy={busy} locate={locate} onAction={taskAction}/>
+                      <RestorationWorkspace task={task} currentCase={currentCase} busy={busy} locate={locate}
+                        onAction={taskAction}
+                        onDismissFollowup={(id) => run(() => api(`/cases/${caseId}/followups/${id}/dismiss`, "POST"))}
+                        onFollowupTask={startFollowupTask}/>
                     )}
                   </>
                 )}
@@ -828,7 +850,7 @@ export default function App() {
                       {txt(cap?.[key]?.status || "unconfigured")}
                     </Tag>
                   </div>
-                  <p>{cap?.[key]?.detail || "正在检查配置"}</p>
+                  <p>{capabilityDetail(key, cap?.[key])}</p>
                 </div>
               ))}
             </div>
@@ -1060,9 +1082,17 @@ export default function App() {
                   请确认已阅读请求正文、目标服务、信息保留依据和残余风险。固定合成演示不替代正式冻结攻击与法学审核。
                 </p>
                 <div className="approval-summary">
-                  <b>{task.request.body.model}</b>
-                  <span>{task.request.target}</span>
-                  <code>{task.request_hash}</code>
+                  <b>主模型 · {approveSlots.primary.model || "未提供"}</b>
+                  <span>{approveSlots.primary.target || "目标未提供"}</span>
+                  <b>备用模型 · {approveSlots.standby.model || "未提供"}</b>
+                  <span>{approveSlots.standby.target || "目标未提供"}</span>
+                  <span>
+                    备用仅在主模型尚未开始生成时使用；生成开始后失败不会自动换模型。
+                  </span>
+                  {approveSlots.prompt_hash && (
+                    <code>{approveSlots.prompt_hash}</code>
+                  )}
+                  <code>{task?.request_hash}</code>
                 </div>
                 <button
                   className="primary"
@@ -1105,6 +1135,118 @@ export default function App() {
   );
 }
 
+function asSlot(raw: any, fallback: Obj = {}) {
+  const slot = raw && typeof raw === "object" ? raw : {};
+  return {
+    url: String(slot.url || fallback.url || ""),
+    model: String(slot.model || fallback.model || ""),
+    provider_id: slot.provider_id || fallback.provider_id || "",
+  };
+}
+
+function settingsPayload(v: Obj) {
+  const primary = {
+    url: v.cloud_url,
+    model: v.cloud_model,
+    provider_id: v.provider_id || null,
+  };
+  return {
+    cloud_url: primary.url,
+    cloud_model: primary.model,
+    provider_id: primary.provider_id,
+    cloud_primary: primary,
+    cloud_standby: {
+      url: v.standby_url,
+      model: v.standby_model,
+      provider_id: v.standby_provider_id || null,
+    },
+    edge_url: v.edge_url,
+    edge_model: v.edge_model,
+    disclosure_budget_chars: Number(v.disclosure_budget_chars || 50000),
+    disclosure_budget_entries: Number(v.disclosure_budget_entries || 20),
+    deployment_mode: v.deployment_mode,
+    isolation_verified: Boolean(v.isolation_verified),
+  };
+}
+
+function capabilityDetail(key: string, item: Obj | undefined) {
+  const detail = item?.detail || "正在检查配置";
+  if (key !== "cloud") return detail;
+  return detail.includes("双槽")
+    ? detail
+    : `${detail} 界面可配置云端双槽，不代表已完成真实外发验证。`;
+}
+
+function approvalSlots(task: Obj | undefined) {
+  const request = task?.request || {};
+  const body = request.body || {};
+  const deps = task?.dependencies || request.dependencies || {};
+  const dual = request.dual_slot || task?.dual_slot || deps.dual_slot;
+  return {
+    primary: {
+      model: dual?.primary?.model || deps.primary_model || body.model || "",
+      target: dual?.primary?.target || request.target || "",
+    },
+    standby: {
+      model: dual?.standby?.model || deps.standby_model || "",
+      target: dual?.standby?.target || "",
+    },
+    prompt_hash: deps.prompt_hash || request.prompt_hash || "",
+  };
+}
+
+function CloudSlotFields({
+  title,
+  url,
+  model,
+  providerId,
+  providers,
+  onUrl,
+  onModel,
+  onProvider,
+}: {
+  title: string;
+  url: string;
+  model: string;
+  providerId: string;
+  providers: Obj[];
+  onUrl: (value: string) => void;
+  onModel: (value: string) => void;
+  onProvider: (value: string | null) => void;
+}) {
+  return (
+    <div className="settings-slot">
+      <h3>{title}</h3>
+      <label>
+        API 根地址
+        <input value={url} onChange={(e) => onUrl(e.target.value)} />
+      </label>
+      <label>
+        模型名称
+        <input
+          value={model}
+          placeholder="填写服务商提供的模型标识"
+          onChange={(e) => onModel(e.target.value)}
+        />
+      </label>
+      <label>
+        经复核服务商档案
+        <select
+          value={providerId}
+          onChange={(e) => onProvider(e.target.value || null)}
+        >
+          <option value="">未选择（正式外发阻断）</option>
+          {providers.map((provider) => (
+            <option key={provider.id} value={provider.id}>
+              {provider.name} · {provider.status}
+            </option>
+          ))}
+        </select>
+      </label>
+    </div>
+  );
+}
+
 function SettingsForm({
   value,
   providers,
@@ -1116,12 +1258,23 @@ function SettingsForm({
   busy: boolean;
   save: (v: Obj) => void;
 }) {
+  const primary = asSlot(value.cloud_primary, {
+    url: value.cloud_url,
+    model: value.cloud_model,
+    provider_id: value.provider_id,
+  });
+  const standby = asSlot(value.cloud_standby);
   const [v, setV] = useState({
-    cloud_url: value.cloud_url,
-    cloud_model: value.cloud_model,
-    edge_url: value.edge_url,
-    edge_model: value.edge_model,
-    provider_id: value.provider_id || "",
+    cloud_url: primary.url,
+    cloud_model: primary.model,
+    provider_id: primary.provider_id || "",
+    standby_url: standby.url,
+    standby_model: standby.model,
+    standby_provider_id: standby.provider_id || "",
+    edge_url: value.edge_url || "",
+    edge_model: value.edge_model || "",
+    disclosure_budget_chars: value.disclosure_budget_chars || 50000,
+    disclosure_budget_entries: value.disclosure_budget_entries || 20,
     deployment_mode: value.deployment_mode || "native",
     isolation_verified: Boolean(value.isolation_verified),
   });
@@ -1130,7 +1283,7 @@ function SettingsForm({
       className="settings-form"
       onSubmit={(e) => {
         e.preventDefault();
-        save(v);
+        save(settingsPayload(v));
       }}
     >
       <div>
@@ -1154,30 +1307,54 @@ function SettingsForm({
       </div>
       <div>
         <h3>云端大模型</h3>
-        <p>使用兼容 Chat Completions 的 API。</p>
-        <label>
-          API 根地址
-          <input
-            value={v.cloud_url}
-            onChange={(e) => setV({ ...v, cloud_url: e.target.value })}
-          />
-        </label>
-        <label>
-          云端模型名称
-          <input
-            value={v.cloud_model}
-            placeholder="填写服务商提供的模型标识"
-            onChange={(e) => setV({ ...v, cloud_model: e.target.value })}
-          />
-        </label>
-        <label>
-          经复核服务商档案
-          <select value={v.provider_id} onChange={(e) => setV({ ...v, provider_id: e.target.value || null })}>
-            <option value="">未选择（正式外发阻断）</option>
-            {providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name} · {provider.status}</option>)}
-          </select>
-        </label>
+        <p>
+          使用兼容 Chat Completions 的 API。密钥只在外发网关，思考关闭，流式不进入本界面。主模型同步写入兼容字段。
+        </p>
+        <CloudSlotFields
+          title="主模型"
+          url={v.cloud_url}
+          model={v.cloud_model}
+          providerId={v.provider_id || ""}
+          providers={providers}
+          onUrl={(cloud_url) => setV({ ...v, cloud_url })}
+          onModel={(cloud_model) => setV({ ...v, cloud_model })}
+          onProvider={(provider_id) => setV({ ...v, provider_id: provider_id || "" })}
+        />
+        <CloudSlotFields
+          title="备用模型"
+          url={v.standby_url}
+          model={v.standby_model}
+          providerId={v.standby_provider_id || ""}
+          providers={providers}
+          onUrl={(standby_url) => setV({ ...v, standby_url })}
+          onModel={(standby_model) => setV({ ...v, standby_model })}
+          onProvider={(standby_provider_id) =>
+            setV({ ...v, standby_provider_id: standby_provider_id || "" })
+          }
+        />
         <p>部署模式：{v.deployment_mode} · 隔离验收：{v.isolation_verified ? "已记录" : "未通过"}</p>
+        <h3>跨轮外发工程预算</h3>
+        <p>累计账本字符与条数上限，防止演示或误操作无限轮外发。不是法学必要性判断。</p>
+        <label>
+          累计外发字符
+          <input
+            type="number"
+            min={1}
+            max={2000000}
+            value={v.disclosure_budget_chars}
+            onChange={(e) => setV({ ...v, disclosure_budget_chars: Number(e.target.value) })}
+          />
+        </label>
+        <label>
+          累计外发条数
+          <input
+            type="number"
+            min={1}
+            max={1000}
+            value={v.disclosure_budget_entries}
+            onChange={(e) => setV({ ...v, disclosure_budget_entries: Number(e.target.value) })}
+          />
+        </label>
       </div>
       <button className="primary" disabled={busy}>
         保存运行配置

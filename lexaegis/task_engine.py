@@ -11,14 +11,18 @@ from .contracts import TaskDefinitionV2
 TASK_DEFINITIONS = [
     {"schema_version": 2, "id": "fact_summary", "name": "事实摘要", "version": "2.0", "status": "available", "execution_type": "approved_cloud",
      "input_schema": {"type": "object", "required": ["facts"], "properties": {"facts": {"type": "array"}}},
-     "output_schema": {"type": "object", "required": ["claims"], "properties": {"claims": {"type": "array"}}},
-     "prompt_template": "根据已批准事实生成事实摘要，每条陈述必须给出 source_ids。", "validator": "claims_v2", "transports": ["mock", "cloud"], "ui_renderer": "claims", "max_payload_chars": 50000},
+     "output_schema": {"type": "object", "required": ["claims"], "properties": {
+         "claims": {"type": "array"}, "unused_fact_ids": {}, "gaps": {}}},
+     "prompt_template": "根据已批准事实生成事实摘要，每条陈述必须给出 source_ids。同时返回 unused_fact_ids（未被任何陈述引用的外发事实 id）和 gaps（{code, detail, fact_ids}，code 仅为 missing_field、insufficient_support、ambiguous_reference、other）。不得改写身份 token，不得补充真实身份。",
+     "validator": "claims_v2", "transports": ["mock", "cloud"], "ui_renderer": "claims", "max_payload_chars": 50000},
     {"schema_version": 2, "id": "timeline", "name": "时间线", "version": "2.0", "status": "available", "execution_type": "local_deterministic",
      "input_schema": {"type": "object", "required": ["facts"], "properties": {"facts": {"type": "array"}}},
      "output_schema": {"type": "object", "required": ["events"], "properties": {"events": {"type": "array"}}},
      "validator": "timeline_v2", "transports": ["local"], "ui_renderer": "timeline", "max_payload_chars": 50000},
-    {"schema_version": 2, "id": "evidence_inventory", "name": "证据整理", "version": "2.0", "status": "unimplemented", "execution_type": "local_deterministic",
-     "input_schema": {}, "output_schema": {}, "validator": "unimplemented", "transports": ["local"], "ui_renderer": "evidence", "max_payload_chars": 50000},
+    {"schema_version": 2, "id": "evidence_inventory", "name": "证据整理", "version": "2.0", "status": "available", "execution_type": "local_deterministic",
+     "input_schema": {"type": "object", "required": ["facts"], "properties": {"facts": {"type": "array"}}},
+     "output_schema": {"type": "object", "required": ["items"], "properties": {"items": {"type": "array"}}},
+     "validator": "evidence_v2", "transports": ["local"], "ui_renderer": "evidence", "max_payload_chars": 50000},
     {"schema_version": 2, "id": "issue_extraction", "name": "争点提取", "version": "2.0", "status": "unimplemented", "execution_type": "approved_cloud",
      "input_schema": {}, "output_schema": {}, "validator": "unimplemented", "transports": ["cloud"], "ui_renderer": "issues", "max_payload_chars": 50000},
 ]
@@ -32,8 +36,22 @@ def run_timeline(payload: dict) -> dict:
     return {"events": events}
 
 
-BUILTIN_HANDLERS = {"timeline": run_timeline}
-BUILTIN_VALIDATORS = {"claims_v2", "timeline_v2", "unimplemented"}
+def run_evidence_inventory(payload: dict) -> dict:
+    items = []
+    for fact in payload["facts"]:
+        if fact.get("field") != "evidence":
+            continue
+        items.append({
+            "id": fact["id"],
+            "text": fact.get("value") or "",
+            "source_ids": list(fact.get("source_ids") or []),
+            "purpose": fact.get("disclosure_reason") or "",
+        })
+    return {"items": items}
+
+
+BUILTIN_HANDLERS = {"timeline": run_timeline, "evidence_inventory": run_evidence_inventory}
+BUILTIN_VALIDATORS = {"claims_v2", "timeline_v2", "evidence_v2", "unimplemented"}
 
 
 def _plugins() -> dict[str, Any]:
@@ -133,8 +151,9 @@ def validate_cloud_result(task_id: str, raw: dict, task: dict, facts: list[dict]
     definition = _definition(task_id)
     validate_json_schema(raw, definition["output_schema"])
     if definition["validator"] == "claims_v2":
-        from .policy import check_claims
-        return check_claims(raw, task, facts)
+        from .policy import check_claims, check_cloud_feedback
+        claims = check_claims(raw, task, facts)
+        return {"claims": claims, **check_cloud_feedback(raw, task, claims)}
     plugin = _plugins().get(task_id)
     if plugin and hasattr(plugin, "validate_output"):
         return plugin.validate_output(raw, {"task": task, "facts": facts})

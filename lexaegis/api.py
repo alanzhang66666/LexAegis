@@ -74,6 +74,11 @@ class TaskInput(Input):
     pack_id: str | None = None
 
 
+class FollowupTaskInput(Input):
+    transport: Literal["local", "mock", "cloud"] = "cloud"
+    task_type: str = "fact_summary"
+
+
 class DecisionInput(Input):
     transform: Literal["keep", "pseudonymize", "generalize", "delete"]
     necessity: Literal["required", "conditional", "unnecessary", "uncertain"]
@@ -96,14 +101,52 @@ class PackTransitionInput(Input):
     review_record: str | None = Field(default=None, max_length=5000)
 
 
+class CloudSlotInput(Input):
+    url: str = ""
+    model: str = Field(default="", max_length=200)
+    provider_id: str | None = None
+
+
 class SettingsInput(Input):
     cloud_url: str
     cloud_model: str = Field(max_length=200)
     edge_url: str
     edge_model: str = Field(max_length=200)
     provider_id: str | None = None
+    cloud_primary: CloudSlotInput | None = None
+    cloud_standby: CloudSlotInput | None = None
+    disclosure_budget_chars: int = Field(default=50000, ge=1, le=2000000)
+    disclosure_budget_entries: int = Field(default=20, ge=1, le=1000)
     deployment_mode: Literal["native", "isolated"] = "native"
     isolation_verified: bool = False
+
+
+def _slot_from(raw, url="", model="", provider_id=None):
+    data = raw if isinstance(raw, dict) else (raw.model_dump() if raw is not None else {})
+    chosen = data.get("provider_id")
+    if chosen in (None, ""):
+        chosen = provider_id
+    if chosen == "":
+        chosen = None
+    return {"url": data.get("url") or url or "", "model": data.get("model") or model or "", "provider_id": chosen}
+
+
+def public_settings(settings):
+    record = dict(settings)
+    primary = _slot_from(record.get("cloud_primary"), record.get("cloud_url", ""), record.get("cloud_model", ""), record.get("provider_id"))
+    record["cloud_primary"] = primary
+    record["cloud_standby"] = _slot_from(record.get("cloud_standby"))
+    record["cloud_url"] = primary["url"]
+    record["cloud_model"] = primary["model"]
+    record["provider_id"] = primary["provider_id"]
+    return record
+
+
+def _require_cloud_url(url):
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise service.DomainError("云端 API 需要不带凭据或查询参数的 HTTPS 地址")
+    return parsed
 
 
 class AttackBatchInput(Input):
@@ -144,7 +187,10 @@ def create_app(data_dir=None, password=None):
         if request.url.path.startswith("/api/"):
             if request.method not in ("GET", "HEAD"):
                 origin = request.headers.get("origin")
-                allowed = {"http://127.0.0.1:8765", "http://localhost:8765", "http://127.0.0.1:5173", "http://localhost:5173", "http://testserver"}
+                api_port = os.getenv("LEX_API_PORT", "8765")
+                allowed = {f"http://127.0.0.1:{api_port}", f"http://localhost:{api_port}",
+                           "http://127.0.0.1:8765", "http://localhost:8765",
+                           "http://127.0.0.1:5173", "http://localhost:5173", "http://testserver"}
                 if origin and origin not in allowed:
                     current_actor.reset(actor_token)
                     return JSONResponse({"detail": "不允许跨站请求"}, 403)
@@ -288,7 +334,7 @@ def create_app(data_dir=None, password=None):
         with store.read() as repo:
             return {"cases": repo.list("case"), "packs": repo.list("pack"), "tasks": [t.model_dump() for t in TASKS],
                     "task_definitions": task_definitions(), "providers": repo.list("provider"), "risk_protocols": repo.list("risk_protocol"),
-                    "settings": repo.get("settings")}
+                    "settings": public_settings(repo.get("settings"))}
 
     @app.get("/api/v1/capabilities")
     def capabilities():
@@ -309,7 +355,17 @@ def create_app(data_dir=None, password=None):
         return {"technical": {"status": "available", "detail": "V2 契约、确定性检测、稳定 token 和本地复原已实现"},
                 "runtime": {"status": "available" if settings.get("cloud_model") else "unconfigured", "detail": "运行配置与实现状态分开报告"},
                 "legal": {"status": "available" if published else "unconfigured", "detail": f"已发布 V2 案由包 {len(published)} 个"},
-                "validation": {"status": "unconfigured", "detail": "真实模型、真实云端和正式案件尚未验收"},
+                "validation": {
+                    "status": "unconfigured",
+                    "detail": (
+                        "本机边侧已探测"
+                        if edge.get("status") == "available"
+                        else "边侧抽取尚未在本机验收"
+                    ) + "；真实云端外发、隔离部署和正式案件仍未验收",
+                    "edge_runtime": edge.get("status"),
+                    "cloud_outbound": "not_verified",
+                    "formal_dispatch": "blocked",
+                },
                 "edge": edge, "cloud": cloud,
                 "ocr": ocr_capability(),
                 "redteam": {"status": "available" if len([p for p in protocols if p.get('status') == 'frozen']) >= 4 else "unconfigured", "detail": "未运行、错误和不确定均不算通过"},
@@ -470,8 +526,8 @@ def create_app(data_dir=None, password=None):
     async def upload(case_id: str, request: Request, file: UploadFile = File(...)):
         require_role(request, "case_operator")
         extension = Path(file.filename or "").suffix.lower()
-        if extension not in (".docx", ".pdf", ".png", ".jpg", ".jpeg"):
-            raise HTTPException(400, "仅支持 DOCX、PDF、PNG 和 JPEG")
+        if extension not in (".docx", ".pdf", ".png", ".jpg", ".jpeg", ".txt"):
+            raise HTTPException(400, "仅支持 DOCX、PDF、PNG、JPEG 和 TXT")
         with store.read() as repo:
             case = service.get_case(repo, case_id)
             if case["mode"] == "demo":
@@ -591,6 +647,18 @@ def create_app(data_dir=None, password=None):
         require_role(request, "case_operator")
         with store.transaction() as repo:
             return service.create_task(repo, case_id, body.transport, body.task_type, body.pack_id)
+
+    @app.post("/api/v1/cases/{case_id}/followups/{todo_id}/dismiss")
+    def dismiss_followup(case_id: str, todo_id: str, request: Request):
+        require_role(request, "case_operator")
+        with store.transaction() as repo:
+            return service.dismiss_followup(repo, case_id, todo_id)
+
+    @app.post("/api/v1/cases/{case_id}/followups/task")
+    def followup_task(case_id: str, body: FollowupTaskInput, request: Request):
+        require_role(request, "case_operator")
+        with store.transaction() as repo:
+            return service.create_followup_task(repo, case_id, body.transport, body.task_type)
 
     @app.patch("/api/v1/tasks/{task_id}/decisions/{fact_id}")
     def decision(task_id: str, fact_id: str, body: DecisionInput, request: Request):
@@ -745,19 +813,28 @@ def create_app(data_dir=None, password=None):
     @app.put("/api/v1/settings")
     def settings(body: SettingsInput, request: Request):
         require_role(request, "admin")
-        cloud, edge = urlparse(body.cloud_url), urlparse(body.edge_url)
+        primary = _slot_from(body.cloud_primary, body.cloud_url, body.cloud_model, body.provider_id)
+        standby = _slot_from(body.cloud_standby)
+        _require_cloud_url(primary["url"])
+        if standby["url"]:
+            _require_cloud_url(standby["url"])
+        edge = urlparse(body.edge_url)
         edge_hosts = set(os.getenv("LEX_EDGE_ALLOWED_HOSTS", "127.0.0.1,localhost,edge-model").split(","))
-        if cloud.scheme != "https" or not cloud.hostname or cloud.username or cloud.password or cloud.query or cloud.fragment:
-            raise service.DomainError("云端 API 需要不带凭据或查询参数的 HTTPS 地址")
         if edge.scheme not in ("http", "https") or edge.hostname not in edge_hosts or edge.username or edge.password or edge.query or edge.fragment:
             raise service.DomainError("边侧地址必须位于已登记的本地或可信内网主机")
         with store.transaction() as repo:
             if any(t["status"] in ("queued", "sending") for t in repo.list("task")):
                 raise service.DomainError("请等待正在发送的任务结束")
             previous = repo.get("settings")
-            result = {"id": "settings", "version": previous["version"]+1, **body.model_dump()}
-            if result.get("provider_id"):
-                repo.get(result["provider_id"], "provider")
+            result = {"id": "settings", "version": previous["version"]+1, "cloud_url": primary["url"],
+                      "cloud_model": primary["model"], "provider_id": primary["provider_id"],
+                      "cloud_primary": primary, "cloud_standby": standby,
+                      "edge_url": body.edge_url, "edge_model": body.edge_model,
+                      "disclosure_budget_chars": body.disclosure_budget_chars,
+                      "disclosure_budget_entries": body.disclosure_budget_entries}
+            for provider_id in {primary["provider_id"], standby["provider_id"]}:
+                if provider_id:
+                    repo.get(provider_id, "provider")
             # UI configuration cannot self-attest isolation; only preserve an existing isolated attestation.
             result["deployment_mode"] = previous.get("deployment_mode", os.getenv("LEX_DEPLOYMENT_MODE", "native"))
             result["isolation_verified"] = bool(previous.get("isolation_verified")) if result["deployment_mode"] == "isolated" else False

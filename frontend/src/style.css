@@ -1029,6 +1029,7 @@ nav button:not(.active):hover {
 }
 .fact-meta {
   display: flex;
+  flex-wrap: wrap;
   gap: 7px;
   align-items: center;
   margin-bottom: 10px;
@@ -1449,8 +1450,15 @@ pre {
   font-size: 11px;
   color: #7c8c6d;
 }
-.settings-form input {
+.settings-form input,
+.settings-form select {
   font-size: 12px;
+}
+.settings-slot + .settings-slot {
+  margin-top: 18px;
+}
+.settings-slot h3 {
+  font-size: 13px;
 }
 .settings-form > .primary {
   grid-column: 1/-1;

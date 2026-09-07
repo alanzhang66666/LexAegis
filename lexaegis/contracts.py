@@ -66,6 +66,7 @@ class DomainPack(Contract):
     task_ids: list[str]
     fact_fields: list[str]
     rules: list[FieldRule]
+    forbidden_terms: list[str] = Field(default_factory=list)
     references: list[str]
     review_record: str | None = None
     required_attacks: list[Literal["identity", "candidate_set", "sensitive_inference", "cross_round"]]
@@ -186,11 +187,12 @@ class RiskSignal(Contract):
 
 class MappingEntry(Contract):
     entity_id: str
-    wire_token: str = Field(pattern=r"^\[\[LEX:P\d{4,}\]\]$")
+    wire_token: str = Field(pattern=r"^\[\[LEX:[POLC]\d{4,}\]\]$")
     display_alias: str
     original_value: str
     source_ids: list[str] = Field(default_factory=list)
     mapping_version: int = Field(ge=1)
+    aliases: list[str] = Field(default_factory=list)
 
 
 class ClaimArtifactV2(Contract):
@@ -204,6 +206,25 @@ class ClaimArtifactV2(Contract):
     status: Literal["source_matched", "needs_review", "confirmed"]
     reviewer: str | None = None
     reviewed_at: str | None = None
+
+
+class CloudGap(Contract):
+    code: Literal["missing_field", "insufficient_support", "ambiguous_reference", "other"]
+    detail: str = Field(max_length=500)
+    fact_ids: list[str] = Field(default_factory=list, max_length=20)
+
+
+class CollaborationFollowup(Contract):
+    id: str
+    source_task_id: str
+    kind: Literal["unused_fact", "gap", "feedback_issue"]
+    status: Literal["open", "dismissed", "addressed"]
+    detail: str = ""
+    fact_id: str | None = None
+    fact_ids: list[str] = Field(default_factory=list)
+    field: str | None = None
+    code: str | None = None
+    next_task_id: str | None = None
 
 
 class RiskProtocol(Contract):

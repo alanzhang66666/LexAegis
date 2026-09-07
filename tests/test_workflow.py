@@ -9,6 +9,7 @@ from lexaegis.api import create_app
 from lexaegis.gateway import create_gateway
 from lexaegis.worker import process_one, recover
 from lexaegis.policy import check_claims
+from lexaegis.service import seed_followups
 from lexaegis.util import digest, sign
 from .conftest import demo_task, approve
 
@@ -35,12 +36,47 @@ def test_complete_synthetic_workflow_and_source_confirmation(env):
     exported=client.get(f"/api/v1/tasks/{task['id']}/export").json()
     assert exported["artifact"]["provenance"]=="simulation"
     assert exported["view"]=="cloud"
+    assert finished["artifact"]["unused_fact_ids"] == []
+    assert finished["artifact"]["gaps"] == []
+    assert exported["artifact"]["unused_fact_ids"] == []
+    assert client.get(f"/api/v1/cases/{case['id']}").json()["case"].get("followups") == []
     assert "local_text" not in exported["artifact"]["claims"][0]
     assert client.get(f"/api/v1/tasks/{task['id']}/export?view=local").status_code==409
     assert client.post(f"/api/v1/tasks/{task['id']}/local-export-approval",json={"actor":"复核律师","actor_role":"legal_reviewer"}).status_code==200
     local=client.get(f"/api/v1/tasks/{task['id']}/export?view=local").json()
     assert local["artifact"]["claims"][0]["local_text"]
     assert local["bundle_type"]=="local_review_bundle"
+
+
+def test_followups_from_unused_create_next_disclosure_task(env):
+    case, task = demo_task(env)
+    task = approve(env, task)
+    client = env["client"]
+    assert client.post(f"/api/v1/tasks/{task['id']}/send").status_code == 200
+    assert process_one(env["app"].state.store, env["root"], env["gate"])
+    finished = task_state(env, case["id"], task["id"])
+    unused = [decision["fact_id"] for decision in finished["decisions"] if decision.get("output")][-1:]
+    with env["app"].state.store.transaction() as repo:
+        current = repo.get(case["id"], "case")
+        stored = repo.get(task["id"], "task")
+        stored["artifact"]["unused_fact_ids"] = unused
+        stored["artifact"]["gaps"] = [{"code": "other", "detail": "模拟缺口", "fact_ids": unused}]
+        repo.put("task", stored, case["id"])
+        seed_followups(repo, current, stored)
+    detail = client.get(f"/api/v1/cases/{case['id']}").json()
+    todos = detail["case"]["followups"]
+    unused_todo = next(item for item in todos if item["kind"] == "unused_fact")
+    gap_todo = next(item for item in todos if item["kind"] == "gap")
+    assert unused_todo["status"] == "open" and gap_todo["status"] == "open"
+    assert client.post(f"/api/v1/cases/{case['id']}/followups/{gap_todo['id']}/dismiss").status_code == 200
+    created = client.post(f"/api/v1/cases/{case['id']}/followups/task", json={"transport": "mock"})
+    assert created.status_code == 200
+    next_task = created.json()
+    assert next_task["followup_fact_ids"] == unused
+    assert next_task["status"] == "draft"
+    after = client.get(f"/api/v1/cases/{case['id']}").json()["case"]["followups"]
+    assert next(item for item in after if item["id"] == unused_todo["id"])["status"] == "addressed"
+    assert next(item for item in after if item["id"] == gap_todo["id"])["status"] == "dismissed"
 
 
 @pytest.mark.parametrize("scenario",["linkage","stop"])
@@ -158,6 +194,21 @@ def formal_material(env):
     return case,document,fact
 
 
+def test_formal_txt_upload_parses_paragraphs(env):
+    client = env["client"]
+    case = client.post("/api/v1/cases", json={"name": "正式文本案件"}).json()
+    uploaded = client.post(
+        f"/api/v1/cases/{case['id']}/documents",
+        files={"file": ("note.txt", "合成劳动者主张工资12000元。\n\n附件为工资表。".encode("utf-8"), "text/plain")},
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    process_one(env["app"].state.store, env["root"], env["gate"])
+    document = client.get(f"/api/v1/cases/{case['id']}").json()["documents"][0]
+    assert document["extension"] == ".txt"
+    assert len(document["ir"]["blocks"]) == 2
+    assert "12000" in document["ir"]["blocks"][0]["text"]
+
+
 def test_formal_missing_rules_and_attacks_block(env):
     case,doc,fact=formal_material(env)
     client=env["client"]
@@ -209,6 +260,31 @@ def test_hallucinated_numbers_and_missing_sources_never_auto_verify(env):
     assert not claims[1]["anchors"]
 
 
+def test_settings_accepts_frontend_dual_slots_and_bootstraps_them(env):
+    payload={
+        "cloud_url":"https://api.openai.com/v1","cloud_model":"primary-model","provider_id":None,
+        "cloud_primary":{"url":"https://api.openai.com/v1","model":"primary-model","provider_id":None},
+        "cloud_standby":{"url":"https://dashscope.aliyuncs.com/compatible-mode/v1","model":"standby-model","provider_id":None},
+        "edge_url":"http://localhost:11434/v1","edge_model":"","deployment_mode":"native","isolation_verified":False,
+    }
+    payload["disclosure_budget_chars"]=12345
+    payload["disclosure_budget_entries"]=3
+    saved=env["client"].put("/api/v1/settings",json=payload)
+    assert saved.status_code==200,saved.text
+    body=saved.json()
+    assert body["disclosure_budget_chars"]==12345
+    assert body["disclosure_budget_entries"]==3
+    assert body["cloud_url"]==body["cloud_primary"]["url"]=="https://api.openai.com/v1"
+    assert body["cloud_model"]==body["cloud_primary"]["model"]=="primary-model"
+    assert body["cloud_standby"]["model"]=="standby-model"
+    echoed=env["client"].get("/api/v1/bootstrap").json()["settings"]
+    assert echoed["cloud_primary"]==body["cloud_primary"]
+    assert echoed["cloud_standby"]==body["cloud_standby"]
+    assert "api_key" not in json.dumps(echoed)
+    rejected=env["client"].put("/api/v1/settings",json={**payload,"cloud_primary":{**payload["cloud_primary"],"api_key":"secret"}})
+    assert rejected.status_code==422
+
+
 def test_endpoint_change_invalidates_old_task(env):
     case,task=demo_task(env)
     approve(env,task)
@@ -238,6 +314,9 @@ def test_cloud_mock_provider_and_unknown_provider_error(env):
     env["client"].put('/api/v1/settings',json={"cloud_url":"https://api.openai.com/v1","cloud_model":"test-model","edge_url":"http://localhost:11434/v1","edge_model":""})
     case,task=demo_task(env,transport="cloud")
     task=approve(env,task)
+    assert task["request"]["dependencies"]["dual_slot"]["primary"]["model"]=="deepseek-v4-flash"
+    assert task["request"]["dependencies"]["dual_slot"]["standby"]["model"]=="qwen3.8-flash"
+    assert task["request"]["target"].endswith("/chat/completions")
     env["client"].post(f"/api/v1/tasks/{task['id']}/send")
     process_one(env["app"].state.store,env["root"],gateway)
     assert provider.calls==1
