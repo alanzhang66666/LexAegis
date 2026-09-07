@@ -118,15 +118,3 @@ class EdgeClient:
             if quote and not any(quote in texts.get(source_id, "") for source_id in fact["source_ids"]):
                 raise ValueError("quote 必须是来源块文本的子串")
         return facts
-
-
-class OpenAICompatibleProvider:
-    def __init__(self, api_key):
-        from .cloud import DualSlotProvider
-        self.api_key = api_key
-        self._slots = DualSlotProvider(primary_key=api_key, standby_key="")
-
-    def send(self, target, body):
-        if not self.api_key:
-            raise ValueError("云端密钥未配置")
-        return self._slots.send(target, body)

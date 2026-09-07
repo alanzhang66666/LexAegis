@@ -24,7 +24,7 @@ LexAegis 0.2 使用模块化单体和独立外发网关。所有敏感原文留�
 | `lexaegis/storage.py` | SQLAlchemy 聚合存储、SQLite WAL、Alembic 迁移 |
 | `lexaegis/parsing.py` | DOCX、PDF、扫描识别和可选本地 OCR |
 | `lexaegis/policy.py` | 标识检测、映射、披露变换、门禁及结果检查 |
-| `lexaegis/providers.py` | 边侧适配器；云端 `OpenAICompatibleProvider` 委托网关流式装配 |
+| `lexaegis/providers.py` | 边侧 `EdgeClient`；云端调用由网关 `DualSlotProvider` 流式装配 |
 | `lexaegis/cloud.py` | DeepSeek 主 / 百炼备双槽、网关内流式拼 JSON |
 | `lexaegis/gateway.py` | 签名核验、目标白名单、独立请求账本与实际调用 |
 | `lexaegis/worker.py` | 单进程队列、解析、提取、发送与恢复 |

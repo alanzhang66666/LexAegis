@@ -79,4 +79,4 @@ python -m pytest -q
 cd frontend && pnpm build && pnpm exec playwright test
 ```
 
-本机后端测试以 `python -m pytest -q` 为准（仓库现 129 项）。[VALIDATION.md](docs/VALIDATION.md) 记 2026-09-07 的 pytest、前端构建与 `desktop-1280` Playwright。容器隔离、三平台远端 CI 与真实云端 API 仍待目标环境取证。仓库不分发模型权重、真实案件或效果数字。
+本机后端测试以 `python -m pytest -q` 为准（仓库现 137 项）。[VALIDATION.md](docs/VALIDATION.md) 记 2026-09-07 的 pytest、前端构建与 `desktop-1280` Playwright。容器隔离、三平台远端 CI 与真实云端 API 仍待目标环境取证。仓库不分发模型权重、真实案件或效果数字。

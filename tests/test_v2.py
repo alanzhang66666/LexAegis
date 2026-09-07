@@ -285,6 +285,7 @@ def test_initialize_backfills_empty_edge_model_from_env(tmp_path, monkeypatch):
     with store.transaction() as repo:
         settings = repo.get("settings")
         assert not settings.get("edge_model")
+        assert settings["edge_url"] == "http://127.0.0.1:8080/v1"
         settings["edge_model"] = "already-saved"
         settings["edge_url"] = "http://127.0.0.1:11434/v1"
         repo.put("settings", settings)

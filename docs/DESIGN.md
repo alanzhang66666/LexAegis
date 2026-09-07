@@ -6,7 +6,7 @@
 
 界面分别展示五种事实：技术是否实现、运行能力是否配置、法学规则是否发布、攻击协议是否完成、当前案件是否通过。不得用单一绿色状态或综合百分比表达“安全”或“合规”。阻断必须写明原因；未知、错误、未运行和不适用都不能显示为通过。
 
-工作台采用 `AppShell → CaseDashboard / CaseWorkbench / LegalPackCenter / ProviderCenter / BenchmarkCenter / RuntimeSettings`。案件工作台内保持原文、操作区、依据栏的逻辑分区；复原页逐条并列展示云端句、本地句、披露支持、原文锚点和问题。
+工作台采用 `AppShell → 案件列表 / 案件工作台 / LegalPackCenter / ProviderCenter / BenchmarkCenter / 运行配置`。案件工作台内保持原文、操作区、依据栏的逻辑分区；复原页逐条并列展示云端句、本地句、披露支持、原文锚点和问题。
 
 ## 视觉 Token
 

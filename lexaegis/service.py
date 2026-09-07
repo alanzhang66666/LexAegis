@@ -21,13 +21,13 @@ def initialize(store):
         try:
             settings = repo.get("settings")
             if not settings.get("edge_model") and os.getenv("LEX_EDGE_MODEL"):
-                settings["edge_url"] = os.getenv("LEX_EDGE_URL", settings.get("edge_url") or "http://127.0.0.1:11434/v1")
+                settings["edge_url"] = os.getenv("LEX_EDGE_URL", settings.get("edge_url") or "http://127.0.0.1:8080/v1")
                 settings["edge_model"] = os.getenv("LEX_EDGE_MODEL")
                 repo.put("settings", settings)
         except KeyError:
             default_cloud = "https://api.openai.com/v1"
             repo.put("settings", {"id": "settings", "version": 1, "cloud_url": default_cloud, "cloud_model": "",
-                                       "edge_url": os.getenv("LEX_EDGE_URL", "http://127.0.0.1:11434/v1"), "edge_model": os.getenv("LEX_EDGE_MODEL", ""),
+                                       "edge_url": os.getenv("LEX_EDGE_URL", "http://127.0.0.1:8080/v1"), "edge_model": os.getenv("LEX_EDGE_MODEL", ""),
                                        "provider_id": None,
                                        "cloud_primary": {"url": default_cloud, "model": "", "provider_id": None},
                                        "cloud_standby": {"url": "", "model": "", "provider_id": None},

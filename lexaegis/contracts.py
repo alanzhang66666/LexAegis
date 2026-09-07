@@ -1,18 +1,10 @@
 """Versioned contracts. Domain packs contain data, never executable expressions."""
-from enum import StrEnum
-from typing import Any, Literal, Protocol
+from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
 class Contract(BaseModel):
     model_config = ConfigDict(extra="forbid")
-
-
-class Capability(StrEnum):
-    AVAILABLE = "available"
-    UNCONFIGURED = "unconfigured"
-    UNIMPLEMENTED = "unimplemented"
-    FAILED = "failed"
 
 
 class SourceAnchor(Contract):
@@ -333,15 +325,3 @@ class TaskArtifact(Contract):
     claims: list[dict]
     provenance: Literal["simulation", "cloud"]
     confirmed: bool = False
-
-
-class EdgeInference(Protocol):
-    def extract(self, blocks: list[dict]) -> list[dict]: ...
-
-
-class RiskEvaluator(Protocol):
-    def evaluate(self, attacker_view: dict) -> dict: ...
-
-
-class CloudProvider(Protocol):
-    def send(self, target: str, body: dict) -> dict: ...

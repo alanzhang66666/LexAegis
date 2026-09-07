@@ -93,14 +93,6 @@ export function AnchorViewer({ anchors, onOpen }: { anchors: Obj[] | string[]; o
   return <button onClick={() => onOpen(anchors)} disabled={!anchors.length}><Link2 size={13} />回到原文</button>;
 }
 
-export function DecisionControl({ value, onChange, options, label }: {
-  value: string; onChange: (value: string) => void; options: { value: string; label: string }[]; label: string;
-}) {
-  return <label>{label}<select value={value} onChange={event => onChange(event.target.value)}>
-    {options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
-  </select></label>;
-}
-
 export function AuditTimeline({ events }: { events: Obj[] }) {
   return <div className="audit-list">{events.slice(-8).reverse().map(event =>
     <div key={event.id}><span className="audit-dot" /><div><b>{event.event}</b>

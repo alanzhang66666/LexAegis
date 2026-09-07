@@ -14,10 +14,6 @@ PATTERNS = {item["category"]: item["pattern"] for item in DEFAULT_PATTERNS}
 TOKEN = re.compile(r"\[\[LEX:[POLC]\d{4,}\]\]")
 
 
-def detect(text, pack=None):
-    return list(dict.fromkeys(finding["category"] for finding in detect_text(text, pack=pack)))
-
-
 def _fact_aliases(fact):
     raw = fact.get("aliases")
     if raw is None and isinstance(fact.get("model_suggestion"), dict):

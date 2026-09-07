@@ -101,10 +101,6 @@ def get_ocr_provider() -> OCRProvider | None:
     return _OCR_PROVIDERS[capability["provider"]]
 
 
-def ocr_available():
-    return get_ocr_provider() is not None
-
-
 _DEFAULT_PROVIDER = object()
 
 
