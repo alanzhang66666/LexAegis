@@ -1,16 +1,47 @@
+import { useState } from "react";
 import { Download, FileText, Upload } from "lucide-react";
 import { Empty, Tag } from "../components/ui";
 
 type Obj = Record<string, any>;
 
 export function SourceViewer({ data, currentCase, caseId, busy, activeSource, blocks,
-  onSelect, onUpload, onCorrect }: {
+  onSelect, onUpload, onCorrect, onConfirm }: {
   data: Obj; currentCase: Obj; caseId: string; busy: boolean;
   activeSource: Obj | null; blocks: Obj[];
   onSelect: (source: Obj | null) => void;
   onUpload: (file: File) => void;
   onCorrect: (source: Obj) => void;
+  onConfirm?: (source: Obj) => void;
 }) {
+  const [confirming, setConfirming] = useState(false);
+  const [confirmError, setConfirmError] = useState("");
+  const viewed = (activeSource && blocks.find((block) => block.id === activeSource.id)) || activeSource;
+  const canConfirm = Boolean(
+    currentCase.mode === "formal"
+    && viewed
+    && (viewed.kind === "ocr" || viewed.kind === "scan")
+    && String(viewed.text || "").trim()
+    && !viewed.reviewed
+  );
+  const confirmBlock = (source: Obj) => {
+    if (onConfirm) {
+      onConfirm(source);
+      return;
+    }
+    setConfirming(true);
+    setConfirmError("");
+    void fetch(`/api/v1/cases/${caseId}/documents/${source.document_id}/confirmation`, {
+      method: "PUT",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ block_id: source.id }),
+    }).then(async (response) => {
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({ detail: "确认失败" }));
+        throw new Error(typeof payload.detail === "string" ? payload.detail : "确认失败");
+      }
+    }).catch((error: Error) => setConfirmError(error.message)).finally(() => setConfirming(false));
+  };
   return <section className="source-panel">
     <div className="panel-heading"><h3><FileText size={16}/>原始材料</h3><Tag>仅边侧</Tag></div>
     <div className="document-list">{data.documents.map((document: Obj) =>
@@ -28,24 +59,26 @@ export function SourceViewer({ data, currentCase, caseId, busy, activeSource, bl
           if (file) onUpload(file);
           event.target.value = "";
         }}/></label>}
-    {activeSource ? <>
-      <div className="source-label"><span>{activeSource.locator} · v{activeSource.document_version}</span>
-        {activeSource.confidence !== null && activeSource.confidence !== undefined &&
-          <Tag tone="amber">OCR {Math.round(activeSource.confidence * 100)}%</Tag>}</div>
-      {activeSource.page && <div className="page-preview">
-        <img alt={`原文第 ${activeSource.page} 页`}
-          src={`/api/v1/cases/${caseId}/documents/${activeSource.document_id}/page/${activeSource.page}`}/>
-        {activeSource.bbox && <div className="bbox" style={{
-          left: activeSource.bbox[0] * 100 + "%", top: activeSource.bbox[1] * 100 + "%",
-          width: (activeSource.bbox[2] - activeSource.bbox[0]) * 100 + "%",
-          height: (activeSource.bbox[3] - activeSource.bbox[1]) * 100 + "%",
+    {viewed ? <>
+      <div className="source-label"><span>{viewed.locator} · v{viewed.document_version}</span>
+        {viewed.confidence !== null && viewed.confidence !== undefined &&
+          <Tag tone="amber">OCR {Math.round(viewed.confidence * 100)}%</Tag>}</div>
+      {viewed.page && <div className="page-preview">
+        <img alt={`原文第 ${viewed.page} 页`}
+          src={`/api/v1/cases/${caseId}/documents/${viewed.document_id}/page/${viewed.page}`}/>
+        {viewed.bbox && <div className="bbox" style={{
+          left: viewed.bbox[0] * 100 + "%", top: viewed.bbox[1] * 100 + "%",
+          width: (viewed.bbox[2] - viewed.bbox[0]) * 100 + "%",
+          height: (viewed.bbox[3] - viewed.bbox[1]) * 100 + "%",
         }}/>}
       </div>}
-      <div className="source-text">{activeSource.text || "未识别文本。请配置本地 OCR 或查看原图后人工转录。"}</div>
-      <div className="source-actions">{currentCase.mode === "formal" &&
-        <button className="text-button" onClick={() => onCorrect(activeSource)}>校正并生成新版本</button>}</div>
+      <div className="source-text">{viewed.text || "未识别文本。请配置本地 OCR 或查看原图后人工转录。"}</div>
+      <div className="source-actions">{currentCase.mode === "formal" && <>
+        {canConfirm && <button className="text-button" disabled={busy || confirming} onClick={() => confirmBlock(viewed)}>确认本块</button>}
+        <button className="text-button" disabled={busy} onClick={() => onCorrect(viewed)}>校正并生成新版本</button>
+      </>}{confirmError && <small className="danger-text">{confirmError}</small>}</div>
       <div className="anchor-list">{blocks.map((block, index) =>
-        <button className={activeSource.id === block.id ? "selected" : ""} key={block.id} onClick={() => onSelect(block)}>
+        <button className={viewed.id === block.id ? "selected" : ""} key={block.id} onClick={() => onSelect(block)}>
           <span>{String(index + 1).padStart(2, "0")}</span><span>{block.text.slice(0, 35) || block.locator}</span>
         </button>)}</div>
     </> : <Empty title="尚无材料" detail="上传材料后在此查看原文与来源位置。"/>}

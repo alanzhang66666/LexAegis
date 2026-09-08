@@ -53,7 +53,7 @@ lexaegis start
 | 项 | 现状 |
 | --- | --- |
 | `data/` | 评测语料可作为仓库资产，与运行期 `.data/` 分开。当前 `data/mock_labor_v1` 为 8 条完全合成劳动争议记录。`lexaegis dataset list \| validate \| show \| probe-edge`；`generate-mock \| freeze \| run` 仍写到指定路径。`probe-edge` 只记工程指标，无法学分。`dispatch_allowed` 恒为 false。真实案件与运行库不进 git。 |
-| 边侧 | 生产只做事实提取。推荐本机单模型 Qwen3-8B Q4_K_M 非思考（Ollama `qwen3-8b-nothink`，或 Compose `edge-small`：`--reasoning-budget 0 --jinja --ctx-size 8192`）。约 8GB 显存，按块抽取；别名进入同一映射 token。权重不入库，声明在 `models/catalog/`。演示不调边侧。 |
+| 边侧 | 生产只做事实提取。现行本机单模型 MiniCPM5-2B Q4_K_M 非思考（HF `openbmb/MiniCPM5-2B`，GGUF `MiniCPM5-2B-Q4_K_M.gguf`，服务别名 `edge-small`：`--reasoning-budget 0 --reasoning off --jinja --ctx-size 8192`）。约 4GB 显存，按块抽取。权重不入库，声明在 `models/catalog/`。演示不调边侧。 |
 | 云端双槽 | 主 DeepSeek V4 Flash（`deepseek-v4-flash`），备阿里云百炼 Qwen3.8-Flash（`qwen3.8-flash`）。流式只在网关拼完整 JSON，不进工作台。备用仅当主模型尚未开始生成时可用；一旦有 token，失败记 unknown，禁止自动换模、禁止自动重发。思考关闭。 |
 | 密钥 | 只在网关：`LEX_CLOUD_PRIMARY_KEY`（兼容旧名 `LEX_CLOUD_API_KEY`）、`LEX_CLOUD_STANDBY_KEY`。`lexaegis start` 不把云端密钥传给 API/worker。 |
 | 工作台 | 运行配置可填主/备并回显；外发目标仍走网关冻结双槽与白名单。审批展示主/备及上述故障转移说明。披露方案可显示「模型建议 · 非规则」。 |
@@ -79,4 +79,4 @@ python -m pytest -q
 cd frontend && pnpm build && pnpm exec playwright test
 ```
 
-本机后端测试以 `python -m pytest -q` 为准（仓库现 137 项）。[VALIDATION.md](docs/VALIDATION.md) 记 2026-09-07 的 pytest、前端构建与 `desktop-1280` Playwright。容器隔离、三平台远端 CI 与真实云端 API 仍待目标环境取证。仓库不分发模型权重、真实案件或效果数字。
+本机后端测试以 `python -m pytest -q` 为准（本轮 186 项通过、1 项跳过）。[VALIDATION.md](docs/VALIDATION.md) 记 2026-09-08 的 pytest、前端构建与 `desktop-1280` Playwright。远端 CI 未取得 / 本轮不跑。容器隔离宿主机发布、真实云端 API 仍待目标环境取证。仓库不分发模型权重、真实案件或效果数字。

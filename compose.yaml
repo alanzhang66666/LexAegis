@@ -9,7 +9,7 @@ x-runtime: &runtime
 services:
   api:
     <<: *runtime
-    ports: ["127.0.0.1:8765:8765"]
+    ports: ["127.0.0.1:${LEX_COMPOSE_API_PORT:-8765}:8765"]
     environment:
       LEX_DATA_DIR: /data
       LEX_LOCAL_PASSWORD: ${LEX_LOCAL_PASSWORD:?Set a local password}
@@ -82,7 +82,7 @@ services:
   edge-model:
     image: ${LEX_EDGE_IMAGE:-ghcr.io/ggml-org/llama.cpp:server}
     profiles: [edge]
-    command: [--model, /models/edge.gguf, --host, 0.0.0.0, --port, "8080", --alias, edge-small, --reasoning-budget, "0", --jinja, --ctx-size, "8192"]
+    command: [--model, /models/MiniCPM5-2B-Q4_K_M.gguf, --host, 0.0.0.0, --port, "8080", --alias, edge-small, --reasoning-budget, "0", --reasoning, off, --jinja, --ctx-size, "8192"]
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]

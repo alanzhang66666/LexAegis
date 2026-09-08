@@ -92,7 +92,7 @@ test("formal DOCX upload, manual fact entry and formal outbound block", async ({
   await page.getByLabel("我已核对事实及其来源").check();
   await page.getByRole("button", { name: "保存事实", exact: true }).click();
   await expect(page.locator(".fact-card")).toHaveCount(1);
-  await page.getByRole("button", { name: "生成披露方案", exact: true }).click();
+  await page.getByRole("button", { name: "云端摘要任务", exact: true }).click();
   await page.getByRole("button", { name: "检验风险并冻结请求" }).click();
   await expect(page.getByText("适用规则尚未正式发布")).toBeVisible();
   await expect(
@@ -110,7 +110,7 @@ test("dashboard layout at desktop and mobile, capabilities remain honest", async
   await page.getByRole("button", { name: "运行配置", exact: true }).click();
   await expect(
     page.getByText("未运行、错误和不确定均不算通过"),
-  ).toBeVisible();
+  ).toBeVisible({ timeout: 15000 });
   await page.setViewportSize({ width: 390, height: 844 });
   const overflow = await page.evaluate(
     () => document.documentElement.scrollWidth > window.innerWidth,

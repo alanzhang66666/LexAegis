@@ -33,8 +33,11 @@
 - 清单保持 `unfrozen_pending_annotation`
 - 入库后仍须 `dispatch_allowed=false`
 
-校验：
+校验与入库门禁：
 
 ```text
 python -m lexaegis.cli dataset validate
+python -m lexaegis.cli dataset promote-semi
 ```
+
+`promote-semi` 在 `legal_annotation_status` 不是 complete、标注警告非空、`dispatch_allowed` 不为 false、或声明含真实案件内容时拒绝，不写入 catalog。

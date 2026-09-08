@@ -45,7 +45,7 @@ def default_gguf() -> Path:
     configured = os.getenv("LEX_EDGE_GGUF")
     if configured:
         return Path(configured)
-    return repo_root() / "models" / "edge.gguf"
+    return repo_root() / "models" / "MiniCPM5-2B-Q4_K_M.gguf"
 
 
 def start_command():

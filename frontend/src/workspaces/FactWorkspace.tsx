@@ -17,17 +17,23 @@ function factMarks(fact: Obj, label: (value: string) => string) {
 }
 
 export function FactWorkspace({ facts, currentCase, busy, label, onExtract, onOpen,
-  onLocate, onDelete, onTimeline, onEvidence, onSummary }: {
+  onLocate, onDelete, onTimeline, onEvidence, onIssues, onSummary, onStartCloud }: {
   facts: Obj[]; currentCase: Obj; busy: boolean; label: (value: string) => string;
   onExtract: () => void; onOpen: (fact?: Obj) => void;
   onLocate: (ids: string[]) => void; onDelete: (fact: Obj) => void;
-  onTimeline: () => void; onEvidence: () => void; onSummary: () => void;
+  onTimeline: () => void; onEvidence: () => void; onIssues: () => void; onSummary: () => void;
+  onStartCloud?: () => void;
 }) {
   return <>
     <div className="toolbar"><p>{facts.length} 项事实 · 来源可追溯</p>
       {currentCase.mode === "formal" && <div>
         <button className="secondary compact" disabled={busy} onClick={onExtract}>边侧提取</button>
         <button className="primary compact" onClick={() => onOpen()}><Plus size={14}/>添加事实</button>
+        {onStartCloud && (
+          <button className="secondary compact" disabled={busy || !facts.length} onClick={onStartCloud}>
+            云端摘要任务
+          </button>
+        )}
       </div>}</div>
     {facts.length ? facts.map((fact, index) => {
       const marks = factMarks(fact, label);
@@ -52,6 +58,8 @@ export function FactWorkspace({ facts, currentCase, busy, label, onExtract, onOp
         onClick={onTimeline}>本地生成时间线</button>}
       <button className="secondary" disabled={busy || !facts.length} onClick={onEvidence}>
         本地整理证据清单</button>
+      <button className="secondary" disabled={busy || !facts.length} onClick={onIssues}>
+        本地生成争点候选</button>
       <button className="primary" disabled={busy || !facts.length} onClick={onSummary}>
         生成披露方案 <ArrowRight size={15}/>
       </button>

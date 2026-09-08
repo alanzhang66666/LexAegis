@@ -204,7 +204,7 @@ def assess(case, pack, facts, decisions, docs, ledger, transport, provider_resul
     demo = case["mode"] == "demo"
     if case.get("scenario") == "stop":
         blockers.append("合成示例关键证据不完整，主动停止")
-    if not demo:
+    if not demo and transport != "local":
         from .governance import validate_formal_gate
         blockers.extend(validate_formal_gate(pack, provider_results or [], attacks or [], isolation_verified))
         if set(pack.get("risk_weights", {})) != {"entity", "density", "context", "combination", "cross_round"}:

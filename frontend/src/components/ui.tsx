@@ -31,7 +31,7 @@ export function DataTable({ columns, rows, rowKey }: {
   return <div className="data-table" role="table">
     <div className="data-table-row head" style={grid} role="row">{columns.map(column => <span role="columnheader" key={column.key}>{column.label}</span>)}</div>
     {rows.map(row => <div className="data-table-row" style={grid} role="row" key={rowKey(row)}>
-      {columns.map(column => <span role="cell" key={column.key}>{column.render ? column.render(row) : String(row[column.key] ?? "—")}</span>)}
+      {columns.map(column => <span role="cell" key={column.key}>{column.render ? column.render(row) : String(row[column.key] ?? "无")}</span>)}
     </div>)}
   </div>;
 }

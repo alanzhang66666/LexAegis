@@ -8,7 +8,7 @@ LexAegis 0.2 使用模块化单体和独立外发网关。所有敏感原文留�
 - v1 包只作为 draft/demo 读取；V2 包按生命周期冻结哈希，同版本不能覆盖。
 - 正式案件外发只使用 `[[LEX:P0001]]` 线 token；mapping、原文、anchors 与 `local_text` 不进入 V2 wire payload 或网关账本。
 - 确定性 PII 坐标、重叠合并、敏感性与冻结权重风险信号；不自动作法律结论。
-- `fact_summary` 走通用任务定义；`timeline` 与 `evidence_inventory` 可本地确定性执行；争点提取明确未实现。云端回写的未使用事实与缺口写入案件 `followups`，可忽略或据此创建后续披露，不自动二次调用边侧模型。
+- `fact_summary` 走通用任务定义：正式案默认 `transport=local`，在已批准披露文本上确定性拼 claims，不调用边侧或云端模型；`mock` 仅演示；`cloud` 仍走网关双槽且正式门禁失败关闭。`timeline`、`evidence_inventory` 与 `issue_extraction` 可本地确定性执行；争点提取只按字段分组候选，非法学结论，不调用模型。云端回写的未使用事实与缺口写入案件 `followups`，可忽略或据此创建后续披露，不自动二次调用边侧模型。
 - 默认导出 `cloud_view`；含身份与锚点的 `local_review_bundle` 要求结果确认及具名二次确认。
 - 跨平台 CLI：`lexaegis start|doctor|backup|restore|check-isolation`；Compose 提供 native/isolated/edge/benchmark/redteam 拓扑。
 

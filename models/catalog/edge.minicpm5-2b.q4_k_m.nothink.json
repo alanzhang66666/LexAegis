@@ -1,0 +1,16 @@
+{
+  "id": "edge.minicpm5-2b.q4_k_m.nothink",
+  "role": "fact_extraction_only",
+  "runtime": "llamacpp",
+  "source": "https://huggingface.co/openbmb/MiniCPM5-2B",
+  "gguf": "https://huggingface.co/openbmb/MiniCPM5-2B-GGUF",
+  "filename": "MiniCPM5-2B-Q4_K_M.gguf",
+  "served_model_id": "edge-small",
+  "quant": "Q4_K_M",
+  "vram": "4GB",
+  "context": 8192,
+  "native_context": 131072,
+  "json_object": "required",
+  "thinking": "disabled",
+  "second_call_site": "forbidden"
+}

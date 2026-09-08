@@ -16,26 +16,170 @@ from .util import digest
 
 GROUPS = ("original", "find_replace", "consistent_pseudonym", "task_minimal", "ianvs_experimental")
 
+SEMI_LABOR_GENERATOR = "lexaegis.semi_labor.v1"
+SEMI_LABOR_METHOD = "structure_abstracted_recombined_template"
+SEMI_EVENTS = (
+    "拖欠工资",
+    "解除劳动合同",
+    "加班费争议",
+    "未签订书面合同",
+    "工伤待遇争议",
+    "绩效奖金争议",
+    "调岗降薪争议",
+    "社会保险争议",
+)
+SEMI_EMPLOYER_STEMS = (
+    "模拟劳动",
+    "虚构科技",
+    "演示制造",
+    "抽象物流",
+    "重组服务",
+    "合成贸易",
+    "评测餐饮",
+    "脚手架建筑",
+    "对照运输",
+    "门禁零售",
+)
+SEMI_EMPLOYER_FORMS = ("有限公司", "股份有限公司", "劳务派遣公司")
+SEMI_EVIDENCE_KINDS = ("合成工资表", "合成考勤记录", "合成劳动合同摘录", "合成社保缴费清单")
+SEMI_TEMPLATES = (
+    (
+        "{person}（电话{phone}，邮箱{email}，住址{address}）称其在{employer}任职，"
+        "并就{event}提出请求；入职约{tenure}个月后发生争议，主张金额{amount}元。"
+        "材料引用{evidence}。本文由结构抽象模板重组，不含真实案件原文。"
+    ),
+    (
+        "申请人{person}与{employer}因{event}发生争议。通讯方式为{phone}、{email}，"
+        "送达地址{address}。请求支付{amount}元，并提交{evidence}作为合成附件。"
+    ),
+    (
+        "{employer}劳动人事材料（合成重组）记载：劳动者{person}提出{event}，"
+        "金额{amount}元。联系人电话{phone}，邮箱{email}，住址{address}。"
+        "对应{evidence}。"
+    ),
+    (
+        "虚构仲裁申请书摘要：{person}请求裁决{employer}处理{event}，标的{amount}元。"
+        "申请人住所{address}，电话{phone}，邮箱{email}。证据目录含{evidence}。"
+    ),
+)
 
-def build_semisynthetic_manifest(count=100, seed=20260905):
+
+def build_semisynthetic_records(count: int = 100, seed: int = 20260905) -> list[dict]:
+    """Build 100 fictional, recombined labor-dispute scaffolds. No real case text."""
     if count != 100:
         raise ValueError("首个冻结方案固定为 100 份案例")
     rng = random.Random(seed)
     records = []
-    events = ("拖欠工资", "解除劳动合同", "加班费争议", "未签订书面合同", "工伤待遇争议")
     for index in range(count):
-        case = {"id": f"semi_labor_{index+1:03d}", "synthetic": True,
-                "structure_source": "abstract_only", "person": f"合成人物{index+1:03d}",
-                "event": events[index % len(events)], "amount": 3000 + rng.randrange(0, 18) * 500,
-                "annotation_status": "pending_double_annotation", "labels": [], "adjudication": None}
-        case["content_hash"] = digest(case)
-        records.append(case)
-    shuffled = list(records)
-    rng.shuffle(shuffled)
-    split = {record["id"]: "development" if index < 70 else "blind" for index, record in enumerate(shuffled)}
-    manifest = {"schema_version": 1, "seed": seed, "count": count, "groups": list(GROUPS), "split": split,
-                "records_hash": digest(records), "freeze_status": "unfrozen_pending_annotation"}
-    return records, manifest
+        ordinal = index + 1
+        person = f"合成人物{ordinal:03d}"
+        event = SEMI_EVENTS[index % len(SEMI_EVENTS)]
+        amount = 3000 + rng.randrange(0, 18) * 500
+        employer = (
+            f"{SEMI_EMPLOYER_STEMS[index % len(SEMI_EMPLOYER_STEMS)]}"
+            f"{SEMI_EMPLOYER_FORMS[index % len(SEMI_EMPLOYER_FORMS)]}"
+            f"（合成主体{ordinal:03d}）"
+        )
+        phone = f"1661000{ordinal:04d}"
+        email = f"semi{ordinal:03d}@example.invalid"
+        address = f"模拟市抽象区重组路{ordinal}号"
+        evidence = f"{SEMI_EVIDENCE_KINDS[index % len(SEMI_EVIDENCE_KINDS)]}{ordinal:03d}号"
+        tenure = 3 + index % 24
+        date = f"2026-{(index % 12) + 1:02d}-{(index % 27) + 1:02d}"
+        narrative = SEMI_TEMPLATES[index % len(SEMI_TEMPLATES)].format(
+            person=person, employer=employer, event=event, amount=amount,
+            phone=phone, email=email, address=address, evidence=evidence, tenure=tenure,
+        )
+        appendix = (
+            f"合成附录：争议日期记为{date}，事件类型为{event}，重组金额{amount}元。"
+            f"本条仅用于结构抽象评测，不得作为正式外发依据。"
+        )
+        record = {
+            "schema_version": 1,
+            "id": f"semi_labor_{ordinal:03d}",
+            "synthetic": True,
+            "structure_source": "abstract_only",
+            "person": person,
+            "event": event,
+            "amount": amount,
+            "annotation_status": "pending_double_annotation",
+            "labels": [],
+            "adjudication": None,
+            "provenance": {
+                "method": SEMI_LABOR_METHOD,
+                "generator_id": SEMI_LABOR_GENERATOR,
+                "seed": seed,
+                "contains_real_case_content": False,
+                "structure_source": "abstract_only",
+            },
+            "task": {"id": "fact_summary", "version": "2.0"},
+            "document": {
+                "id": f"semi_doc_{ordinal:03d}",
+                "version": 1,
+                "blocks": [
+                    {"id": "block_001", "text": narrative, "locator": "合成材料第 1 段", "page": 1},
+                    {"id": "block_002", "text": appendix, "locator": "合成材料第 2 段", "page": 1},
+                ],
+            },
+            "facts": [
+                {"id": "fact_person", "field": "entity", "text": person, "source_ids": ["block_001"]},
+                {"id": "fact_employer", "field": "entity", "text": employer, "source_ids": ["block_001"]},
+                {"id": "fact_event", "field": "event", "text": event, "source_ids": ["block_001"]},
+                {"id": "fact_date", "field": "date", "text": date, "source_ids": ["block_002"]},
+                {"id": "fact_amount", "field": "amount", "text": f"{amount}元", "source_ids": ["block_001"]},
+                {"id": "fact_evidence", "field": "evidence", "text": evidence, "source_ids": ["block_001"]},
+            ],
+            "annotations": {
+                "annotator_a": None,
+                "annotator_b": None,
+                "adjudication": None,
+                "status": "pending_legal_annotation",
+            },
+        }
+        record["content_hash"] = digest({key: value for key, value in record.items() if key != "content_hash"})
+        records.append(record)
+    return records
+
+
+def draft_semi_labor_core(records: list[dict], seed: int = 20260905) -> dict:
+    """Draft identity for the unannotated 100-case scaffold (not a technical freeze)."""
+    if len(records) != 100:
+        raise ValueError("首个冻结方案固定为 100 份案例")
+    ordered = sorted(records, key=lambda item: item["id"])
+    rng = random.Random(seed)
+    ids = [record["id"] for record in ordered]
+    rng.shuffle(ids)
+    split = {record_id: "development" if index < 70 else "blind" for index, record_id in enumerate(ids)}
+    core = {
+        "schema_version": 1,
+        "seed": seed,
+        "count": len(ordered),
+        "groups": list(GROUPS),
+        "split": split,
+        "records_hash": digest(ordered),
+        "record_hashes": {record["id"]: record["content_hash"] for record in ordered},
+        "generator_version": SEMI_LABOR_GENERATOR,
+        "generation_artifact": {
+            "method": SEMI_LABOR_METHOD,
+            "template_hash": digest({
+                "events": SEMI_EVENTS,
+                "templates": SEMI_TEMPLATES,
+                "schema": "semi_labor.v1",
+            }),
+            "runtime_model_hash": "not_applicable",
+            "runtime_prompt_hash": "not_applicable",
+        },
+        "dependency_hash": "unrecorded",
+        "legal_annotation_status": "pending",
+        "freeze_status": "unfrozen_pending_annotation",
+    }
+    return {**core, "freeze_hash": digest(core)}
+
+
+def build_semisynthetic_manifest(count=100, seed=20260905):
+    records = build_semisynthetic_records(count, seed)
+    from .data_registry import build_semi_labor_manifest
+    return records, build_semi_labor_manifest(records, seed).model_dump(mode="json")
 
 
 def validate_annotations(records):

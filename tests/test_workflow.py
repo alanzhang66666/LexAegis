@@ -220,6 +220,45 @@ def test_formal_missing_rules_and_attacks_block(env):
     assert not result["risk"]["approval_allowed"]
 
 
+def test_local_fact_summary_draft_skips_outbound_gate(env):
+    case, _document, _fact = formal_material(env)
+    client = env["client"]
+    task = client.post(f"/api/v1/cases/{case['id']}/tasks", json={"transport": "local"}).json()
+    first = client.post(f"/api/v1/tasks/{task['id']}/evaluate").json()
+    blockers = first["risk"]["blockers"]
+    assert "适用规则尚未正式发布" not in blockers
+    assert not any("隔离" in item for item in blockers)
+    assert not any("服务商" in item for item in blockers)
+    assert not any("四类" in item for item in blockers)
+    assert not any("风险信号权重" in item for item in blockers)
+    decision = task["decisions"][0]
+    patched = client.patch(
+        f"/api/v1/tasks/{task['id']}/decisions/{decision['fact_id']}",
+        json={
+            "transform": "pseudonymize",
+            "necessity": "required",
+            "output": "劳动者[[LEX:P0001]]主张工资。",
+        },
+    )
+    assert patched.status_code == 200, patched.text
+    ready = client.post(f"/api/v1/tasks/{task['id']}/evaluate")
+    assert ready.status_code == 200, ready.text
+    assert ready.json()["risk"]["approval_allowed"] is True, ready.text
+    assert ready.json()["request"]["target"] == "local://fact-summary-draft"
+    approved = client.post(
+        f"/api/v1/tasks/{task['id']}/approve",
+        json={"request_hash": ready.json()["request_hash"]},
+    )
+    assert approved.status_code == 200, approved.text
+    sent = client.post(f"/api/v1/tasks/{task['id']}/send")
+    assert sent.status_code == 200, sent.text
+    finished = task_state(env, case["id"], task["id"])
+    assert finished["status"] == "complete"
+    assert finished["artifact"]["provenance"] == "local_deterministic"
+    assert finished["artifact"]["claims"]
+    assert not any(job["kind"] == "send" for job in client.get(f"/api/v1/cases/{case['id']}").json()["jobs"])
+
+
 def test_corrected_doc_retains_old_anchors_and_stales_tasks_after_restart(env):
     case,doc,fact=formal_material(env)
     client=env["client"]

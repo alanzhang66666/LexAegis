@@ -15,6 +15,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 from . import service
 from .auth import create_user_record, current_actor, ensure_initial_admin, public_user, verify_password
+from .diagnostics import host_publish_capability, isolation_capability, redteam_capability
 from .parsing import ocr_capability
 from .providers import EdgeClient
 from .contracts import ProviderProfile, RiskProtocol
@@ -66,6 +67,10 @@ class FactInput(Input):
 class Correction(Input):
     block_id: str
     text: str = Field(min_length=1, max_length=100000)
+
+
+class BlockConfirmation(Input):
+    block_id: str
 
 
 class TaskInput(Input):
@@ -351,25 +356,31 @@ def create_app(data_dir=None, password=None):
         with store.read() as repo:
             published = [pack for pack in repo.list("pack") if pack.get("schema_version") == 2 and pack.get("status") == "published"]
             protocols = repo.list("risk_protocol")
-        isolation_ok = bool(settings.get("isolation_verified")) and settings.get("deployment_mode") == "isolated"
+        isolation = isolation_capability(settings)
+        host_publish = host_publish_capability()
+        edge_detail = (
+            "本机边侧已探测"
+            if edge.get("status") == "available"
+            else "边侧抽取尚未在本机验收"
+        )
+        isolation_detail = "隔离部署已记录" if isolation.get("status") == "available" else "隔离部署仍未验收"
+        host_detail = "宿主机口已发布" if host_publish.get("status") == "available" else "宿主机发布仍未验收"
         return {"technical": {"status": "available", "detail": "V2 契约、确定性检测、稳定 token 和本地复原已实现"},
                 "runtime": {"status": "available" if settings.get("cloud_model") else "unconfigured", "detail": "运行配置与实现状态分开报告"},
                 "legal": {"status": "available" if published else "unconfigured", "detail": f"已发布 V2 案由包 {len(published)} 个"},
                 "validation": {
                     "status": "unconfigured",
-                    "detail": (
-                        "本机边侧已探测"
-                        if edge.get("status") == "available"
-                        else "边侧抽取尚未在本机验收"
-                    ) + "；真实云端外发、隔离部署和正式案件仍未验收",
+                    "detail": f"{edge_detail}；{isolation_detail}；{host_detail}；真实云端外发仍未验收；正式案件仍未验收",
                     "edge_runtime": edge.get("status"),
                     "cloud_outbound": "not_verified",
                     "formal_dispatch": "blocked",
+                    "host_publish": host_publish.get("status"),
                 },
                 "edge": edge, "cloud": cloud,
                 "ocr": ocr_capability(),
-                "redteam": {"status": "available" if len([p for p in protocols if p.get('status') == 'frozen']) >= 4 else "unconfigured", "detail": "未运行、错误和不确定均不算通过"},
-                "isolation": {"status": "available" if isolation_ok else "unconfigured", "detail": "已记录隔离验收" if isolation_ok else "尚无通过的隔离验收记录"}}
+                "redteam": redteam_capability(protocols),
+                "host_publish": host_publish,
+                "isolation": isolation}
 
     @app.get("/api/v1/domains")
     def domains():
@@ -594,6 +605,12 @@ def create_app(data_dir=None, password=None):
         require_role(request, "case_operator")
         with store.transaction() as repo:
             return service.correct_document(repo, case_id, document_id, body.block_id, body.text)
+
+    @app.put("/api/v1/cases/{case_id}/documents/{document_id}/confirmation")
+    def confirmation(case_id: str, document_id: str, body: BlockConfirmation, request: Request):
+        require_role(request, "case_operator")
+        with store.transaction() as repo:
+            return service.confirm_document_block(repo, case_id, document_id, body.block_id)
 
     @app.get("/api/v1/cases/{case_id}/anchors")
     def anchors(case_id: str):

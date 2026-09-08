@@ -8,7 +8,7 @@ from pathlib import Path
 
 from .data_registry import find_dataset
 from .dataset import read_records_jsonl
-from .providers import EdgeClient
+from .providers import FACT_FIELDS, EdgeClient
 from .util import app_dir, now, restrict_mode
 
 NUMBERS = re.compile(r"\d+(?:\.\d+)?")
@@ -18,6 +18,7 @@ ENGINEERING_CHECKS = (
     "quote_is_substring",
     "numbers_from_source",
     "aliases_no_conflict",
+    "field_in_enum",
 )
 
 
@@ -71,14 +72,19 @@ def score_extract(blocks, facts) -> dict:
             "quote_is_substring": False,
             "numbers_from_source": False,
             "aliases_no_conflict": False,
+            "field_in_enum": False,
             "fact_count": 0,
             "issues": ["返回不是 facts 数组"],
         }
+    field_ok = True
     for fact in facts:
         if not isinstance(fact, dict):
             issues.append("事实条目不是对象")
-            source_ok = quote_ok = numbers_ok = False
+            source_ok = quote_ok = numbers_ok = field_ok = False
             continue
+        if fact.get("field") not in FACT_FIELDS:
+            field_ok = False
+            issues.append("field 不是允许枚举")
         ids = fact.get("source_ids") or []
         if not ids or not set(ids) <= valid_ids:
             source_ok = False
@@ -98,6 +104,7 @@ def score_extract(blocks, facts) -> dict:
         "quote_is_substring": quote_ok,
         "numbers_from_source": numbers_ok,
         "aliases_no_conflict": alias_ok,
+        "field_in_enum": field_ok,
         "fact_count": len(facts),
         "issues": list(dict.fromkeys(issues)),
     }
@@ -147,6 +154,7 @@ def probe_edge(dataset_id="mock_labor", extract=None, timeout=120) -> dict:
                 "quote_is_substring": False,
                 "numbers_from_source": False,
                 "aliases_no_conflict": False,
+                "field_in_enum": False,
                 "fact_count": 0,
                 "issues": [message[:300]],
             }

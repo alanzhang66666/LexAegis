@@ -127,8 +127,16 @@ def main():
     p.add_argument("--input", type=Path, required=True)
     p.add_argument("--manifest", type=Path, required=True)
     p.add_argument("--output", type=Path, required=True)
+    p = dataset_commands.add_parser("generate-semi", help="生成 100 条半合成脚手架到被忽略目录，不写入 catalog")
+    p.add_argument("destination", nargs="?", type=Path, default=None, help="默认 .data/semi_labor_v1")
     dataset_commands.add_parser("list", help="列出仓库 data/ 中的评测数据集")
-    dataset_commands.add_parser("validate", help="校验 data/ 哈希、合成门禁与 catalog")
+    dataset_commands.add_parser("validate", help="校验 data/ 哈希、合成门禁与 catalog；若存在本机脚手架则另校验哈希")
+    p = dataset_commands.add_parser(
+        "promote-semi",
+        help="校验半合成脚手架门禁；未完成标注则拒绝写入 catalog",
+    )
+    p.add_argument("src", nargs="?", type=Path, default=None, help="默认 .data/semi_labor_v1")
+    p.add_argument("data_root", nargs="?", type=Path, default=None, help="默认仓库 data/")
     p = dataset_commands.add_parser("show", help="显示指定数据集清单")
     p.add_argument("dataset_id", metavar="id")
     p = dataset_commands.add_parser("probe-edge", help="对仓库合成集跑边侧抽取工程指标，无法学分")
@@ -170,13 +178,24 @@ def main():
         from .diagnostics import compose_isolation_report
         report = compose_isolation_report()
         print(json.dumps(report, ensure_ascii=False, indent=2))
+        if not report["ok"]:
+            print("未验收")
+            for gap in report.get("gaps") or []:
+                print(f"- {gap}")
+        # Host CLI records only after every Compose probe passes; native never attests.
         if report["ok"]:
             subprocess = __import__("subprocess")
             subprocess.run(["docker", "compose", "exec", "-T", "api", "python", "-m", "lexaegis.cli", "_record-isolation"], check=True)
         raise SystemExit(0 if report["ok"] else 2)
     elif args.command == "_record-isolation":
-        from .diagnostics import isolation_report
+        from .diagnostics import isolated_runtime, isolation_report
         from .util import audit, now
+        if not isolated_runtime():
+            print(json.dumps({
+                "ok": False,
+                "detail": "未验收：native 不能自证隔离，拒绝写入 isolation_verified",
+            }, ensure_ascii=False, indent=2))
+            raise SystemExit(2)
         report = isolation_report()
         if not report["ok"]:
             print(json.dumps(report, ensure_ascii=False, indent=2))
@@ -237,6 +256,21 @@ def main():
                 "records": records,
             })
             print("Synthetic mock corpus created:", args.output)
+        elif args.dataset_command == "generate-semi":
+            from .data_registry import default_local_scaffold_dir, write_semi_labor_v1
+            dest = args.destination if args.destination is not None else default_local_scaffold_dir()
+            manifest = write_semi_labor_v1(args.destination)
+            print("Created 100 synthetic records; legal annotation and adjudication remain pending.")
+            print(json.dumps({
+                "id": manifest.id,
+                "version": manifest.version,
+                "kind": manifest.kind,
+                "status": manifest.status,
+                "count": manifest.count,
+                "freeze_status": manifest.freeze_status,
+                "dispatch_allowed": manifest.dispatch_allowed,
+                "path": dest.as_posix(),
+            }, ensure_ascii=False, indent=2))
         elif args.dataset_command == "freeze":
             records = read_json(args.input)["records"]
             lock = args.dependency_lock
@@ -259,8 +293,24 @@ def main():
             from .data_registry import list_datasets
             print(json.dumps(list_datasets(), ensure_ascii=False, indent=2))
         elif args.dataset_command == "validate":
-            from .data_registry import validate_tree
+            from .data_registry import default_local_scaffold_dir, validate_local_scaffold, validate_tree
             report = validate_tree()
+            scaffold = default_local_scaffold_dir()
+            if (scaffold / "dataset.json").is_file():
+                local = validate_local_scaffold(scaffold)
+                report = {
+                    **report,
+                    "local_scaffold": local,
+                    "ok": report["ok"] and local["ok"],
+                    "problems": [*report["problems"], *local["problems"]],
+                }
+                if local.get("warnings"):
+                    report["warnings"] = local["warnings"]
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+            raise SystemExit(0 if report["ok"] else 1)
+        elif args.dataset_command == "promote-semi":
+            from .data_registry import promote_semi_labor
+            report = promote_semi_labor(args.src, args.data_root)
             print(json.dumps(report, ensure_ascii=False, indent=2))
             raise SystemExit(0 if report["ok"] else 1)
         elif args.dataset_command == "show":

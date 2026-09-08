@@ -4,7 +4,7 @@ import httpx
 import pytest
 
 from lexaegis import diagnostics, providers, service
-from lexaegis.providers import EdgeClient, ProposedFact
+from lexaegis.providers import EXTRACT_FIELD_RETRY_USER, EXTRACT_PROMPT, FACT_FIELDS, EdgeClient, ProposedFact
 from lexaegis.worker import EXTRACT_CHUNK_CHARS, chunk_extract_blocks, process_one
 from .test_workflow import formal_material
 
@@ -52,7 +52,7 @@ def test_edge_contract_rejects_invalid_json_unknown_source_and_excess(monkeypatc
     FakeHTTPClient.content = json.dumps({
         "facts": [{"field": "unsupported", "value": "模拟事实", "source_ids": ["b1"]}],
     })
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="合法 field"):
         client.extract(blocks)
     FakeHTTPClient.content = json.dumps({
         "facts": [{"field": "event", "value": "模拟事实", "source_ids": ["b1"], "quote": "不是原文"}],
@@ -80,7 +80,183 @@ def test_edge_request_uses_deterministic_json_contract(monkeypatch):
     assert result[0]["source_ids"] == ["b1"]
     assert captured["url"].endswith("/chat/completions")
     assert captured["body"]["temperature"] == 0
-    assert captured["body"]["response_format"] == {"type": "json_object"}
+    fmt = captured["body"]["response_format"]
+    assert fmt["type"] == "json_schema"
+    assert fmt["json_schema"]["schema"]["properties"]["facts"]["type"] == "array"
+    assert fmt["json_schema"]["schema"]["properties"]["facts"]["items"]["properties"]["field"]["enum"] == list(FACT_FIELDS)
+    assert captured["body"]["chat_template_kwargs"] == {"enable_thinking": False}
+    assert '"field":"entity|relation' not in captured["body"]["messages"][0]["content"]
+    assert "entity|relation|event|date|amount|evidence" not in EXTRACT_PROMPT
+    assert "|" not in EXTRACT_PROMPT
+
+
+def test_extract_skips_pipe_field_and_keeps_valid_facts(monkeypatch):
+    monkeypatch.setattr(providers.httpx, "Client", FakeHTTPClient)
+    FakeHTTPClient.content = json.dumps({
+        "facts": [
+            {"field": "entity|relation|event|date|amount|evidence", "value": "应跳过", "source_ids": ["b1"]},
+            {"field": "amount", "value": "12000元", "source_ids": ["b1"]},
+        ],
+    })
+    result = EdgeClient("http://localhost:11434/v1", "edge-small").extract(
+        [{"id": "b1", "text": "主张工资12000元"}],
+    )
+    assert [fact["value"] for fact in result] == ["12000元"]
+    assert result[0]["field"] == "amount"
+
+
+def test_extract_prompt_uses_json_array_fields_not_pipes():
+    assert json.dumps(list(FACT_FIELDS)) in EXTRACT_PROMPT
+    assert "entity|relation|event|date|amount|evidence" not in EXTRACT_PROMPT
+    assert "|" not in EXTRACT_PROMPT
+    assert "|" not in EXTRACT_FIELD_RETRY_USER
+    assert EXTRACT_FIELD_RETRY_USER == f'每个 field 必须是 {json.dumps(list(FACT_FIELDS))} 中的单个词。'
+
+
+def test_extract_retries_once_when_first_response_is_all_pipe_fields(monkeypatch):
+    calls = []
+    pipe = json.dumps({
+        "facts": [{"field": "entity|relation|event|date|amount|evidence", "value": "应跳过", "source_ids": ["b1"]}],
+    })
+    valid = json.dumps({
+        "facts": [{"field": "amount", "value": "12000元", "source_ids": ["b1"]}],
+    })
+
+    class Sequential(FakeHTTPClient):
+        contents = [pipe, valid]
+
+        def post(self, url, json=None):
+            self.content = self.contents[len(calls)]
+            calls.append(json)
+            return super().post(url, json=json)
+
+    monkeypatch.setattr(providers.httpx, "Client", Sequential)
+    result = EdgeClient("http://localhost:11434/v1", "edge-small").extract(
+        [{"id": "b1", "text": "主张工资12000元"}],
+    )
+    assert [fact["field"] for fact in result] == ["amount"]
+    assert [fact["value"] for fact in result] == ["12000元"]
+    assert len(calls) == 2
+    retry_users = [message["content"] for message in calls[1]["messages"] if message["role"] == "user"]
+    assert EXTRACT_FIELD_RETRY_USER in retry_users
+    assert "单个" in EXTRACT_FIELD_RETRY_USER
+    assert json.dumps(list(FACT_FIELDS)) in EXTRACT_FIELD_RETRY_USER
+
+
+def test_extract_all_pipe_second_response_raises_after_one_retry(monkeypatch):
+    calls = []
+    pipe = json.dumps({
+        "facts": [{"field": "entity|relation|event|date|amount|evidence", "value": "应跳过", "source_ids": ["b1"]}],
+    })
+
+    class Sequential(FakeHTTPClient):
+        def post(self, url, json=None):
+            self.content = pipe
+            calls.append(json)
+            return super().post(url, json=json)
+
+    monkeypatch.setattr(providers.httpx, "Client", Sequential)
+    with pytest.raises(ValueError, match="合法 field"):
+        EdgeClient("http://localhost:11434/v1", "edge-small").extract(
+            [{"id": "b1", "text": "主张工资12000元"}],
+        )
+    assert len(calls) == 2
+    retry_users = [message["content"] for message in calls[1]["messages"] if message["role"] == "user"]
+    assert EXTRACT_FIELD_RETRY_USER in retry_users
+
+
+def test_extract_quote_and_invalid_source_do_not_field_retry(monkeypatch):
+    calls = []
+
+    class Counting(FakeHTTPClient):
+        def post(self, url, json=None):
+            calls.append(json)
+            return super().post(url, json=json)
+
+    monkeypatch.setattr(providers.httpx, "Client", Counting)
+    client = EdgeClient("http://localhost:11434/v1", "edge-small")
+    blocks = [{"id": "b1", "text": "纯模拟材料"}]
+
+    FakeHTTPClient.content = json.dumps({
+        "facts": [{"field": "event", "value": "模拟事实", "source_ids": ["b1"], "quote": "不是原文"}],
+    })
+    calls.clear()
+    with pytest.raises(ValueError, match="quote"):
+        client.extract(blocks)
+    assert len(calls) == 1
+
+    FakeHTTPClient.content = json.dumps({
+        "facts": [{"field": "event", "value": "模拟事实", "source_ids": ["missing"]}],
+    })
+    calls.clear()
+    with pytest.raises(ValueError, match="来源"):
+        client.extract(blocks)
+    assert len(calls) == 1
+
+
+def test_extract_falls_back_to_json_object_when_json_schema_rejected(monkeypatch):
+    calls = []
+
+    class Fallback(FakeHTTPClient):
+        content = json.dumps({
+            "facts": [{"field": "event", "value": "模拟事实", "source_ids": ["b1"]}],
+        })
+
+        def post(self, url, json=None):
+            calls.append(json)
+            if json["response_format"].get("type") == "json_schema":
+                return httpx.Response(400, json={"error": "unsupported response_format"}, request=httpx.Request("POST", url))
+            return super().post(url, json=json)
+
+    monkeypatch.setattr(providers.httpx, "Client", Fallback)
+    result = EdgeClient("http://localhost:11434/v1", "edge-small").extract(
+        [{"id": "b1", "text": "纯模拟材料"}],
+    )
+    assert result[0]["field"] == "event"
+    assert len(calls) == 2
+    assert calls[0]["response_format"]["type"] == "json_schema"
+    assert calls[1]["response_format"] == {"type": "json_object"}
+    assert calls[1]["temperature"] == 0
+    assert calls[1]["chat_template_kwargs"] == {"enable_thinking": False}
+
+
+def test_extract_field_retry_uses_json_object_after_schema_fallback(monkeypatch):
+    calls = []
+    object_replies = [
+        json.dumps({
+            "facts": [{"field": "entity|relation|event|date|amount|evidence", "value": "应跳过", "source_ids": ["b1"]}],
+        }),
+        json.dumps({
+            "facts": [{"field": "amount", "value": "12000元", "source_ids": ["b1"]}],
+        }),
+    ]
+
+    class FallbackThenRetry(FakeHTTPClient):
+        def post(self, url, json=None):
+            calls.append(json)
+            if json["response_format"].get("type") == "json_schema":
+                return httpx.Response(400, json={"error": "unsupported response_format"}, request=httpx.Request("POST", url))
+            self.content = object_replies[sum(1 for body in calls if body["response_format"].get("type") == "json_object") - 1]
+            return super().post(url, json=json)
+
+    monkeypatch.setattr(providers.httpx, "Client", FallbackThenRetry)
+    result = EdgeClient("http://localhost:11434/v1", "edge-small").extract(
+        [{"id": "b1", "text": "主张工资12000元"}],
+    )
+    assert result[0]["field"] == "amount"
+    assert [body["response_format"].get("type") for body in calls] == ["json_schema", "json_object", "json_object"]
+    retry_users = [message["content"] for message in calls[2]["messages"] if message["role"] == "user"]
+    assert EXTRACT_FIELD_RETRY_USER in retry_users
+
+
+def test_edge_extract_strips_minicpm_think_blocks(monkeypatch):
+    facts = {"facts": [{"field": "event", "value": "模拟事实", "source_ids": ["b1"]}]}
+    FakeHTTPClient.content = "<think>内部推理</think>" + json.dumps(facts, ensure_ascii=False)
+    monkeypatch.setattr(providers.httpx, "Client", FakeHTTPClient)
+    result = EdgeClient("http://localhost:11434/v1", "edge-small").extract(
+        [{"id": "b1", "text": "纯模拟材料"}],
+    )
+    assert result[0]["value"] == "模拟事实"
 
 
 def test_material_change_during_edge_extraction_discards_result(env, monkeypatch):
@@ -246,7 +422,7 @@ def test_doctor_edge_json_failure_is_not_fatal(monkeypatch):
     monkeypatch.setattr(EdgeClient, "extract", lambda self, blocks, timeout=8: (_ for _ in ()).throw(RuntimeError("down")))
     report = diagnostics.doctor_report()
     assert report["checks"]["edge_json"]["ok"] is False
-    required = {key: item for key, item in report["checks"].items() if key not in ("edge_model", "edge_json")}
+    required = {key: item for key, item in report["checks"].items() if key not in ("edge_model", "edge_json", "isolation", "ocr")}
     assert report["ok"] == all(item["ok"] for item in required.values())
 
 

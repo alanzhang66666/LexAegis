@@ -2,6 +2,8 @@ import importlib.util
 import hashlib
 import os
 import re
+import sys
+import types
 from pathlib import Path
 from typing import Iterable, Protocol
 from .contracts import DocumentIRV2, SourceAnchor
@@ -13,6 +15,26 @@ class OCRProvider(Protocol):
 
     def health(self) -> dict: ...
     def recognize(self, image) -> Iterable[tuple[str, float, list[float]]]: ...
+
+
+def _import_paddleocr():
+    """Import PaddleOCR without letting PaddleX's optional LangChain shim pull a broken local torch."""
+    if "langchain_text_splitters" not in sys.modules:
+        try:
+            import langchain  # noqa: F401
+        except ImportError:
+            pass
+        else:
+            stub = types.ModuleType("langchain_text_splitters")
+
+            class RecursiveCharacterTextSplitter:
+                def __init__(self, *args, **kwargs):
+                    pass
+
+            stub.RecursiveCharacterTextSplitter = RecursiveCharacterTextSplitter
+            sys.modules["langchain_text_splitters"] = stub
+    from paddleocr import PaddleOCR
+    return PaddleOCR
 
 
 class PaddleOCRProvider:
@@ -36,20 +58,41 @@ class PaddleOCRProvider:
             ),
         }
 
+    def _create_engine(self):
+        # Enabled only after the operator attests that model assets are present;
+        # there is deliberately no remote OCR fallback. CPU only so PaddleOCR 3.x
+        # cannot auto-select CUDA and compete with llama-server GPU.
+        # enable_mkldnn=False avoids the Paddle 3.3.x CPU oneDNN/PIR crash.
+        PaddleOCR = _import_paddleocr()
+        kwargs = dict(
+            use_doc_orientation_classify=False,
+            use_doc_unwarping=False,
+            use_textline_orientation=False,
+            lang="ch",
+            enable_mkldnn=False,
+        )
+        try:
+            return PaddleOCR(**kwargs, device="cpu")
+        except TypeError as error:
+            message = str(error)
+            if "enable_mkldnn" in message:
+                kwargs.pop("enable_mkldnn", None)
+                try:
+                    return PaddleOCR(**kwargs, device="cpu")
+                except TypeError as inner:
+                    error = inner
+                    message = str(inner)
+            if "device" not in message:
+                raise
+            os.environ["CUDA_VISIBLE_DEVICES"] = ""
+            return PaddleOCR(**kwargs)
+
     def recognize(self, image):
         if self.health()["status"] != "available":
             raise RuntimeError("PaddleOCR 本地模型资产未就绪")
         import numpy as np
         if self._engine is None:
-            from paddleocr import PaddleOCR
-            # This provider is enabled only after the operator attests that model
-            # assets are present; there is deliberately no remote OCR fallback.
-            self._engine = PaddleOCR(
-                use_doc_orientation_classify=False,
-                use_doc_unwarping=False,
-                use_textline_orientation=False,
-                lang="ch",
-            )
+            self._engine = self._create_engine()
         for result in self._engine.predict(np.array(image)):
             data = result.json
             data = data.get("res", data)

@@ -29,7 +29,7 @@ export function ProviderCenter({providers=[],request,refresh,busy}:{providers?:O
     } catch(e){setError((e as Error).message)}
   };
   return <div className="content governance-page">
-    <div className="section-heading"><div><div className="eyebrow">PROVIDER GOVERNANCE</div><h1>服务商治理</h1>
+    <div className="section-heading"><div><div className="eyebrow">服务商档案</div><h1>服务商治理</h1>
       <p>处理角色、地区、留存、训练、人工访问、分包与删除机制均由人员登记，不使用 IP 推断。</p></div>
       <Button variant="primary" onClick={()=>setForm({...providerDefault})}><Plus size={15}/>新建档案</Button></div>
     {!providers.length&&<div className="legal-block"><ShieldAlert/><div><h3>正式外发被阻断</h3><p>尚无经复核的服务商档案。关键字段未知时不会显示为可用。</p></div></div>}
@@ -68,7 +68,7 @@ export function BenchmarkCenter({protocols=[],request,refresh}:{protocols?:Obj[]
   const frozen=protocols.filter(item=>item.status==="frozen").length;
   const save=async()=>{if(!form)return;await request("/risk-protocols/"+form.id,"PUT",form);setForm(null);await refresh()};
   return <div className="content governance-page">
-    <div className="section-heading"><div><div className="eyebrow">ISOLATED RESEARCH</div><h1>隔离实验与风险协议</h1>
+    <div className="section-heading"><div><div className="eyebrow">隔离研究</div><h1>隔离实验与风险协议</h1>
       <p>生产攻击协议与 Ianvs 离线实验分轨运行，均不挂载原文和 mapping。</p></div>
       <Button variant="primary" onClick={()=>setForm({...protocolDefault})}><Plus size={15}/>新建协议</Button></div>
     <div className="legal-block"><ShieldAlert/><div><h3>不进入生产 dispatch</h3><p>已冻结攻击协议 {frozen} 项；四类是否齐备由具体案由包的版本引用决定。</p></div></div>
@@ -99,7 +99,7 @@ export function UserCenter({request}:{request:RequestFn}) {
   const load=()=>request("/users").then(setUsers).catch(e=>setError(e.message));
   useEffect(()=>{load()},[]);
   const create=async()=>{try{setError("");await request("/users","POST",form);setForm({username:"",display_name:"",role:"case_operator",password:""});load()}catch(e){setError((e as Error).message)}};
-  return <div className="content governance-page"><div className="section-heading"><div><div className="eyebrow">LOCAL ACCOUNTS</div>
+  return <div className="content governance-page"><div className="section-heading"><div><div className="eyebrow">本地账号</div>
     <h1>本地用户与角色</h1><p>账户只保存在当前实例；角色变更与停用在下一请求立即生效。</p></div><Users/></div>
     <DataTable rowKey={row=>row.id} rows={usersList} columns={[{key:"display_name",label:"人员"},{key:"username",label:"用户名"},
       {key:"role",label:"角色",render:row=><select aria-label={`${row.username} 的角色`} value={row.role}
@@ -121,7 +121,7 @@ export function UserCenter({request}:{request:RequestFn}) {
 
 export function LegalPackCenter({packs=[],tasks=[],request}:{packs?:Obj[];tasks?:Obj[];request:RequestFn}) {
   const [reports,setReports]=useState<Record<string,Obj>>({});
-  return <div className="content governance-page"><div className="section-heading"><div><div className="eyebrow">EXTENSIBLE BY DESIGN</div>
+  return <div className="content governance-page"><div className="section-heading"><div><div className="eyebrow">可扩展设计</div>
     <h1>法学规则中心</h1><p>技术结构可继续建设；未发布的法学规则始终保持正式外发阻断。</p></div><ServerCog/></div>
     <h2 className="subheading">任务能力</h2><div className="capability-grid">{tasks.map(task=><Panel key={task.id} title={task.name}>
       <StatusBadge tone={task.status==="available"||task.available?"green":"neutral"}>{task.status||"unimplemented"}</StatusBadge>

@@ -87,6 +87,38 @@ def test_local_evidence_inventory_lists_evidence_facts(env):
     assert any(item["text"] == "劳动合同原件" for item in task["artifact"]["items"])
 
 
+def test_local_issue_extraction_groups_by_field_without_dispatch(env):
+    case, document, fact = formal_material(env)
+    block = document["ir"]["blocks"][0]
+    env["client"].post(f"/api/v1/cases/{case['id']}/facts", json={
+        "field": "amount", "value": "工资12000元", "source_ids": [block["id"]], "confirmed": True,
+    })
+    result = env["client"].post(
+        f"/api/v1/cases/{case['id']}/tasks",
+        json={"task_type": "issue_extraction", "transport": "local"},
+    )
+    assert result.status_code == 200
+    task = result.json()
+    assert task["status"] == "complete" and task["request"] is None
+    assert task["artifact"]["provenance"] == "local_deterministic"
+    issues = task["artifact"]["issues"]
+    assert issues and all(item.get("source_ids") for item in issues)
+    topics = {item["topic"] for item in issues}
+    assert topics == {"disputed_event", "remuneration"}
+    event = next(item for item in issues if item["topic"] == "disputed_event")
+    assert fact["id"] in event["fact_ids"]
+    ledger = env["client"].get(f"/api/v1/cases/{case['id']}").json()["ledger"]
+    assert ledger == []
+    for transport in ("cloud", "mock"):
+        rejected = env["client"].post(
+            f"/api/v1/cases/{case['id']}/tasks",
+            json={"task_type": "issue_extraction", "transport": transport},
+        )
+        assert rejected.status_code == 409
+        assert rejected.json()["detail"] == "任务不支持所选传输方式"
+    assert env["client"].get(f"/api/v1/cases/{case['id']}").json()["ledger"] == []
+
+
 def test_entrypoint_task_executes_without_service_state_machine_change(env, monkeypatch):
     class Plugin:
         @staticmethod
@@ -334,6 +366,31 @@ def test_capabilities_report_separate_axes(env):
     assert result["validation"]["status"] == "unconfigured"
     assert result["validation"]["cloud_outbound"] == "not_verified"
     assert result["validation"]["formal_dispatch"] == "blocked"
+    assert result["redteam"]["status"] == "unconfigured"
+    assert result["isolation"]["status"] == "unconfigured"
+    assert "未验收" in result["isolation"]["detail"]
+    assert "隔离部署仍未验收" in result["validation"]["detail"]
+    assert "真实云端外发仍未验收" in result["validation"]["detail"]
+    assert "正式案件仍未验收" in result["validation"]["detail"]
+
+    with env["app"].state.store.transaction() as repo:
+        settings = repo.get("settings")
+        settings["isolation_verified"] = True
+        settings["deployment_mode"] = "isolated"
+        repo.put("settings", settings)
+    isolated = env["client"].get("/api/v1/capabilities").json()
+    assert isolated["isolation"]["status"] == "available"
+    assert isolated["validation"]["status"] == "unconfigured"
+    assert isolated["validation"]["cloud_outbound"] == "not_verified"
+    assert isolated["validation"]["formal_dispatch"] == "blocked"
+    detail = isolated["validation"]["detail"]
+    assert "隔离部署已记录" in detail
+    assert "真实云端外发仍未验收" in detail
+    assert "正式案件仍未验收" in detail
+    assert "隔离部署仍未验收" not in detail
+    assert "隔离仍未验收" not in detail
+    isolation_clause = next(part for part in detail.split("；") if "隔离部署" in part)
+    assert "仍未验收" not in isolation_clause
 
 
 def test_semisynthetic_scaffold_has_frozen_split_but_never_fake_labels():

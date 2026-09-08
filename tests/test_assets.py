@@ -1,9 +1,13 @@
+import importlib.util
 import json
+import os
+import sys
+import types
 import zipfile
 from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
-from lexaegis.parsing import ocr_capability, parse, register_ocr_provider
+from lexaegis.parsing import PaddleOCRProvider, ocr_capability, parse, register_ocr_provider
 from lexaegis.registry import import_pack
 from lexaegis.cli import backup, restore
 from lexaegis.redteam import app as redteam
@@ -72,6 +76,93 @@ def test_ocr_capability_distinguishes_disabled_unknown_and_available(monkeypatch
     assert ocr_capability()["status"] == "available"
     monkeypatch.setenv("LEX_OCR_PROVIDER", "missing")
     assert ocr_capability()["status"] == "failed"
+
+
+def _install_fake_paddleocr(monkeypatch, paddle_cls):
+    import importlib.machinery
+
+    module = types.ModuleType("paddleocr")
+    module.__spec__ = importlib.machinery.ModuleSpec("paddleocr", loader=None)
+    module.PaddleOCR = paddle_cls
+    monkeypatch.setitem(sys.modules, "paddleocr", module)
+    return module
+
+
+def _recognize_image(monkeypatch):
+    if "numpy" not in sys.modules:
+        fake_np = types.ModuleType("numpy")
+        fake_np.array = lambda image: image
+        monkeypatch.setitem(sys.modules, "numpy", fake_np)
+        return object()
+    from PIL import Image
+    return Image.new("RGB", (8, 8), "white")
+
+
+def test_ocr_disabled_does_not_import_paddle(monkeypatch):
+    monkeypatch.setenv("LEX_OCR_ENABLED", "0")
+    monkeypatch.delenv("LEX_OCR_MODELS_READY", raising=False)
+    assert "paddleocr" not in sys.modules
+    result = ocr_capability()
+    assert result["status"] == "unconfigured"
+    assert "paddleocr" not in sys.modules
+
+
+def test_paddle_ocr_constructs_with_cpu_device(monkeypatch):
+    captured = {}
+
+    class FakePaddleOCR:
+        def __init__(self, **kwargs):
+            captured["kwargs"] = kwargs
+
+        def predict(self, array):
+            return []
+
+    _install_fake_paddleocr(monkeypatch, FakePaddleOCR)
+    monkeypatch.setenv("LEX_OCR_MODELS_READY", "1")
+    image = _recognize_image(monkeypatch)
+    assert list(PaddleOCRProvider().recognize(image)) == []
+    assert captured["kwargs"]["device"] == "cpu"
+    assert captured["kwargs"]["lang"] == "ch"
+    assert captured["kwargs"]["enable_mkldnn"] is False
+    assert captured["kwargs"]["use_doc_orientation_classify"] is False
+    assert captured["kwargs"]["use_doc_unwarping"] is False
+    assert captured["kwargs"]["use_textline_orientation"] is False
+
+
+def test_paddle_ocr_retries_without_device_when_kwarg_rejected(monkeypatch):
+    calls = []
+
+    class FakePaddleOCR:
+        def __init__(self, **kwargs):
+            calls.append(dict(kwargs))
+            if "device" in kwargs:
+                raise TypeError("PaddleOCR.__init__() got an unexpected keyword argument 'device'")
+
+        def predict(self, array):
+            return []
+
+    _install_fake_paddleocr(monkeypatch, FakePaddleOCR)
+    monkeypatch.setenv("LEX_OCR_MODELS_READY", "1")
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0")
+    image = _recognize_image(monkeypatch)
+    assert list(PaddleOCRProvider().recognize(image)) == []
+    assert calls[0]["device"] == "cpu"
+    assert "device" not in calls[1]
+    assert os.environ.get("CUDA_VISIBLE_DEVICES") == ""
+
+
+def test_live_paddleocr_scan_smoke(monkeypatch):
+    if importlib.util.find_spec("paddleocr") is None:
+        pytest.skip("paddleocr 未安装；不在此环境 pip install")
+    if os.environ.get("LEX_OCR_MODELS_READY") != "1":
+        pytest.skip("环境未声明 LEX_OCR_MODELS_READY=1；跳过真实 Paddle 冒烟以免触发下载")
+    monkeypatch.setenv("LEX_OCR_ENABLED", "1")
+    monkeypatch.setenv("LEX_OCR_PROVIDER", "paddle")
+    result = parse(Path(__file__).resolve().parent.parent / "examples" / "synthetic_scan.pdf", "live_ocr")
+    ocr_blocks = [block for block in result["blocks"] if block["kind"] == "ocr"]
+    assert ocr_blocks
+    assert ocr_blocks[0]["bbox"]
+    assert result["needs_review"] is True
 
 
 def test_txt_paragraphs_become_source_anchors(tmp_path):
@@ -204,3 +295,93 @@ def test_uploaded_image_page_preview_is_local_png(env, tmp_path):
     assert page.status_code == 200
     assert page.content.startswith(b"\x89PNG")
     assert client.get(f"/api/v1/cases/{case['id']}/documents/{doc['id']}/page/2").status_code == 404
+
+
+def _plant_ocr_text(env, case_id, text="识别文本工资12000元"):
+    with env["app"].state.store.transaction() as repo:
+        doc = repo.list("document", case_id)[0]
+        block = doc["ir"]["blocks"][0]
+        block["kind"] = "ocr"
+        block["text"] = text
+        block["reviewed"] = False
+        doc["ir"]["needs_review"] = True
+        doc["ir"]["review_status"] = "pending"
+        repo.put("document", doc, case_id)
+        repo.put("document_version", {"id": f"{doc['id']}:v{doc['version']}", "ir": doc["ir"]}, case_id)
+    return doc["id"]
+
+
+def test_confirm_block_does_not_stale_facts_when_text_unchanged(env):
+    client = env["client"]
+    case = client.post("/api/v1/cases", json={"name": "确认本块不使事实过期"}).json()
+    client.post(
+        f"/api/v1/cases/{case['id']}/documents",
+        files={"file": ("scan.pdf", Path("examples/synthetic_scan.pdf").read_bytes(), "application/pdf")},
+    )
+    process_one(env["app"].state.store, env["root"], env["gate"])
+    _plant_ocr_text(env, case["id"])
+    data = client.get(f"/api/v1/cases/{case['id']}").json()
+    doc = data["documents"][0]
+    block = doc["ir"]["blocks"][0]
+    fact = client.post(
+        f"/api/v1/cases/{case['id']}/facts",
+        json={"field": "event", "value": block["text"], "source_ids": [block["id"]], "confirmed": True},
+    ).json()
+    assert fact["stale"] is False
+    result = client.put(
+        f"/api/v1/cases/{case['id']}/documents/{doc['id']}/confirmation",
+        json={"block_id": block["id"]},
+    )
+    assert result.status_code == 200, result.text
+    ir = result.json()["ir"]
+    confirmed = next(item for item in ir["blocks"] if item["id"] == block["id"])
+    assert confirmed["reviewed"] is True
+    assert confirmed["text"] == block["text"]
+    assert ir["needs_review"] is False
+    assert ir["review_status"] == "reviewed"
+    assert result.json()["version"] == doc["version"]
+    detail = client.get(f"/api/v1/cases/{case['id']}").json()
+    assert detail["facts"][0]["stale"] is False
+    assert detail["facts"][0]["confirmed"] is True
+    assert detail["facts"][0]["source_ids"] == [block["id"]]
+    assert any(event["event"] == "document.block_confirmed" for event in detail["audit"])
+
+
+def test_empty_scan_cannot_confirm(env):
+    client = env["client"]
+    case = client.post("/api/v1/cases", json={"name": "空白扫描不可确认"}).json()
+    client.post(
+        f"/api/v1/cases/{case['id']}/documents",
+        files={"file": ("scan.pdf", Path("examples/synthetic_scan.pdf").read_bytes(), "application/pdf")},
+    )
+    process_one(env["app"].state.store, env["root"], env["gate"])
+    doc = client.get(f"/api/v1/cases/{case['id']}").json()["documents"][0]
+    block = doc["ir"]["blocks"][0]
+    assert block["kind"] == "scan"
+    assert not block["text"]
+    result = client.put(
+        f"/api/v1/cases/{case['id']}/documents/{doc['id']}/confirmation",
+        json={"block_id": block["id"]},
+    )
+    assert result.status_code == 409
+    assert "转录" in result.text
+    unchanged = client.get(f"/api/v1/cases/{case['id']}").json()["documents"][0]["ir"]["blocks"][0]
+    assert unchanged["reviewed"] is False
+    assert unchanged["id"] == block["id"]
+
+
+def test_demo_cannot_confirm_block(env):
+    case, _ = demo_task(env)
+    data = env["client"].get(f"/api/v1/cases/{case['id']}").json()
+    doc = data["documents"][0]
+    block = doc["ir"]["blocks"][0]
+    result = env["client"].put(
+        f"/api/v1/cases/{case['id']}/documents/{doc['id']}/confirmation",
+        json={"block_id": block["id"]},
+    )
+    assert result.status_code == 409
+    assert "演示" in result.text
+    assert doc["ir"]["blocks"][0]["reviewed"] is True
+    after = env["client"].get(f"/api/v1/cases/{case['id']}").json()["documents"][0]
+    assert after["ir"]["blocks"][0]["id"] == block["id"]
+    assert after["version"] == doc["version"]

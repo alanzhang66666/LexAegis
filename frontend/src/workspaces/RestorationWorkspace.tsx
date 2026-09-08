@@ -69,16 +69,21 @@ export function RestorationWorkspace({task,currentCase,busy,locate,onAction,onDi
   onDismissFollowup?:(id:string)=>void;onFollowupTask?:()=>void;
 }) {
   if (!task.artifact) return <Empty title="尚无摘要结果" detail="完成审批和调用后，结果会在此进入来源校核。"/>;
-  if (task.type === "timeline" || task.type === "evidence_inventory") {
-    const rows = task.type === "timeline" ? (task.artifact.events || []) : (task.artifact.items || []);
+  if (task.type === "timeline" || task.type === "evidence_inventory" || task.type === "issue_extraction") {
+    const rows = task.type === "timeline" ? (task.artifact.events || [])
+      : task.type === "evidence_inventory" ? (task.artifact.items || [])
+      : (task.artifact.issues || []);
+    const note = task.type === "timeline"
+      ? "时间线仅从已确认事实中筛选，不调用边侧或云端模型。"
+      : task.type === "evidence_inventory"
+        ? "证据清单仅列出 field=evidence 的已有事实，不调用边侧或云端模型。"
+        : "按字段分组的候选 · 非法学结论 · 未调用模型";
     return <>
     <div className="result-heading"><Tag tone="green">本地确定性结果</Tag></div>
-    <p className="context-note">{task.type === "timeline"
-      ? "时间线仅从已确认事实中筛选，不调用边侧或云端模型。"
-      : "证据清单仅列出 field=evidence 的已有事实，不调用边侧或云端模型。"}</p>
+    <p className="context-note">{note}</p>
     {rows.map((row:Obj,index:number)=><article className="claim-card" key={row.id}>
       <div className="fact-meta"><span className="fact-no">{String(index+1).padStart(2,"0")}</span>
-        <Tag>{task.type === "timeline" ? "时间事实" : "证据"}</Tag></div>
+        <Tag>{task.type === "timeline" ? "时间事实" : task.type === "evidence_inventory" ? "证据" : (row.label || row.topic)}</Tag></div>
       <p>{row.text}</p>
       {row.purpose ? <small className="reason">{row.purpose}</small> : null}
       <div className="fact-footer"><AnchorViewer anchors={row.source_ids} onOpen={locate}/></div>
@@ -86,8 +91,8 @@ export function RestorationWorkspace({task,currentCase,busy,locate,onAction,onDi
   </>;
   }
   return <>
-    <div className="result-heading"><Tag tone={task.artifact.provenance==="simulation"?"amber":"green"}>
-      {task.artifact.provenance==="simulation"?"模拟结果 · 非模型生成":"云端 API 返回"}</Tag>
+    <div className="result-heading"><Tag tone={task.artifact.provenance==="cloud"?"green":"amber"}>
+      {task.artifact.provenance==="simulation"?"模拟结果 · 非模型生成":task.artifact.provenance==="local_deterministic"?"本地确定性草稿 · 未调用云端":"云端 API 返回"}</Tag>
       <a className="text-button" href={`/api/v1/tasks/${task.id}/export`}><Download size={14}/>导出云端视图</a>
     </div>
     <p className="context-note">云端原句与边侧身份回填分轨保存；引用优先于字符串替换。</p>

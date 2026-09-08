@@ -9,10 +9,11 @@
 - `LEX_EDGE_URL`、`LEX_EDGE_MODEL`，或在工作台「运行配置」保存。
 - 默认主机白名单：`127.0.0.1`、`localhost`、`edge-model`；内网另设 `LEX_EDGE_ALLOWED_HOSTS`。
 - 训练/微调可在外部完成，本地只部署最终权重（`models/` 不入库）。
-- 约 8GB 独显：本机 Qwen3-8B Q4 非思考即可支撑事实提取；无显卡可用更小 CPU 模型或纯人工。
-- 演示案例不调用边侧模型。
+- 现行权重：**MiniCPM5-2B** Q4_K_M 非思考（[openbmb/MiniCPM5-2B](https://huggingface.co/openbmb/MiniCPM5-2B)，GGUF 见 [MiniCPM5-2B-GGUF](https://huggingface.co/openbmb/MiniCPM5-2B-GGUF)）。约 4GB 显存即可按块抽取；无显卡可用 CPU 或纯人工。
+- 演示案例不调用边侧模型。仓库不分发权重。
+- 边侧模型仍只做事实抽取。正式案默认的事实摘要是本地按已披露文本拼装，不调用 MiniCPM，也不自动出网；云端润色须显式创建「云端摘要任务」。
 
-本机 GGUF：`lexaegis edge` 探测 `LEX_EDGE_URL`（默认 `127.0.0.1:8080`）。未监听时打印启动命令；`lexaegis edge --start` 可选拉起 `.artifacts/llama-server` + `models/edge.gguf`。`lexaegis start` 在边侧未监听时给出同一提示，不自动下载权重。
+本机 GGUF：`lexaegis edge` 探测 `LEX_EDGE_URL`（默认 `127.0.0.1:8080`）。未监听时打印启动命令；`lexaegis edge --start` 使用 `models/MiniCPM5-2B-Q4_K_M.gguf`，或 `LEX_EDGE_GGUF`。思考由 `--reasoning-budget 0 --reasoning off` 关闭。`lexaegis start` 在边侧未监听时给出同一提示，不自动下载权重。
 
 合成抽取工程探测：`lexaegis dataset probe-edge`（无法学分，见 [data/README.md](../data/README.md)）。
 
@@ -32,10 +33,14 @@ Compose：`docker compose --profile edge up -d`（见 [DEPLOY.md](DEPLOY.md)）�
 
 ## OCR
 
-无 OCR 时保留扫描页与待处理状态，可看原图并人工转录。自动 OCR 须在本机安装 `paddleocr>=3,<4` 与匹配的 `paddlepaddle>=3,<4`，预置离线模型，并设置：
+无 OCR 时保留扫描页与待处理状态，可看原图并人工转录。自动 OCR 须在本机安装 `paddleocr>=3,<4` 与匹配的 **CPU** `paddlepaddle>=3,<4`（不要安装 `paddlepaddle-gpu`），预置离线模型，并设置：
 
 - `LEX_OCR_ENABLED=1`
 - `LEX_OCR_PROVIDER=paddle`
 - `LEX_OCR_MODELS_READY=1`（部署者声明离线资产已就绪，不触发下载，不代表精度验收）
 
-失败或未配置时保留扫描锚点并转人工，**绝不**回退云端 OCR。结果默认需人工复核。当前已验证 Provider 契约与手工转录，**未验证 PaddleOCR 权重推理或识别精度**。
+适配器构造 PaddleOCR 时固定传入 `device="cpu"`，避免与占用 GPU 的 llama-server（MiniCPM5-2B GGUF）争用显存。GPU 留给边侧推理。CPU 路径另传 `enable_mkldnn=False`，规避 Paddle 3.3 oneDNN 崩溃，不表示识别质量。`pyproject.toml` extra `ocr` 使用的是 CPU 包名 `paddlepaddle`，不是 `paddlepaddle-gpu`。`LEX_OCR_MODELS_READY=1` 只表示操作员确认离线资产已预置，不代表识别精度已验收。仓库与 `lexaegis doctor` 都不会下载模型。
+
+`lexaegis doctor` 把 `ocr` 列为可选检查，与 `edge_model` / `edge_json` / `isolation` 一样不失败关闭：未启用或未声明模型资产时为 `unconfigured`（扫描页保留原图并人工转录）。若已设置 `LEX_OCR_ENABLED=1` 且 `LEX_OCR_MODELS_READY=1` 但导入、健康检查或 CPU 构造失败，该检查为 `failed`（doctor 总体仍通过）。`available` 只表示冒烟/资产声明，不代表识别精度。不使用云端 OCR。CI 不安装 `paddleocr`；真实扫描冒烟仅在本机已能 `import paddleocr` 且环境中已有 `LEX_OCR_MODELS_READY=1` 时执行，否则跳过，不要为跑通而 `pip install`。
+
+失败或未配置时保留扫描锚点并转人工，**绝不**回退云端 OCR。结果默认需人工复核。当前已验证 Provider 契约、doctor 可选检查与手工转录；本机已对 `examples/synthetic_scan.pdf` 做过合成扫描冒烟，**不是识别精度验收**。

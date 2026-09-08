@@ -4,7 +4,7 @@
   "name": "劳动争议",
   "version": "0.1.0-demo",
   "status": "demo",
-  "task_ids": ["fact_summary", "evidence_inventory"],
+  "task_ids": ["fact_summary", "evidence_inventory", "issue_extraction"],
   "fact_fields": ["entity", "relation", "event", "date", "amount", "evidence"],
   "rules": [
     {"field":"entity","necessity":"conditional","transform":"pseudonymize","reason":"演示：保留主体关系，替换直接身份。"},

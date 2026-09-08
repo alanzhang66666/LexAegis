@@ -9,7 +9,7 @@ TASKS = [
     TaskDefinition(id="fact_summary", name="事实摘要", available=True, output_type="claims"),
     TaskDefinition(id="timeline", name="时间线", available=True, output_type="timeline"),
     TaskDefinition(id="evidence_inventory", name="证据整理", available=True, output_type="evidence"),
-    TaskDefinition(id="issue_extraction", name="争点提取", output_type="issues"),
+    TaskDefinition(id="issue_extraction", name="争点提取", available=True, output_type="issues"),
 ]
 
 

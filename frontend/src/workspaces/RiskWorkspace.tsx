@@ -52,7 +52,7 @@ export function RiskWorkspace({ task, busy, label, attackLabels, onAction, onApp
     <div className="approval-actions">
       {task.status === "review" && <button className="primary" disabled={busy} onClick={onApprove}><Check size={16}/>审批当前完整请求</button>}
       {task.status === "approved" && <button className="primary" disabled={busy} onClick={()=>onAction("send")}><Play size={15}/>
-        {task.transport === "mock" ? "执行模拟调用" : "发送至已批准云端"}</button>}
+        {task.transport === "mock" ? "执行模拟调用" : task.transport === "local" ? "生成本地摘要草稿" : "发送至已批准云端"}</button>}
       {task.status === "unknown" && <button className="secondary" onClick={()=>onAction("reconcile")}>查询网关记录（不重发）</button>}
       <button className="secondary" disabled={busy || ["queued","sending","complete","unknown"].includes(task.status)}
         onClick={()=>onAction("evaluate")}>重新检验</button>

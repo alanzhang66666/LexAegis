@@ -4,6 +4,7 @@ from pathlib import Path
 import httpx
 from . import service
 from .contracts import AttackRun
+from .diagnostics import resolve_redteam_url
 from .governance import protocol_content_hash
 from .parsing import parse
 from .task_engine import validate_cloud_result
@@ -35,7 +36,12 @@ def finish_response(repo, task, record):
         try:
             validated = validate_cloud_result(task["type"], record["result"], task, task["fact_snapshot"])
             case = service.get_case(repo, task["case_id"])
-            provenance = "simulation" if task["transport"] == "mock" else "cloud"
+            if task["transport"] == "mock":
+                provenance = "simulation"
+            elif task["transport"] == "local":
+                provenance = "local_deterministic"
+            else:
+                provenance = "cloud"
             claims = validated.get("claims") if isinstance(validated, dict) else validated
             if isinstance(claims, list):
                 all_anchors = service.anchor_index(repo, task["case_id"], current_only=False)
@@ -175,7 +181,7 @@ def process_one(store, root, gateway_client=None, redteam_client=None):
                     if item.get("request", {}).get("wire_payload")
                 ]
             secret = os.getenv("LEX_REDTEAM_SECRET", "")
-            base = os.getenv("LEX_REDTEAM_URL", "http://redteam:8767")
+            base = resolve_redteam_url()
             client = redteam_client or httpx.Client(trust_env=False)
             runs = []
             try:

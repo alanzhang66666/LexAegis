@@ -29,7 +29,10 @@ python -m lexaegis.cli dataset list
 python -m lexaegis.cli dataset validate
 python -m lexaegis.cli dataset show mock_labor
 python -m lexaegis.cli dataset probe-edge
+python -m lexaegis.cli dataset promote-semi
 ```
+
+`promote-semi [src] [data-root]` 在标注完成、警告清空、且 `dispatch_allowed` / `contains_real_case_content` 均为 false 时才复制到 `data/semi_labor_v1` 并写 catalog；否则拒绝，不改主库。
 
 `probe-edge` 对 `mock_labor` 调已有 `EdgeClient.extract`，只记 JSON / `source_ids` / `quote` / 数字 / 别名等工程指标，**不打法律可用性分**。报告写到被忽略的 `.data/edge-probe/`。未配置或未启动 llama-server 时状态为 `unconfigured`，退出码 0，不把整个 `doctor` 失败关闭。
 

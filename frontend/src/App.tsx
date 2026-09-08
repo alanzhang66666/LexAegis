@@ -41,6 +41,7 @@ const labels: Record<string, string> = {
   fact_summary: "事实摘要",
   timeline: "时间线",
   evidence_inventory: "证据整理",
+  issue_extraction: "争点提取",
   unused_fact: "未使用事实",
   gap: "云端缺口",
   feedback_issue: "回写问题",
@@ -242,14 +243,15 @@ export default function App() {
     run(async () => {
       const t = await api(`/cases/${caseId}/tasks`, "POST", { transport, task_type: taskType });
       setTaskId(t.id);
-      setTab(taskType === "timeline" || taskType === "evidence_inventory" ? "result" : "disclosure");
+      setTab(taskType === "timeline" || taskType === "evidence_inventory" || taskType === "issue_extraction" ? "result" : "disclosure");
     }, taskType === "timeline" ? "本地时间线已生成，未发生外发。"
       : taskType === "evidence_inventory" ? "本地证据清单已生成，未发生外发。"
+      : taskType === "issue_extraction" ? "本地争点候选已生成，未发生外发。"
       : "披露方案已生成，请逐项核对。");
   const startFollowupTask = () =>
     run(async () => {
       const t = await api(`/cases/${caseId}/followups/task`, "POST", {
-        transport: currentCase?.mode === "demo" ? "mock" : "cloud",
+        transport: currentCase?.mode === "demo" ? "mock" : "local",
         task_type: "fact_summary",
       });
       setTaskId(t.id);
@@ -267,7 +269,7 @@ export default function App() {
   if (!loginReady)
     return (
       <div className="loading">
-        <Loader2 className="spin" /> 正在连接边侧工作台
+        <Loader2 className="spin" /> 正在检查本地登录
       </div>
     );
   if (!logged)
@@ -280,8 +282,8 @@ export default function App() {
           </b>
         </div>
         <div className="login-card">
-          <div className="eyebrow">LOCAL WORKSPACE · 本地可信环境</div>
-          <h1>
+          <div className="eyebrow">本地工作空间</div>
+          <h1 className="display">
             让案件信息，
             <br />
             留在合适的边界。
@@ -322,13 +324,14 @@ export default function App() {
           </small>
         </div>
         <div className="login-footer">
-          LEXAEGIS / 0.2 <span>PRIVACY BY PURPOSE</span>
+          LEXAEGIS / 0.2 <span>按目的保护</span>
         </div>
       </div>
     );
 
   return (
     <div className="app-shell">
+      <a className="skip-link" href="#main-content">跳到正文</a>
       <aside className="sidebar">
         <div className="brand">
           <ShieldCheck size={30} />
@@ -388,8 +391,8 @@ export default function App() {
         </div>
         <div className="side-bottom">
           <div className="edge-indicator">
-            <span className="pulse-dot" />
-            边侧工作台在线
+            {cap?.edge?.status === "available" && <span className="pulse-dot" />}
+            {edgeWorkbenchLabel(cap)}
           </div>
           <p>
             原文留在边侧
@@ -403,6 +406,7 @@ export default function App() {
                 await api("/logout", "POST");
                 setLogged(false);
                 setPrincipal(null);
+                setCap(null);
               })
             }
           >
@@ -414,25 +418,13 @@ export default function App() {
           </button>
         </div>
       </aside>
-      <main>
+      <main id="main-content">
         <header className="topbar">
           <div className="crumb">
             <PanelLeftClose size={17} />
             <span>工作空间</span>
             <ChevronRight size={13} />
-            <strong>
-              {page === "workspace"
-                ? currentCase?.name || "载入中"
-                : page === "settings"
-                  ? "运行配置"
-                  : page === "registry"
-                    ? "法学规则中心"
-                    : page === "providers"
-                      ? "服务商治理"
-                      : page === "benchmark"
-                        ? "隔离实验"
-                    : "案件工作台"}
-            </strong>
+            <strong>{pageCrumb(page, currentCase?.name)}</strong>
           </div>
           <div className="top-right">
             <span>
@@ -465,10 +457,8 @@ export default function App() {
           <div className="content dashboard">
             <div className="section-heading">
               <div>
-                <div className="eyebrow">CASE WORKSPACE</div>
-                <h1>
-                  案件工作台<span className="heading-dot">.</span>
-                </h1>
+                <div className="eyebrow">案件工作空间</div>
+                <h1>案件工作台</h1>
                 <p>从材料到摘要，为每一次信息披露保留依据。</p>
               </div>
               <button
@@ -484,8 +474,8 @@ export default function App() {
             </div>
             <div className="overview-grid">
               <div className="overview-intro">
-                <div className="eyebrow light">PURPOSE-BOUND DISCLOSURE</div>
-                <h2>
+                <div className="eyebrow light">按目的披露</div>
+                <h2 className="display">
                   先厘清事实，
                   <br />
                   再决定披露。
@@ -504,7 +494,7 @@ export default function App() {
               </div>
               <div className="metric">
                 <span>当前案件</span>
-                <strong>
+                <strong className="tabular">
                   {String(boot?.cases.length || 0).padStart(2, "0")}
                 </strong>
                 <small>
@@ -567,7 +557,7 @@ export default function App() {
                         {c.mode === "demo" ? "合成演示" : "正式案件"}
                       </Tag>
                     </span>
-                    <span>
+                    <span className="tabular">
                       {new Date(c.created_at).toLocaleDateString("zh-CN")}
                     </span>
                     <ArrowUpRight size={17} />
@@ -613,7 +603,7 @@ export default function App() {
               ].map((d) => (
                 <button
                   key={d.id}
-                  className="demo-card"
+                  className={d.id === "success" ? "demo-card featured" : "demo-card"}
                   disabled={busy}
                   onClick={() => createDemo(d.id)}
                 >
@@ -632,7 +622,7 @@ export default function App() {
             <footer className="page-footer">
               <ShieldCheck size={14} />
               正式案件在适用规则与必需风险检验就绪前，始终阻断外发。
-              <span>LEXAEGIS — 2026</span>
+              <span>LEXAEGIS - 2026</span>
             </footer>
           </div>
         )}
@@ -703,6 +693,16 @@ export default function App() {
                 onCorrect={(selected) => {
                   setForm({ text: selected.text, block_id: selected.id, document_id: selected.document_id });
                   setModal("correction");
+                }}
+                onConfirm={(selected) => {
+                  run(async () => {
+                    const d = await api(
+                      `/cases/${caseId}/documents/${selected.document_id}/confirmation`,
+                      "PUT",
+                      { block_id: selected.id },
+                    );
+                    setSource(d.ir.blocks.find((b: Obj) => b.id === selected.id) || d.ir.blocks[0]);
+                  });
                 }}/>
 
               <section className="work-panel">
@@ -738,7 +738,9 @@ export default function App() {
                   onDelete={(fact) => { setForm(fact); setModal("deleteFact"); }}
                   onTimeline={() => startTask("local", "timeline")}
                   onEvidence={() => startTask("local", "evidence_inventory")}
-                  onSummary={() => startTask(currentCase.mode === "demo" ? "mock" : "cloud")}/>}
+                  onIssues={() => startTask("local", "issue_extraction")}
+                  onSummary={() => startTask(currentCase.mode === "demo" ? "mock" : "local")}
+                  onStartCloud={() => startTask("cloud")}/>}
 
                 {tab !== "facts" && !task && (
                   <Empty
@@ -766,7 +768,7 @@ export default function App() {
                         className="text-button"
                         onClick={() =>
                           startTask(
-                            currentCase.mode === "demo" ? "mock" : "cloud",
+                            currentCase.mode === "demo" ? "mock" : "local",
                           )
                         }
                       >
@@ -814,7 +816,7 @@ export default function App() {
           <div className="content settings-page">
             <div className="section-heading">
               <div>
-                <div className="eyebrow">EDGE & CLOUD</div>
+                <div className="eyebrow">边侧与云端</div>
                 <h1>运行配置</h1>
                 <p>边侧负责敏感处理，云端只接收批准后的最小必要内容。</p>
               </div>
@@ -890,7 +892,7 @@ export default function App() {
         <Dialog open title={modal} busy={busy} onClose={() => setModal("")}>
             {modal === "case" && (
               <>
-                <div className="eyebrow">NEW CASE</div>
+                <div className="eyebrow">新建案件</div>
                 <h2>建立案件工作空间</h2>
                 <p>材料、身份映射和披露记录独立归属于该案件。</p>
                 <form
@@ -1133,6 +1135,25 @@ export default function App() {
       )}
     </div>
   );
+}
+
+function pageCrumb(page: string, caseName?: string) {
+  if (page === "workspace") return caseName || "载入中";
+  return (
+    {
+      cases: "案件工作台",
+      registry: "法学规则中心",
+      providers: "服务商治理",
+      benchmark: "隔离实验与风险协议",
+      settings: "运行配置",
+      users: "本地用户与角色",
+    }[page] || "案件工作台"
+  );
+}
+
+function edgeWorkbenchLabel(cap: Obj | null) {
+  if (!cap) return "边侧工作台检查中";
+  return `边侧工作台${txt(cap.edge?.status || "unconfigured")}`;
 }
 
 function asSlot(raw: any, fallback: Obj = {}) {

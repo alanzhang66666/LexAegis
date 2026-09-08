@@ -313,7 +313,7 @@ class ApprovedRequest(Contract):
     case_id: str
     task_id: str
     mode: Literal["formal", "demo"]
-    transport: Literal["mock", "cloud"]
+    transport: Literal["local", "mock", "cloud"]
     target: str
     wire_payload: dict | None = None
     body: dict
@@ -323,5 +323,5 @@ class ApprovedRequest(Contract):
 
 class TaskArtifact(Contract):
     claims: list[dict]
-    provenance: Literal["simulation", "cloud"]
+    provenance: Literal["simulation", "cloud", "local_deterministic"]
     confirmed: bool = False

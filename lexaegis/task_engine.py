@@ -14,7 +14,7 @@ TASK_DEFINITIONS = [
      "output_schema": {"type": "object", "required": ["claims"], "properties": {
          "claims": {"type": "array"}, "unused_fact_ids": {}, "gaps": {}}},
      "prompt_template": "根据已批准事实生成事实摘要，每条陈述必须给出 source_ids。同时返回 unused_fact_ids（未被任何陈述引用的外发事实 id）和 gaps（{code, detail, fact_ids}，code 仅为 missing_field、insufficient_support、ambiguous_reference、other）。不得改写身份 token，不得补充真实身份。",
-     "validator": "claims_v2", "transports": ["mock", "cloud"], "ui_renderer": "claims", "max_payload_chars": 50000},
+     "validator": "claims_v2", "transports": ["local", "mock", "cloud"], "ui_renderer": "claims", "max_payload_chars": 50000},
     {"schema_version": 2, "id": "timeline", "name": "时间线", "version": "2.0", "status": "available", "execution_type": "local_deterministic",
      "input_schema": {"type": "object", "required": ["facts"], "properties": {"facts": {"type": "array"}}},
      "output_schema": {"type": "object", "required": ["events"], "properties": {"events": {"type": "array"}}},
@@ -23,9 +23,25 @@ TASK_DEFINITIONS = [
      "input_schema": {"type": "object", "required": ["facts"], "properties": {"facts": {"type": "array"}}},
      "output_schema": {"type": "object", "required": ["items"], "properties": {"items": {"type": "array"}}},
      "validator": "evidence_v2", "transports": ["local"], "ui_renderer": "evidence", "max_payload_chars": 50000},
-    {"schema_version": 2, "id": "issue_extraction", "name": "争点提取", "version": "2.0", "status": "unimplemented", "execution_type": "approved_cloud",
-     "input_schema": {}, "output_schema": {}, "validator": "unimplemented", "transports": ["cloud"], "ui_renderer": "issues", "max_payload_chars": 50000},
+    {"schema_version": 2, "id": "issue_extraction", "name": "争点提取", "version": "2.0", "status": "available", "execution_type": "local_deterministic",
+     "input_schema": {"type": "object", "required": ["facts"], "properties": {"facts": {"type": "array"}}},
+     "output_schema": {"type": "object", "required": ["issues"], "properties": {"issues": {"type": "array", "items": {
+         "type": "object", "required": ["id", "topic", "label", "text", "source_ids", "fact_ids"],
+         "properties": {"id": {"type": "string"}, "topic": {"type": "string"}, "label": {"type": "string"},
+                        "text": {"type": "string"}, "source_ids": {"type": "array"}, "fact_ids": {"type": "array"}}}}}},
+     "validator": "issues_v2", "transports": ["local"], "ui_renderer": "issues", "max_payload_chars": 50000},
 ]
+
+
+def run_fact_summary_draft(decisions) -> dict:
+    """One outbound decision becomes one claim. Does not call a model."""
+    claims = []
+    for decision in decisions or []:
+        output = decision.get("output")
+        if not output:
+            continue
+        claims.append({"text": output, "source_ids": [decision["fact_id"]]})
+    return {"claims": claims, "unused_fact_ids": [], "gaps": []}
 
 
 def run_timeline(payload: dict) -> dict:
@@ -50,8 +66,52 @@ def run_evidence_inventory(payload: dict) -> dict:
     return {"items": items}
 
 
-BUILTIN_HANDLERS = {"timeline": run_timeline, "evidence_inventory": run_evidence_inventory}
-BUILTIN_VALIDATORS = {"claims_v2", "timeline_v2", "evidence_v2", "unimplemented"}
+_ISSUE_TOPICS = {
+    "relation": ("labor_relation", "关系字段"),
+    "amount": ("remuneration", "金额字段"),
+    "event": ("disputed_event", "事件字段"),
+    "date": ("timing", "日期字段"),
+    "evidence": ("evidence", "证据字段"),
+    "entity": ("parties", "主体字段"),
+}
+
+
+def run_issue_extraction(payload: dict) -> dict:
+    """Group confirmed facts by field. This is not a legal conclusion and calls no model."""
+    buckets: dict[str, list[dict]] = {field: [] for field in _ISSUE_TOPICS}
+    for fact in payload.get("facts") or []:
+        field = fact.get("field")
+        if field not in buckets:
+            continue
+        source_ids = [item for item in (fact.get("source_ids") or []) if item]
+        if not source_ids:
+            continue
+        buckets[field].append({**fact, "source_ids": source_ids})
+    issues = []
+    for field, facts in buckets.items():
+        if not facts:
+            continue
+        topic, label = _ISSUE_TOPICS[field]
+        source_ids = []
+        seen = set()
+        for fact in facts:
+            for item in fact["source_ids"]:
+                if item not in seen:
+                    seen.add(item)
+                    source_ids.append(item)
+        issues.append({
+            "id": f"issue_{topic}",
+            "topic": topic,
+            "label": label,
+            "text": "；".join(fact.get("value") or "" for fact in facts),
+            "source_ids": source_ids,
+            "fact_ids": [fact["id"] for fact in facts],
+        })
+    return {"issues": issues}
+
+
+BUILTIN_HANDLERS = {"timeline": run_timeline, "evidence_inventory": run_evidence_inventory, "issue_extraction": run_issue_extraction}
+BUILTIN_VALIDATORS = {"claims_v2", "timeline_v2", "evidence_v2", "issues_v2", "unimplemented"}
 
 
 def _plugins() -> dict[str, Any]:

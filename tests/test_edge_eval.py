@@ -5,7 +5,7 @@ import pytest
 
 from lexaegis.cli import main
 from lexaegis.edge_eval import probe_edge, score_extract, write_probe_report
-from lexaegis.edge_runtime import edge_status, start_edge, start_hint
+from lexaegis.edge_runtime import default_gguf, edge_status, start_edge, start_hint
 from lexaegis import edge_runtime
 
 
@@ -24,6 +24,7 @@ def test_score_extract_records_engineering_checks_only():
     assert score["quote_is_substring"] is True
     assert score["numbers_from_source"] is True
     assert score["aliases_no_conflict"] is True
+    assert score["field_in_enum"] is True
     assert "legal" not in json.dumps(score)
 
 
@@ -38,6 +39,15 @@ def test_score_extract_flags_source_quote_number_and_alias_errors():
     assert score["quote_is_substring"] is False
     assert score["numbers_from_source"] is False
     assert score["aliases_no_conflict"] is False
+    assert score["field_in_enum"] is True
+
+
+def test_score_extract_flags_invalid_field_enum():
+    facts = [{"field": "entity|relation|event|date|amount|evidence", "value": "甲", "source_ids": ["block_001"]}]
+    score = score_extract(_blocks(), facts)
+    assert score["json_valid"] is True
+    assert score["field_in_enum"] is False
+    assert "field" in "".join(score["issues"])
 
 
 def test_probe_edge_unconfigured_does_not_score_legal(monkeypatch, tmp_path):
@@ -137,7 +147,7 @@ def _ready_edge_status(**overrides):
         "port": 8080,
         "binary": "llama-server",
         "binary_present": True,
-        "weights": "edge.gguf",
+        "weights": "MiniCPM5-2B-Q4_K_M.gguf",
         "weights_present": True,
         "hint": "x",
     }
@@ -178,3 +188,18 @@ def test_start_edge_success_leaves_process(monkeypatch):
     assert result["started"] is True
     assert result["pid"] == 4242
     assert fake.terminated is False
+
+
+def test_default_gguf_uses_minicpm_or_env(tmp_path, monkeypatch):
+    root = tmp_path / "repo"
+    models = root / "models"
+    models.mkdir(parents=True)
+    minicpm = models / "MiniCPM5-2B-Q4_K_M.gguf"
+    minicpm.write_bytes(b"x")
+    monkeypatch.delenv("LEX_EDGE_GGUF", raising=False)
+    monkeypatch.setattr(edge_runtime, "repo_root", lambda: root)
+    assert default_gguf() == minicpm
+    configured = tmp_path / "custom.gguf"
+    configured.write_bytes(b"z")
+    monkeypatch.setenv("LEX_EDGE_GGUF", str(configured))
+    assert default_gguf() == configured

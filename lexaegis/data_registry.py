@@ -5,6 +5,7 @@ Scans `data/*/dataset.json`. Does not write SQLite. Formal dispatch is always fa
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Literal
 
@@ -12,8 +13,11 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .dataset import (
     build_mock_corpus,
+    build_semisynthetic_records,
+    draft_semi_labor_core,
     freeze_mock_corpus,
     read_records_jsonl,
+    validate_annotations,
     write_records_jsonl,
 )
 from .util import digest
@@ -89,10 +93,18 @@ class DatasetCatalog(RegistryModel):
 MOCK_LABOR_ID = "mock_labor"
 MOCK_LABOR_VERSION = "1.0.0"
 MOCK_LABOR_DIRNAME = "mock_labor_v1"
+SEMI_LABOR_ID = "semi_labor"
+SEMI_LABOR_VERSION = "1.0.0"
+SEMI_LABOR_DIRNAME = "semi_labor_v1"
 
 
 def default_data_root() -> Path:
     return Path(__file__).resolve().parent.parent / "data"
+
+
+def default_local_scaffold_dir() -> Path:
+    """Cwd-relative ignored directory; never the catalogued `data/` tree."""
+    return Path(".data") / SEMI_LABOR_DIRNAME
 
 
 def write_json_once(path: Path, value: dict) -> None:
@@ -340,3 +352,228 @@ def write_mock_labor_v1(root: Path | None = None) -> DatasetManifest:
     else:
         write_catalog(root, [entry])
     return manifest
+
+
+def build_semi_labor_manifest(records: list[dict], seed: int = 20260905) -> DatasetManifest:
+    draft = draft_semi_labor_core(records, seed)
+    return DatasetManifest(
+        id=SEMI_LABOR_ID,
+        name="劳动争议结构抽象半合成脚手架",
+        version=SEMI_LABOR_VERSION,
+        kind="structure_abstracted_semisynthetic",
+        status="draft",
+        domain_id="labor",
+        task_ids=["fact_summary"],
+        seed=draft["seed"],
+        generator_id=draft["generator_version"],
+        generator_version=draft["generator_version"],
+        records_hash=draft["records_hash"],
+        freeze_hash=draft["freeze_hash"],
+        record_hashes=draft["record_hashes"],
+        dependency_hash=draft["dependency_hash"],
+        split=draft["split"],
+        provenance=DatasetProvenance(
+            method=draft["generation_artifact"]["method"],
+            contains_real_case_content=False,
+            structure_source="abstract_only",
+        ),
+        legal_annotation_status="pending",
+        dispatch_allowed=False,
+        groups=list(draft["groups"]),
+        count=draft["count"],
+        records_path="records.jsonl",
+        generation_artifact=GenerationArtifact.model_validate(draft["generation_artifact"]),
+        freeze_status=draft["freeze_status"],
+    )
+
+
+def write_semi_labor_v1(destination: Path | None = None) -> DatasetManifest:
+    """Materialize the 100-record draft scaffold; refuse overwrite. Does not touch catalog."""
+    directory = Path(destination) if destination is not None else default_local_scaffold_dir()
+    directory.mkdir(parents=True, exist_ok=True)
+    records_path = directory / "records.jsonl"
+    dataset_path = directory / "dataset.json"
+    if records_path.exists() or dataset_path.exists():
+        raise FileExistsError("同版本数据集不可覆盖")
+    records = build_semisynthetic_records()
+    manifest = build_semi_labor_manifest(records)
+    write_records_jsonl(records_path, records)
+    write_json_once(dataset_path, manifest.model_dump(mode="json", exclude_none=True))
+    return manifest
+
+
+def validate_local_scaffold(path: Path | None = None) -> dict:
+    """Validate a local scaffold tree without catalog membership.
+
+    Annotation emptiness is reported as warnings and does not fail the result.
+    A missing default scaffold is success with present=False.
+    """
+    target = Path(path) if path is not None else default_local_scaffold_dir()
+    if target.is_file():
+        dataset_path = target
+        directory = target.parent
+    else:
+        directory = target
+        dataset_path = directory / "dataset.json"
+    if not dataset_path.is_file():
+        return {
+            "ok": True,
+            "present": False,
+            "path": directory.as_posix(),
+            "problems": [],
+            "warnings": [],
+        }
+    try:
+        manifest = load_manifest(dataset_path)
+    except (OSError, json.JSONDecodeError, ValidationError) as error:
+        return {
+            "ok": False,
+            "present": True,
+            "path": directory.as_posix(),
+            "problems": [f"{dataset_path.as_posix()} 无效: {error}"],
+            "warnings": [],
+        }
+    try:
+        records = read_records_jsonl(_records_file(directory, manifest))
+    except (OSError, json.JSONDecodeError, ValueError) as error:
+        return {
+            "ok": False,
+            "present": True,
+            "path": directory.as_posix(),
+            "problems": [f"{manifest.id}: 无法读取记录 {error}"],
+            "warnings": [],
+        }
+    problems = _validate_records(manifest, records)
+    warnings = validate_annotations(records)
+    return {
+        "ok": not problems,
+        "present": True,
+        "path": directory.as_posix(),
+        "problems": problems,
+        "warnings": warnings,
+        "id": manifest.id,
+        "version": manifest.version,
+        "count": manifest.count,
+        "dispatch_allowed": manifest.dispatch_allowed,
+        "freeze_status": manifest.freeze_status,
+        "legal_annotation_status": manifest.legal_annotation_status,
+    }
+
+
+def _scaffold_paths(path: Path | None) -> tuple[Path, Path]:
+    target = Path(path) if path is not None else default_local_scaffold_dir()
+    if target.is_file():
+        return target.parent, target
+    return target, target / "dataset.json"
+
+
+def promote_semi_labor(src: Path | None = None, data_root: Path | None = None) -> dict:
+    """Copy a local scaffold into the catalogued tree only after annotation gates pass.
+
+    Refuses without writing when annotation is incomplete, warnings remain,
+    dispatch_allowed is not false, or the scaffold claims real case content.
+    """
+    directory, dataset_path = _scaffold_paths(src)
+    root = Path(data_root) if data_root is not None else default_data_root()
+    dest = root / SEMI_LABOR_DIRNAME
+    problems: list[str] = []
+    warnings: list[str] = []
+    dataset_id = SEMI_LABOR_ID
+    annotation_status = None
+    dispatch_allowed = None
+    contains_real = None
+
+    if not dataset_path.is_file():
+        return {
+            "ok": False,
+            "promoted": False,
+            "path": directory.as_posix(),
+            "destination": dest.as_posix(),
+            "problems": [f"缺少半合成脚手架 {directory.as_posix()}"],
+            "warnings": [],
+        }
+
+    try:
+        raw = json.loads(dataset_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        return {
+            "ok": False,
+            "promoted": False,
+            "path": directory.as_posix(),
+            "destination": dest.as_posix(),
+            "problems": [f"{dataset_path.as_posix()} 无效: {error}"],
+            "warnings": [],
+        }
+
+    dataset_id = raw.get("id") or SEMI_LABOR_ID
+    annotation_status = raw.get("legal_annotation_status")
+    dispatch_allowed = raw.get("dispatch_allowed")
+    contains_real = (raw.get("provenance") or {}).get("contains_real_case_content")
+    if dispatch_allowed is not False:
+        problems.append(f"{dataset_id}: dispatch_allowed 必须为 false")
+    if contains_real is not False:
+        problems.append(f"{dataset_id}: 清单不得声明含真实案件内容")
+    if annotation_status != "complete":
+        problems.append(
+            f"{dataset_id}: legal_annotation_status 必须为 complete，当前为 {annotation_status}"
+        )
+
+    local = validate_local_scaffold(directory)
+    problems.extend(local.get("problems") or [])
+    warnings = list(local.get("warnings") or [])
+    if warnings:
+        problems.append(f"{dataset_id}: 标注未完成，拒绝入库")
+
+    if problems:
+        return {
+            "ok": False,
+            "promoted": False,
+            "path": directory.as_posix(),
+            "destination": dest.as_posix(),
+            "problems": problems,
+            "warnings": warnings,
+            "id": dataset_id,
+            "legal_annotation_status": annotation_status,
+            "dispatch_allowed": dispatch_allowed,
+            "contains_real_case_content": contains_real,
+        }
+
+    dest_records = dest / "records.jsonl"
+    dest_dataset = dest / "dataset.json"
+    if dest_records.exists() or dest_dataset.exists():
+        raise FileExistsError("同版本数据集不可覆盖")
+    manifest = load_manifest(dataset_path)
+    catalog_file = _catalog_path(root)
+    entry = CatalogEntry(
+        id=manifest.id,
+        version=manifest.version,
+        kind=manifest.kind,
+        status=manifest.status,
+        path=SEMI_LABOR_DIRNAME,
+        freeze_hash=manifest.freeze_hash,
+    )
+    existing: list[CatalogEntry] = []
+    if catalog_file.exists():
+        catalog = load_catalog(root)
+        if any(item.id == entry.id and item.version == entry.version for item in catalog.datasets):
+            raise FileExistsError("catalog 中已存在相同 (id, version)")
+        existing = list(catalog.datasets)
+
+    dest.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(_records_file(directory, manifest), dest_records)
+    shutil.copy2(dataset_path, dest_dataset)
+    write_catalog(root, [*existing, entry])
+    return {
+        "ok": True,
+        "promoted": True,
+        "path": dest.as_posix(),
+        "destination": dest.as_posix(),
+        "problems": [],
+        "warnings": [],
+        "id": entry.id,
+        "version": entry.version,
+        "count": local.get("count"),
+        "legal_annotation_status": annotation_status,
+        "dispatch_allowed": False,
+        "contains_real_case_content": False,
+    }

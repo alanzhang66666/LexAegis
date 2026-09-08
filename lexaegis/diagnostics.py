@@ -5,9 +5,21 @@ import socket
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
+
+import httpx
 
 from .launcher import frontend_location
 from .util import app_dir
+
+NATIVE_REDTEAM_URL = "http://127.0.0.1:8767"
+ISOLATED_REDTEAM_URL = "http://redteam:8767"
+_UNVERIFIED_GAPS = (
+    "未验收：未安装 Docker/Compose 或无法执行探测",
+    "未验收：不是隔离拓扑",
+    "未验收：出口仍开放",
+    "未验收：卷或密钥隔离不正确",
+)
 
 
 def edge_json_probe(timeout=8) -> dict:
@@ -31,6 +43,56 @@ def edge_json_probe(timeout=8) -> dict:
         return {"ok": False, "status": "failed", "detail": "边侧 JSON 探测失败；边侧仍为可选能力"}
 
 
+def _ocr_construct_probe() -> None:
+    """CPU engine construct after operator attestation. Does not recognize pages."""
+    from .parsing import PaddleOCRProvider
+
+    PaddleOCRProvider()._create_engine()
+
+
+def ocr_probe() -> dict:
+    """Optional OCR doctor. Unconfigured does not fail-close; attested-but-broken is failed."""
+    enabled = os.getenv("LEX_OCR_ENABLED") == "1"
+    attested = os.getenv("LEX_OCR_MODELS_READY") == "1"
+    if not enabled:
+        return {
+            "ok": True,
+            "status": "unconfigured",
+            "detail": "本地 OCR 为可选能力；未启用时扫描页保留原图并进入人工转录",
+        }
+    from .parsing import ocr_capability
+
+    capability = ocr_capability()
+    status = capability.get("status")
+    provider_id = capability.get("provider") or os.getenv("LEX_OCR_PROVIDER", "paddle")
+    if status == "available":
+        if attested and provider_id == "paddle":
+            try:
+                _ocr_construct_probe()
+            except Exception:
+                return {
+                    "ok": False,
+                    "status": "failed",
+                    "detail": "本地 OCR 引擎构造失败；OCR 仍为可选能力。此检查不是精度验收",
+                }
+        return {
+            "ok": True,
+            "status": "available",
+            "detail": "OCR 冒烟/资产声明通过，不代表识别精度已验收",
+        }
+    if attested or status == "failed":
+        return {
+            "ok": False,
+            "status": "failed",
+            "detail": capability.get("detail") or "本地 OCR 探测失败；OCR 仍为可选能力",
+        }
+    return {
+        "ok": True,
+        "status": "unconfigured",
+        "detail": "本地 OCR 为可选能力；模型资产未声明就绪，扫描页保留原图并进入人工转录",
+    }
+
+
 def doctor_report() -> dict:
     root = app_dir()
     checks = {
@@ -41,9 +103,170 @@ def doctor_report() -> dict:
         "deployment_mode": {"ok": os.getenv("LEX_DEPLOYMENT_MODE", "native") in ("native", "isolated"), "detail": os.getenv("LEX_DEPLOYMENT_MODE", "native")},
         "edge_model": {"ok": bool(os.getenv("LEX_EDGE_MODEL")), "detail": "已配置" if os.getenv("LEX_EDGE_MODEL") else "可选，未配置时人工录入事实"},
         "edge_json": edge_json_probe(),
+        "isolation": native_isolation_note(),
+        "host_publish": host_publish_capability(),
+        "ocr": ocr_probe(),
     }
-    optional = {"edge_model", "edge_json"}
+    optional = {"edge_model", "edge_json", "isolation", "host_publish", "ocr"}
     return {"ok": all(item["ok"] for key, item in checks.items() if key not in optional), "checks": checks}
+
+
+def isolated_runtime() -> bool:
+    return os.getenv("LEX_DEPLOYMENT_MODE") == "isolated" or os.getenv("LEX_ISOLATED") == "1"
+
+
+def resolve_redteam_url() -> str:
+    """Compose DNS on isolated runtimes; loopback on native when unset."""
+    explicit = (os.getenv("LEX_REDTEAM_URL") or "").strip()
+    if explicit:
+        return explicit.rstrip("/")
+    return ISOLATED_REDTEAM_URL if isolated_runtime() else NATIVE_REDTEAM_URL
+
+
+def probe_redteam(timeout=0.4) -> dict:
+    """HTTP reachability of the redteam host. Does not evaluate attacks or start the service."""
+    url = resolve_redteam_url()
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return {"ok": False, "status": "unconfigured", "detail": f"红队 URL 无效（{url}）", "url": url}
+    try:
+        response = httpx.get(url + "/health", timeout=timeout, trust_env=False)
+        return {
+            "ok": True,
+            "status": "available",
+            "detail": f"红队服务可达（{url}）",
+            "url": url,
+            "http_status": response.status_code,
+        }
+    except Exception:
+        return {
+            "ok": False,
+            "status": "unconfigured",
+            "detail": f"红队服务不可达（{url}）；native 需单独启动，不会自动拉起。未运行、错误和不确定均不算通过",
+            "url": url,
+        }
+
+
+def native_isolation_note() -> dict:
+    """Informational only: native is never formal isolation. Doctor must not fail-close."""
+    if isolated_runtime():
+        return {
+            "ok": True,
+            "status": "configured",
+            "detail": "环境声明 isolated；正式验收仍须 check-isolation 探测全部通过后记录，native 不能自证",
+        }
+    return {
+        "ok": True,
+        "status": "unconfigured",
+        "detail": "未验收：native 不是正式隔离，lexaegis start 不能自证 isolation_verified；正式外发保持阻断",
+    }
+
+
+def isolation_capability(settings: dict | None = None) -> dict:
+    settings = settings or {}
+    mode = settings.get("deployment_mode") or os.getenv("LEX_DEPLOYMENT_MODE", "native")
+    verified = bool(settings.get("isolation_verified"))
+    if verified and mode == "isolated":
+        return {"status": "available", "detail": "已记录隔离验收"}
+    if mode != "isolated":
+        return {
+            "status": "unconfigured",
+            "detail": "未验收：native 不能自证隔离；正式隔离仅在 Compose 探测全部通过后记录，lexaegis start 不会翻转 isolation_verified",
+        }
+    return {"status": "unconfigured", "detail": "未验收：尚无通过的隔离验收记录"}
+
+
+_COMPOSE_PORT_CMD = ["docker", "compose", "port", "api", "8765"]
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def parse_compose_host_bind(text: str) -> str:
+    """Return 127.0.0.1:<port> when published. `invalid IP:0` is unpublished."""
+    line = ""
+    for raw in reversed((text or "").splitlines()):
+        candidate = raw.strip()
+        if candidate:
+            line = candidate
+            break
+    if not line or "invalid ip" in line.lower():
+        return ""
+    host, sep, port = line.rpartition(":")
+    if sep != ":" or host != "127.0.0.1" or not port.isdigit() or int(port) <= 0:
+        return ""
+    return f"127.0.0.1:{int(port)}"
+
+
+def compose_host_port_line(timeout=3) -> str:
+    """Exact `docker compose port api 8765` line. Isolation probe is unrelated."""
+    try:
+        result = subprocess.run(
+            _COMPOSE_PORT_CMD,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=_REPO_ROOT,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return str(error)
+    line = (result.stdout or "").strip() or (result.stderr or "").strip()
+    if not line:
+        return f"exit {result.returncode}"
+    return line.splitlines()[-1].strip()
+
+
+def host_publish_capability(timeout=0.8, port_line: str | None = None) -> dict:
+    """Host publish is not isolation. Does not fail-close. Never implies the login page opened."""
+    raw = compose_host_port_line() if port_line is None else port_line
+    bind = parse_compose_host_bind(raw)
+    if not bind:
+        return {
+            "ok": True,
+            "status": "unconfigured",
+            "bind": raw,
+            "detail": (
+                f"未验收：宿主机口未发布（{raw or 'empty'}）；"
+                "隔离探测通过不等于浏览器已通"
+            ),
+        }
+    try:
+        response = httpx.get(f"http://{bind}/api/v1/health", timeout=timeout, trust_env=False)
+        if response.status_code == 200:
+            return {
+                "ok": True,
+                "status": "available",
+                "bind": bind,
+                "detail": f"宿主机口已发布 {bind}，健康检查 200；打开登录页才算浏览器可达",
+            }
+        return {
+            "ok": True,
+            "status": "unconfigured",
+            "bind": bind,
+            "detail": (
+                f"未验收：已解析绑定 {bind}，健康检查 HTTP {response.status_code}；"
+                "不主张浏览器已通"
+            ),
+        }
+    except Exception:
+        return {
+            "ok": True,
+            "status": "unconfigured",
+            "bind": bind,
+            "detail": f"未验收：已解析绑定 {bind}，健康检查未通；不主张浏览器已通",
+        }
+
+
+def redteam_capability(protocols, probe=None) -> dict:
+    """Available only with ≥4 frozen protocols *and* a reachable redteam host."""
+    probe = probe if probe is not None else probe_redteam()
+    frozen = len([item for item in protocols if item.get("status") == "frozen"])
+    if not probe.get("ok"):
+        return {"status": "unconfigured", "detail": probe.get("detail") or "红队服务不可达"}
+    if frozen < 4:
+        return {
+            "status": "unconfigured",
+            "detail": f"冻结协议 {frozen}/4；未运行、错误和不确定均不算通过",
+        }
+    return {"status": "available", "detail": "未运行、错误和不确定均不算通过"}
 
 
 def isolation_report(timeout=.4) -> dict:
@@ -65,6 +288,31 @@ def isolation_report(timeout=.4) -> dict:
     return {"ok": all(checks.values()), "checks": checks, "detail": "单次探测只形成部署自检记录，不能替代防火墙审计。"}
 
 
+def _unverified_isolation(details, reason):
+    checklist = {
+        "docker_compose": {"ok": False, "detail": _UNVERIFIED_GAPS[0]},
+        "isolated_topology": {"ok": False, "detail": _UNVERIFIED_GAPS[1]},
+        "egress_closed": {"ok": False, "detail": _UNVERIFIED_GAPS[2]},
+        "volumes_secrets": {"ok": False, "detail": _UNVERIFIED_GAPS[3]},
+    }
+    return {
+        "ok": False,
+        "checks": {},
+        "details": details,
+        "checklist": checklist,
+        "gaps": list(_UNVERIFIED_GAPS),
+        "detail": f"未验收。{reason} 未记录 isolation_verified。",
+    }
+
+
+def _service_absent(text: str) -> bool:
+    lowered = (text or "").lower()
+    return any(token in lowered for token in (
+        "not running", "no such service", "no container", "not found",
+        "doesn't exist", "does not exist", "no such container",
+    ))
+
+
 def compose_isolation_report() -> dict:
     probes = {
         "api_no_egress": ["docker", "compose", "exec", "-T", "api", "python", "-c", "import socket; s=socket.socket(); s.settimeout(3); assert s.connect_ex(('1.1.1.1',443)) != 0"],
@@ -73,14 +321,60 @@ def compose_isolation_report() -> dict:
         "redteam_no_secrets": ["docker", "compose", "run", "--rm", "--no-deps", "--entrypoint", "python", "redteam", "-c", "import os; from pathlib import Path; assert not os.getenv('LEX_GATEWAY_SECRET'); assert not Path('/data/app.sqlite').exists()"],
         "benchmark_no_secrets": ["docker", "compose", "run", "--rm", "--no-deps", "--entrypoint", "python", "benchmark", "-c", "import os; from pathlib import Path; assert not os.getenv('LEX_GATEWAY_SECRET'); assert not Path('/data/app.sqlite').exists()"],
     }
+    try:
+        version = subprocess.run(["docker", "compose", "version"], capture_output=True, text=True)
+    except OSError as error:
+        return _unverified_isolation({"runtime": str(error)}, "Docker Compose 不可用")
+    if version.returncode != 0:
+        return _unverified_isolation(
+            {"runtime": (version.stderr or version.stdout).strip()[-500:]},
+            "Docker Compose 不可用",
+        )
     checks = {}
     details = {}
     for name, command in probes.items():
         try:
             result = subprocess.run(command, capture_output=True, text=True)
         except OSError as error:
-            return {"ok": False, "checks": checks, "details": {"runtime": str(error)}, "detail": "Docker Compose 不可用，未记录隔离验收。"}
+            return _unverified_isolation({"runtime": str(error), **details}, "Docker Compose 探测中断")
         checks[name] = result.returncode == 0
         details[name] = (result.stderr or result.stdout).strip()[-500:]
-    return {"ok": all(checks.values()), "checks": checks, "details": details,
-            "detail": "运行态探测不能替代宿主机防火墙、卷权限和镜像供应链审计。"}
+    topology_ok = (
+        (checks.get("api_no_egress") or not _service_absent(details.get("api_no_egress", "")))
+        and (checks.get("worker_no_egress") or not _service_absent(details.get("worker_no_egress", "")))
+    )
+    egress_ok = bool(checks.get("api_no_egress") and checks.get("worker_no_egress"))
+    volumes_ok = bool(
+        checks.get("gateway_no_case_volume")
+        and checks.get("redteam_no_secrets")
+        and checks.get("benchmark_no_secrets")
+    )
+    checklist = {
+        "docker_compose": {"ok": True, "detail": "Docker Compose 可执行"},
+        "isolated_topology": {
+            "ok": topology_ok,
+            "detail": "隔离拓扑已探测" if topology_ok else _UNVERIFIED_GAPS[1],
+        },
+        "egress_closed": {
+            "ok": egress_ok,
+            "detail": "api/worker 出口探测被阻断" if egress_ok else _UNVERIFIED_GAPS[2],
+        },
+        "volumes_secrets": {
+            "ok": volumes_ok,
+            "detail": "卷与密钥隔离探测通过" if volumes_ok else _UNVERIFIED_GAPS[3],
+        },
+    }
+    ok = all(checks.values())
+    gaps = [item["detail"] for item in checklist.values() if not item["ok"]]
+    return {
+        "ok": ok,
+        "checks": checks,
+        "details": details,
+        "checklist": checklist,
+        "gaps": gaps,
+        "detail": (
+            "运行态探测不能替代宿主机防火墙、卷权限和镜像供应链审计。"
+            if ok else
+            "未验收。Compose 探测未全部通过，未记录 isolation_verified。"
+        ),
+    }
