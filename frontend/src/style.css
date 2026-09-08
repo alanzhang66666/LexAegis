@@ -317,18 +317,18 @@ nav button {
   color: #b9cabe;
 }
 nav button.active {
-  background: #315445;
+  background: color-mix(in srgb, #ffffff 14%, var(--surface-sidebar));
   color: #f2f5eb;
 }
 nav button:not(.active):hover {
-  background: #254838;
+  background: color-mix(in srgb, #ffffff 8%, var(--surface-sidebar));
 }
 .nav-count {
   font-size: 12px;
   color: #c9d5c4;
   margin-left: auto;
   padding: 1px 5px;
-  background: #54705a;
+  background: color-mix(in srgb, #ffffff 18%, var(--surface-sidebar));
   border-radius: 3px;
   font-variant-numeric: tabular-nums;
 }
@@ -502,7 +502,7 @@ nav button:not(.active):hover {
 .overview-intro {
   position: relative;
   overflow: hidden;
-  background: #254e3e;
+  background: var(--surface-intro);
   border-radius: 10px;
   padding: 26px 28px;
   min-height: 224px;
@@ -804,6 +804,14 @@ nav button:not(.active):hover {
 .toast button {
   display: flex;
   align-items: center;
+}
+.toast.error {
+  color: var(--toast-error-fg);
+  background: var(--toast-error-bg);
+}
+.toast.success {
+  color: var(--toast-success-fg);
+  background: var(--toast-success-bg);
 }
 .busy-bar {
   position: fixed;
@@ -1657,6 +1665,20 @@ pre {
   background: var(--surface-canvas);
   padding: 100px 24px;
 }
+.login-appearance {
+  position: absolute;
+  top: 37px;
+  right: 45px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.palette-select {
+  width: auto;
+  min-width: 0;
+  padding: 6px 8px;
+  font-size: 12px;
+}
 .login-brand {
   position: absolute;
   top: 37px;
@@ -1664,7 +1686,7 @@ pre {
   display: flex;
   align-items: center;
   gap: 12px;
-  color: #28523c;
+  color: var(--color-brand);
 }
 .login-brand b {
   font-size: 25px;
@@ -1676,7 +1698,7 @@ pre {
   font-weight: 400;
   letter-spacing: 3px;
   margin-top: 3px;
-  color: #7c9470;
+  color: var(--color-muted);
 }
 .login-card {
   width: 480px;
@@ -1699,12 +1721,12 @@ pre {
 .login-card p {
   font-size: 12px;
   line-height: 1.9;
-  color: #8c9b7e;
+  color: var(--color-muted);
   margin-bottom: 28px;
 }
 .login-card label {
   font-size: 12px;
-  color: #7f926d;
+  color: var(--color-muted);
 }
 .login-card .primary {
   width: 100%;
@@ -1717,7 +1739,7 @@ pre {
   align-items: center;
   gap: 6px;
   font-size: 12px;
-  color: #a0ac91;
+  color: var(--color-muted);
 }
 .login-footer {
   position: absolute;
@@ -1991,6 +2013,10 @@ pre {
     left: 25px;
     top: 28px;
   }
+  .login-appearance {
+    right: 25px;
+    top: 28px;
+  }
   .login-card {
     padding: 30px 24px;
   }
@@ -2089,9 +2115,6 @@ pre {
 :root[data-theme="dark"] .settings-note,
 :root[data-theme="dark"] .system-panel pre { background: var(--surface-muted); border-color: var(--line); color: var(--color-ink); }
 :root[data-theme="dark"] .tag { background: var(--surface-muted); color: var(--color-muted); }
-:root[data-theme="dark"] .toast.error { color: #e28b82; background: #3a2422; }
-:root[data-theme="dark"] .toast.success { color: #73bd99; background: #1f3228; }
-:root[data-theme="dark"] .overview-intro { background: #1b3a2f; }
 :root[data-theme="dark"] .metric strong,
 :root[data-theme="dark"] .login-card h1,
 :root[data-theme="dark"] .case-name b,

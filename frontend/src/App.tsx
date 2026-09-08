@@ -30,6 +30,49 @@ import { FactWorkspace } from "./workspaces/FactWorkspace";
 import { DisclosureWorkspace } from "./workspaces/DisclosureWorkspace";
 import { ContextRail } from "./workspaces/ContextRail";
 
+const PALETTES = [
+  ["forest", "林绿"],
+  ["ink", "墨青"],
+  ["dusk", "缃褐"],
+] as const;
+type Palette = (typeof PALETTES)[number][0];
+
+function storedPalette(): Palette {
+  const value = localStorage.getItem("lex_palette");
+  return value === "ink" || value === "dusk" || value === "forest" ? value : "forest";
+}
+
+function AppearanceSwitch({
+  theme,
+  palette,
+  setTheme,
+  setPalette,
+}: {
+  theme: string;
+  palette: Palette;
+  setTheme: (theme: string) => void;
+  setPalette: (palette: Palette) => void;
+}) {
+  return (
+    <>
+      <select
+        className="palette-select"
+        aria-label="配色"
+        value={palette}
+        onChange={(event) => setPalette(event.target.value as Palette)}
+      >
+        {PALETTES.map(([value, label]) => (
+          <option key={value} value={value}>
+            {label}
+          </option>
+        ))}
+      </select>
+      <button className="icon-button" aria-label={theme==="light"?"切换深色主题":"切换浅色主题"}
+        onClick={()=>setTheme(theme==="light"?"dark":"light")}>{theme==="light"?<Moon size={15}/>:<Sun size={15}/>}</button>
+    </>
+  );
+}
+
 type Obj = Record<string, any>;
 const labels: Record<string, string> = {
   entity: "主体",
@@ -110,6 +153,7 @@ export default function App() {
     [username, setUsername] = useState("admin"),
     [password, setPassword] = useState("");
   const [theme,setTheme]=useState(()=>localStorage.getItem("lex_theme")||"light");
+  const [palette,setPalette]=useState<Palette>(storedPalette);
   const [caseId, setCaseId] = useState(""),
     [data, setData] = useState<Obj | null>(null),
     [page, setPage] = useState("cases"),
@@ -131,7 +175,12 @@ export default function App() {
     setLogged(true);
     if (caseId) setData(await api("/cases/" + caseId));
   }, [caseId]);
-  useEffect(()=>{document.documentElement.dataset.theme=theme;localStorage.setItem("lex_theme",theme)},[theme]);
+  useEffect(()=>{
+    document.documentElement.dataset.theme=theme;
+    document.documentElement.dataset.palette=palette;
+    localStorage.setItem("lex_theme",theme);
+    localStorage.setItem("lex_palette",palette);
+  },[theme,palette]);
   useEffect(() => {
     reload()
       .catch(() => setLogged(false))
@@ -275,6 +324,9 @@ export default function App() {
   if (!logged)
     return (
       <div className="login-page">
+        <div className="login-appearance">
+          <AppearanceSwitch theme={theme} palette={palette} setTheme={setTheme} setPalette={setPalette}/>
+        </div>
         <div className="login-brand">
           <ShieldCheck size={38} />
           <b>
@@ -431,8 +483,7 @@ export default function App() {
               <LockKeyhole size={13} /> 本地优先
             </span>
             <Tag tone="green">云边协同</Tag>
-            <button className="icon-button" aria-label={theme==="light"?"切换深色主题":"切换浅色主题"}
-              onClick={()=>setTheme(theme==="light"?"dark":"light")}>{theme==="light"?<Moon size={15}/>:<Sun size={15}/>}</button>
+            <AppearanceSwitch theme={theme} palette={palette} setTheme={setTheme} setPalette={setPalette}/>
           </div>
         </header>
         {(error || notice) && (

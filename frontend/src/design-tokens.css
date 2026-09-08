@@ -18,11 +18,21 @@
     "Microsoft YaHei", sans-serif;
   --font-display:
     "Source Han Serif SC", "Noto Serif SC", "Songti SC", "STSong", serif;
+  --z-skip: 80;
+  --z-sidebar: 20;
+  --z-toast: 35;
+  --z-overlay: 70;
+  --motion: 180ms;
+}
+
+:root,
+:root[data-palette="forest"] {
   --surface-canvas: #f6f4ee;
   --surface-paper: #fffefa;
   --surface-muted: #f4f6f1;
   --surface-hover: #f3f6ef;
   --surface-sidebar: #183d32;
+  --surface-intro: #254e3e;
   --color-brand: #225b48;
   --color-brand-strong: #184736;
   --color-ink: #183e32;
@@ -35,20 +45,21 @@
   --focus-ring: #77a88f;
   --shadow-tint: 0 2px 8px #183d3214;
   --shadow-modal: 0 24px 80px #183d3228;
-  --z-skip: 80;
-  --z-sidebar: 20;
-  --z-toast: 35;
-  --z-overlay: 70;
-  --motion: 180ms;
+  --toast-error-fg: #a64036;
+  --toast-error-bg: #fff0ec;
+  --toast-success-fg: #277354;
+  --toast-success-bg: #eef6e9;
 }
 
-:root[data-theme="dark"] {
+:root[data-theme="dark"],
+:root[data-palette="forest"][data-theme="dark"] {
   color-scheme: dark;
   --surface-canvas: #17201d;
   --surface-paper: #202a26;
   --surface-muted: #26322d;
   --surface-hover: #2a3631;
   --surface-sidebar: #13261f;
+  --surface-intro: #1b3a2f;
   --color-brand: #79b89d;
   --color-brand-strong: #5e9a80;
   --color-ink: #dce9e3;
@@ -61,6 +72,112 @@
   --focus-ring: #91cdb1;
   --shadow-tint: 0 2px 8px #04080640;
   --shadow-modal: 0 24px 80px #04080666;
+  --toast-error-fg: #e28b82;
+  --toast-error-bg: #3a2422;
+  --toast-success-fg: #73bd99;
+  --toast-success-bg: #1f3228;
+}
+
+:root[data-palette="ink"] {
+  --surface-canvas: #eef1f5;
+  --surface-paper: #fbfcfe;
+  --surface-muted: #e8edf3;
+  --surface-hover: #e2e8f0;
+  --surface-sidebar: #1c2a3a;
+  --surface-intro: #1c2a3a;
+  --color-brand: #2f4f6d;
+  --color-brand-strong: #243e56;
+  --color-ink: #1a2836;
+  --color-muted: #5c6b7a;
+  --color-line: #d5dde6;
+  --color-info: #315f85;
+  --color-success: #2a6d58;
+  --color-warning: #9a662f;
+  --color-danger: #a64036;
+  --focus-ring: #7a9bb8;
+  --shadow-tint: 0 1px 4px #1c2a3a10;
+  --shadow-modal: 0 20px 64px #1c2a3a20;
+  --toast-error-fg: #a64036;
+  --toast-error-bg: #f4ecec;
+  --toast-success-fg: #2a6d58;
+  --toast-success-bg: #e6f0ec;
+}
+
+:root[data-palette="ink"][data-theme="dark"] {
+  color-scheme: dark;
+  --surface-canvas: #121820;
+  --surface-paper: #1a222c;
+  --surface-muted: #222c38;
+  --surface-hover: #283340;
+  --surface-sidebar: #0e141c;
+  --surface-intro: #16202c;
+  --color-brand: #8eafc8;
+  --color-brand-strong: #6f93ae;
+  --color-ink: #dce4ee;
+  --color-muted: #8a97a6;
+  --color-line: #2c3846;
+  --color-info: #8eb4d4;
+  --color-success: #73bd99;
+  --color-warning: #d7a66d;
+  --color-danger: #e28b82;
+  --focus-ring: #9bb8cc;
+  --shadow-tint: 0 1px 4px #04060840;
+  --shadow-modal: 0 20px 64px #04060866;
+  --toast-error-fg: #e28b82;
+  --toast-error-bg: #3a2628;
+  --toast-success-fg: #73bd99;
+  --toast-success-bg: #1a2e28;
+}
+
+:root[data-palette="dusk"] {
+  --surface-canvas: #f6f1e8;
+  --surface-paper: #fffaf3;
+  --surface-muted: #f3ebe0;
+  --surface-hover: #efe6d8;
+  --surface-sidebar: #3d2a1c;
+  --surface-intro: #3d2a1c;
+  --color-brand: #8a5a32;
+  --color-brand-strong: #6e4626;
+  --color-ink: #3a2a1f;
+  --color-muted: #6f5f50;
+  --color-line: #e6ddd0;
+  --color-info: #3d5f7a;
+  --color-success: #3d6b48;
+  --color-warning: #9a662f;
+  --color-danger: #a64036;
+  --focus-ring: #c4a07a;
+  --shadow-tint: 0 2px 8px #3d2a1c16;
+  --shadow-modal: 0 24px 80px #3d2a1c28;
+  --toast-error-fg: #a64036;
+  --toast-error-bg: #f8eee8;
+  --toast-success-fg: #3d6b48;
+  --toast-success-bg: #eef4e8;
+}
+
+:root[data-palette="dusk"][data-theme="dark"] {
+  color-scheme: dark;
+  --surface-canvas: #1c1712;
+  --surface-paper: #262017;
+  --surface-muted: #2e2720;
+  --surface-hover: #352e25;
+  --surface-sidebar: #16110c;
+  --surface-intro: #2a1e14;
+  --color-brand: #d4a574;
+  --color-brand-strong: #c08e5c;
+  --color-ink: #efe4d4;
+  --color-muted: #b8a894;
+  --color-line: #3d3428;
+  --color-info: #7fa9d1;
+  --color-success: #7ab88a;
+  --color-warning: #d7a66d;
+  --color-danger: #e28b82;
+  --focus-ring: #d4a574;
+  --shadow-tint: 0 2px 8px #0a080640;
+  --shadow-modal: 0 24px 80px #0a080666;
+  --toast-error-fg: #e28b82;
+  --toast-error-bg: #3d2620;
+  --toast-success-fg: #7ab88a;
+  --toast-success-bg: #243024;
 }
 
 @media (prefers-reduced-motion: reduce) {

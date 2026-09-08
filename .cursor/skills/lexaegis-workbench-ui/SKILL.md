@@ -9,7 +9,7 @@ description: >-
 
 # LexAegis workbench UI
 
-Reading this as: redesign-preserve of a regulated legal-privacy workbench for lawyers, trust-first and accessibility-first, vanilla CSS plus forest/paper tokens.
+Reading this as: redesign-preserve of a regulated legal-privacy workbench for lawyers, trust-first and accessibility-first, vanilla CSS plus forest / ink / dusk tokens (each light and dark).
 
 ## Dials
 
@@ -29,10 +29,11 @@ Edit [frontend/src/design-tokens.css](frontend/src/design-tokens.css) first, the
 - Numbers and dates: `font-variant-numeric: tabular-nums` or `.tabular`
 - Motion: `--motion` (about 180ms), `transform` / `opacity` only. Honor existing `prefers-reduced-motion`.
 - Cards: background **or** divider, not both border and filled wash.
+- Palettes: default `forest`; optional `ink` and `dusk`. Selectors are `data-palette` + `data-theme` on `documentElement`. New surface tokens: `--toast-error-fg/bg`, `--toast-success-fg/bg`, `--surface-intro`. Semantic colors stay independent of brand.
 
 ## Preserve
 
-- Forest sidebar and paper canvas
+- Default forest sidebar and paper canvas; optional ink (cool slate) and dusk (warm paper). Sidebar stays deep background with light type in all three palettes.
 - Four-step case flow and three-panel workspace
 - Visible control names used by Playwright: `生成披露方案`, `云端摘要任务`, `生成本地摘要草稿`, `检验风险并冻结请求`, `进入工作台`, `本地生成争点候选`
 - Honest capability copy: `未运行、错误和不确定均不算通过`

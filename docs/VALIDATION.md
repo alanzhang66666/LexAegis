@@ -8,11 +8,12 @@
 | --- | --- |
 | `python -m pytest -q` | 2026-09-08 本机 186 项通过、1 项跳过 |
 | `lexaegis dataset validate` | `ok=true`；catalog 仅 `mock_labor` 1.0.0，`dispatch_allowed=false`。本机 `.data/semi_labor_v1` 脚手架存在且契约通过（`legal_annotation_status=pending`，`dispatch_allowed=false`），未写入 `data/catalog.json`，无 `data/semi_labor_v1` |
-| TypeScript 类型检查与 Vite 生产构建 | `pnpm exec tsc --noEmit` 通过；Vite 生产构建通过，1588 个模块 |
+| TypeScript 类型检查与 Vite 生产构建 | 2026-09-08 三色系本轮：`pnpm exec tsc --noEmit` 通过；`pnpm build` 通过，1588 个模块 |
 | 远端 CI | 未取得 / 本轮不跑 |
 | Python wheel 构建与归档检查 | 通过；`lexaegis-0.2.0-py3-none-any.whl` 含编译前端、内置案由包、`NOTICE` 和许可证 |
 | `lexaegis bench --profile ianvs-pipl`（无输入） | `status=input_required`，`production_dispatch=false`，未造伪向量 |
-| 桌面浏览器完整流程 | 2026-09-08 `desktop-1280` 6 项通过（`--grep-invert five-viewport`，含复原空态 / 回写待办）；Playwright 复用已有 18765/18766，不抢 8765，未杀边侧 8080 |
+| 桌面浏览器完整流程 | 2026-09-08 三色系本轮 `desktop-1280` 6 项通过（`--grep-invert five-viewport`，含复原空态 / 回写待办）；Playwright 复用已有 18765/18766，不抢 8765，未杀边侧 8080 |
+| 三色系六态手工 | 2026-09-08 在 `127.0.0.1:18765` 登录页与案件列表点击「配色」林绿/墨青/缃褐与深浅钮。计算样式确认 `data-palette`/`data-theme` 与 Token（林绿 `#225b48`/`#f6f4ee`，墨青 `#2f4f6d`/`#eef1f5`，缃褐 `#8a5a32`/`#f6f1e8`；成功色保持绿色、未并入品牌）。截图可读，侧栏深底浅字。另开演示案事实页（墨青深）与披露页（缃褐浅）。默认仍是林绿浅。未跑五视口 |
 | 响应式浏览器矩阵 | 本轮未跑 `five-viewport` |
 | 工作台「本地生成争点候选」 | 已点击。native `8765` 健康检查 200，但 `.env` 口令对已有 admin 返回 401，未在 8765 上点按钮。另启隔离栈 `127.0.0.1:28765`（口令与 Playwright 验收相同）打开演示案「01 完整披露流程」：按钮可见可点；界面出现「本地争点候选已生成，未发生外发。」与「按字段分组的候选 · 非法学结论 · 未调用模型」。随后 API 读到 `type=issue_extraction`、`transport=local`、`status=complete`、`provenance=local_deterministic`，6 个字段桶（`labor_relation` / `remuneration` / `disputed_event` / `timing` / `evidence` / `parties`），均有 `source_ids`。未主张云端或边侧外发 |
 | MiniCPM5-2B `dataset probe-edge`（`mock_labor` 8 条） | 工程五项均为 8/8：`json_valid`、`source_ids_in_blocks`、`quote_is_substring`、`numbers_from_source`、`aliases_no_conflict`。`legal_availability=not_scored`。报告在被忽略的 `.data/edge-probe/` |
