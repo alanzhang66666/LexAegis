@@ -30,7 +30,7 @@ LexAegis 0.2 使用模块化单体和独立外发网关。所有敏感原文留�
 | `lexaegis/worker.py` | 单进程队列、解析、提取、发送与恢复 |
 | `lexaegis/detection.py` | 坐标化 PII、敏感性与冻结权重风险信号 |
 | `lexaegis/governance.py` | 服务商、协议、逐项合规检查和正式门禁 |
-| `lexaegis/task_engine.py` | V2 任务定义、entry point 与本地时间线 |
+| `lexaegis/task_engine.py` | V2 任务定义与本地确定性任务（目前只内置；`lexaegis.tasks` entry point 未在 pyproject 声明） |
 | `lexaegis/experiments.py` | 隔离实验的 DP/RDP、掩码、投影和 MIA 输入门槛 |
 | `lexaegis/redteam.py` | 无原件/映射/真值访问的四类攻击接口 |
 | `packs/` | 版本化声明式案由知识包 |
@@ -49,7 +49,7 @@ LexAegis 0.2 使用模块化单体和独立外发网关。所有敏感原文留�
 - 生成开始后禁止回退：仅尚未收到 content/reasoning token 时可从主槽切到已批准的备槽；JSON 不合格或断流且已有 token 记 `unknown`，不自动重发。
 - 摘要按条目返回 `text/source_ids`；原文锚点和真实身份只在边侧解析。入站结果可带 `unused_fact_ids` 与 `gaps`；未使用事实 id 由边侧按外发集合减去引用计算，云端回写不一致只记 `feedback_issues`，不整单作废、不自动重发。
 
-`TaskDefinitionV2` 使用受限 JSON Schema；本地确定性任务通过 `lexaegis.tasks` entry point 提供 `definition()` 与 `run(payload)`。UI 渲染器只能从契约白名单选择，扩展不能注入前端代码。案由包只允许声明式数据。
+`TaskDefinitionV2` 使用受限 JSON Schema。本地确定性任务目前只内置在 [`lexaegis/task_engine.py`](../lexaegis/task_engine.py)；`task_engine` 会扫描 `lexaegis.tasks` entry point 的 `definition()` / `run(payload)`，但该组 **尚未在** [`pyproject.toml`](../pyproject.toml) 声明，仓库里没有已安装的任务插件。v1 `TASKS` 仍留在 [`lexaegis/registry.py`](../lexaegis/registry.py)，工作台用 `task_definitions || tasks` 回退。UI 渲染器只能从契约白名单选择，扩展不能注入前端代码。案由包只允许声明式数据。
 
 ## 主状态转换
 

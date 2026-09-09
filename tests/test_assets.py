@@ -8,7 +8,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 from lexaegis.parsing import PaddleOCRProvider, ocr_capability, parse, register_ocr_provider
-from lexaegis.registry import import_pack
+from lexaegis.registry import import_pack, seed_packs
+from lexaegis.storage import Store
 from lexaegis.cli import backup, restore
 from lexaegis.redteam import app as redteam
 from lexaegis.api import create_app
@@ -220,6 +221,26 @@ def test_domain_pack_extends_without_gate_change_and_immutable_versions(env):
         raw['name']='同版本篡改'
         with pytest.raises(ValueError):import_pack(repo,raw)
     assert env['client'].post('/api/v1/cases',json={'name':'测试扩展','domain':'new_domain'}).status_code==200
+
+
+def test_seed_packs_refreshes_stale_demo_not_published(tmp_path):
+    demo = json.loads((Path("packs/labor_demo.json")).read_text(encoding="utf-8"))
+    assert demo["forbidden_terms"] == ["唯一", "公开获奖"]
+    stale = Store(tmp_path / "stale.sqlite")
+    with stale.transaction() as repo:
+        import_pack(repo, {**demo, "forbidden_terms": []})
+        seed_packs(repo)
+        refreshed = repo.get("pack:labor:0.1.0-demo", "pack")
+        assert refreshed["forbidden_terms"] == ["唯一", "公开获奖"]
+        assert refreshed["status"] == "demo"
+    published = Store(tmp_path / "published.sqlite")
+    with published.transaction() as repo:
+        repo.put("pack", {"id": "pack:labor:0.1.0-demo", "domain_id": "labor", "status": "published",
+                          "version": "0.1.0-demo", "name": "劳动争议", "forbidden_terms": []})
+        seed_packs(repo)
+        kept = repo.get("pack:labor:0.1.0-demo", "pack")
+        assert kept["status"] == "published"
+        assert kept["forbidden_terms"] == []
 
 
 def test_redteam_truth_fields_rejected_and_placeholder_not_pass(monkeypatch):

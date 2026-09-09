@@ -112,13 +112,21 @@ def _walk_keys(value):
             yield from _walk_keys(child)
 
 
+_REFRESHABLE_PACK_STATUSES = frozenset({"demo", "draft"})
+
+
+def _pack_record(pack):
+    record = {"id": f"pack:{pack.id}:{pack.version}", **pack.model_dump()}
+    record["domain_id"] = pack.id
+    record["id"] = f"pack:{pack.id}:{pack.version}"
+    return record
+
+
 def import_pack(repo, raw):
     pack = validate_pack(raw)
     if getattr(pack, "status", None) == "published":
         raise ValueError("不得直接导入已发布状态；V2 包必须经过本实例的审核与发布生命周期")
-    record = {"id": f"pack:{pack.id}:{pack.version}", **pack.model_dump()}
-    record["domain_id"] = pack.id
-    record["id"] = f"pack:{pack.id}:{pack.version}"
+    record = _pack_record(pack)
     existing = repo.list("pack")
     if any(p["id"] == record["id"] and p != record for p in existing):
         raise ValueError("相同版本不可覆盖，请发布新版本")
@@ -137,9 +145,23 @@ def publish_pack(repo, pack_id, actor):
 
 
 def seed_packs(repo):
-    if not repo.list("pack"):
-        installed = Path(__file__).resolve().parent / "packs"
-        source = Path(__file__).resolve().parent.parent / "packs"
-        root = installed if installed.exists() else source
-        for path in sorted(root.glob("*.json")):
-            import_pack(repo, json.loads(path.read_text(encoding="utf-8")))
+    installed = Path(__file__).resolve().parent / "packs"
+    source = Path(__file__).resolve().parent.parent / "packs"
+    root = installed if installed.exists() else source
+    existing = {item["id"]: item for item in repo.list("pack")}
+    for path in sorted(root.glob("*.json")):
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if not existing:
+            import_pack(repo, raw)
+            continue
+        pack = validate_pack(raw)
+        if pack.status == "published":
+            continue
+        record = _pack_record(pack)
+        current = existing.get(record["id"])
+        if current is None or current.get("status") not in _REFRESHABLE_PACK_STATUSES:
+            continue
+        if record.get("status") not in _REFRESHABLE_PACK_STATUSES:
+            continue
+        if current != record:
+            repo.put("pack", record)

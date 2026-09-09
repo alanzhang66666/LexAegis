@@ -16,3 +16,5 @@ models/**
 !models/catalog/
 !models/catalog/**
 .pnpm-store/
+# examples/ is created by scripts/make_examples.py and tests
+examples/

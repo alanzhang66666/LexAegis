@@ -4,7 +4,7 @@
 
 **当前版本：0.2.0。** 工作台、V2 契约、稳定 wire token、门禁与跨平台 CLI 已进入代码。法学规则尚未发布、真实攻击与隔离尚未验收，因此**正式案件的外发保持阻断**。演示只接受内置合成材料。
 
-文档地图见 [docs/README.md](docs/README.md)。架构与门禁见 [架构说明](docs/ARCHITECTURE.md)。评测语料见 [data/README.md](data/README.md)。边侧声明见 [models/catalog/README.md](models/catalog/README.md)。
+现行入口地图见 [docs/PROJECT_MAP.md](docs/PROJECT_MAP.md)。文档地图见 [docs/README.md](docs/README.md)。架构与门禁见 [架构说明](docs/ARCHITECTURE.md)。评测语料见 [data/README.md](data/README.md)。边侧声明见 [models/catalog/README.md](models/catalog/README.md)。
 
 ## 快速启动
 
