@@ -13,9 +13,9 @@ from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, ConfigDict, Field
-from . import service
+from . import __version__, service
 from .auth import create_user_record, current_actor, ensure_initial_admin, public_user, verify_password
-from .diagnostics import host_publish_capability, isolation_capability, redteam_capability
+from .diagnostics import host_publish_capability, isolation_capability, legal_capability, redteam_capability
 from .parsing import ocr_capability
 from .providers import EdgeClient
 from .contracts import ProviderProfile, RiskProtocol
@@ -62,6 +62,27 @@ class FactInput(Input):
     value: str = Field(min_length=1, max_length=10000)
     source_ids: list[str] = Field(min_length=1, max_length=100)
     confirmed: bool = False
+    claim_stance: Literal["claim", "deny", "hold_evidence", "unknown"] | None = None
+    evidence_holder: Literal["worker", "employer", "third_party", "unknown"] | None = None
+    day_nature: Literal["weekday", "rest_day", "holiday", "unknown"] | None = None
+    hours: float | None = Field(default=None, ge=0, le=10000)
+    wage_base: str | None = Field(default=None, max_length=200)
+    evidence_attribution: str | None = Field(default=None, max_length=500)
+    dispute_status: Literal["claimed", "denied", "disputed", "admitted", "unknown"] | None = None
+    negated: bool | None = None
+    subject_role: Literal["worker", "employer", "third_party", "unknown"] | None = None
+    subject_category: Literal["natural_person", "legal_person", "unknown"] | None = None
+    confidentiality_category: Literal[
+        "unknown", "personal_information", "party_privacy", "trade_secret", "state_secret", "other_confidential"
+    ] | None = None
+    confidentiality_level: Literal["unknown", "ordinary", "elevated", "restricted"] | None = None
+    notice_status: Literal["unknown", "not_notified", "notified", "not_applicable"] | None = None
+    consent_evidence: str | None = Field(default=None, max_length=500)
+    sensitivity_label: Literal[
+        "必须保留", "条件保留", "必须保留或条件保留", "假名化保留", "默认删除", "禁止外发", "转人工",
+        "must_keep", "conditional_keep", "keep_or_conditional", "pseudonymize_keep",
+        "default_delete", "forbid_outbound", "human_review",
+    ] | None = None
 
 
 class Correction(Input):
@@ -77,6 +98,7 @@ class TaskInput(Input):
     transport: Literal["local", "mock", "cloud"] = "cloud"
     task_type: str = "fact_summary"
     pack_id: str | None = None
+    sub_purpose: str | None = Field(default=None, max_length=80)
 
 
 class FollowupTaskInput(Input):
@@ -88,6 +110,7 @@ class DecisionInput(Input):
     transform: Literal["keep", "pseudonymize", "generalize", "delete"]
     necessity: Literal["required", "conditional", "unnecessary", "uncertain"]
     output: str | None = Field(default=None, max_length=10000)
+    candidate_id: str | None = None
 
 
 class ApprovalInput(Input):
@@ -242,7 +265,7 @@ def create_app(data_dir=None, password=None):
 
     @app.get("/api/v1/health")
     def health():
-        return {"status": "ok", "version": "0.2.0"}
+        return {"status": "ok", "version": __version__}
 
     @app.post("/api/v1/login")
     def login(body: LoginInput, request: Request, response: Response):
@@ -353,6 +376,15 @@ def create_app(data_dir=None, password=None):
             cloud = result.json()
         except Exception:
             cloud = {"status": "unconfigured", "detail": "外发网关未启动或签名配置不正确"}
+        cloud_base = cloud.get("detail") or "外发网关未启动或签名配置不正确"
+        cloud = {
+            **cloud,
+            "detail": (
+                f"{cloud_base} 双槽各自绑定已审核档案，未审核备用不会启用；"
+                "仅确认请求未离开本地才允许切备，已收包超时记为可能披露。"
+                "正式外发仍失败关闭，不代表已完成真实外发验证。"
+            ),
+        }
         with store.read() as repo:
             published = [pack for pack in repo.list("pack") if pack.get("schema_version") == 2 and pack.get("status") == "published"]
             protocols = repo.list("risk_protocol")
@@ -367,10 +399,10 @@ def create_app(data_dir=None, password=None):
         host_detail = "宿主机口已发布" if host_publish.get("status") == "available" else "宿主机发布仍未验收"
         return {"technical": {"status": "available", "detail": "V2 契约、确定性检测、稳定 token 和本地复原已实现"},
                 "runtime": {"status": "available" if settings.get("cloud_model") else "unconfigured", "detail": "运行配置与实现状态分开报告"},
-                "legal": {"status": "available" if published else "unconfigured", "detail": f"已发布 V2 案由包 {len(published)} 个"},
+                "legal": legal_capability(published),
                 "validation": {
                     "status": "unconfigured",
-                    "detail": f"{edge_detail}；{isolation_detail}；{host_detail}；真实云端外发仍未验收；正式案件仍未验收",
+                    "detail": f"{edge_detail}；{isolation_detail}；{host_detail}；真实云端外发仍未验收；正式案件仍未验收；未取得证据的能力保持未验证",
                     "edge_runtime": edge.get("status"),
                     "cloud_outbound": "not_verified",
                     "formal_dispatch": "blocked",
@@ -484,7 +516,13 @@ def create_app(data_dir=None, password=None):
         identity = require_role(request, "admin")
         with store.transaction() as repo:
             profile = repo.get(provider_id, "provider")
-            if profile.get("status") == "reviewed" or repo.get("settings").get("provider_id") == provider_id:
+            settings = repo.get("settings")
+            in_use = {
+                settings.get("provider_id"),
+                (settings.get("cloud_primary") or {}).get("provider_id"),
+                (settings.get("cloud_standby") or {}).get("provider_id"),
+            }
+            if profile.get("status") == "reviewed" or provider_id in in_use:
                 raise service.DomainError("经复核或正在使用的服务商档案不能删除，只能标记过期")
             repo.delete(provider_id)
             audit(repo, "", "provider.deleted", provider_id=provider_id, actor=identity["actor"])
@@ -622,13 +660,13 @@ def create_app(data_dir=None, password=None):
     def add_fact(case_id: str, body: FactInput, request: Request):
         require_role(request, "case_operator")
         with store.transaction() as repo:
-            return service.save_fact(repo, case_id, body.model_dump())
+            return service.save_fact(repo, case_id, body.model_dump(exclude_none=True))
 
     @app.put("/api/v1/cases/{case_id}/facts/{fact_id}")
     def edit_fact(case_id: str, fact_id: str, body: FactInput, request: Request):
         require_role(request, "case_operator")
         with store.transaction() as repo:
-            return service.save_fact(repo, case_id, body.model_dump(), fact_id)
+            return service.save_fact(repo, case_id, body.model_dump(exclude_none=True), fact_id)
 
     @app.delete("/api/v1/cases/{case_id}/facts/{fact_id}")
     def delete_fact(case_id: str, fact_id: str, request: Request):
@@ -652,18 +690,19 @@ def create_app(data_dir=None, password=None):
             service.assert_editable(repo, case_id)
             if not repo.get("settings")["edge_model"]:
                 raise service.DomainError("边侧模型未配置，请人工添加事实")
+            documents = repo.list("document", case_id)
+            if any(d.get("status") != "ready" or not isinstance(d.get("ir"), dict) or (d.get("ir") or {}).get("needs_review") for d in documents):
+                raise service.DomainError("请先完成材料和 OCR 复核")
             blocks = list(service.anchor_index(repo, case_id).values())
             if not blocks or sum(len(b["text"]) for b in blocks) > 50000:
                 raise service.DomainError("无可提取文本或超过首版 5 万字预算，请缩减材料")
-            if any(d["status"] != "ready" or d["ir"]["needs_review"] for d in repo.list("document", case_id)):
-                raise service.DomainError("请先完成材料和 OCR 复核")
             return service.queue_job(repo, case_id, "extract", {"revision": case["revision"], "blocks": blocks})
 
     @app.post("/api/v1/cases/{case_id}/tasks")
     def task(case_id: str, body: TaskInput, request: Request):
         require_role(request, "case_operator")
         with store.transaction() as repo:
-            return service.create_task(repo, case_id, body.transport, body.task_type, body.pack_id)
+            return service.create_task(repo, case_id, body.transport, body.task_type, body.pack_id, body.sub_purpose)
 
     @app.post("/api/v1/cases/{case_id}/followups/{todo_id}/dismiss")
     def dismiss_followup(case_id: str, todo_id: str, request: Request):
@@ -681,7 +720,7 @@ def create_app(data_dir=None, password=None):
     def decision(task_id: str, fact_id: str, body: DecisionInput, request: Request):
         require_role(request, "case_operator")
         with store.transaction() as repo:
-            return service.update_decision(repo, task_id, fact_id, body.transform, body.necessity, body.output)
+            return service.update_decision(repo, task_id, fact_id, body.transform, body.necessity, body.output, body.candidate_id)
 
     @app.post("/api/v1/tasks/{task_id}/evaluate")
     def evaluate(task_id: str, request: Request):

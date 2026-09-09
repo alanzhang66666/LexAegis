@@ -27,7 +27,7 @@ Compose：`docker compose --profile edge up -d`（见 [DEPLOY.md](DEPLOY.md)）�
 
 流式只在网关内把 `delta.content` 拼成完整 `content`，再 `json.loads` 为 claims 对象。工作台仍等完整 result，再跑 `check_claims` 与边侧回写校验（本地计算 `unused_fact_ids`，核验可选 `gaps`）。未使用事实与缺口写入案件待办，可忽略或创建后续披露，不自动再调边侧模型。禁止把模型 token SSE 到工作台，不接 Responses API 或工具调用。
 
-主→备仅当尚未 `generation_started`（未收到任何 content/reasoning token）。连接失败或 401 可切备；一旦开始生成、流中断且已有 token、或 JSON 不合格：记 `unknown`，禁止切备、禁止自动重发。思考必须关闭：DeepSeek 发送 `thinking: {type: disabled}`；百炼不启用 `enable_thinking`，并丢掉 `reasoning_content`。
+主→备仅当确认请求尚未离开本地（例如连接未建立）且备用槽已审核。主方已收到请求体后的首字节超时、401/服务端错误或进程崩溃记为可能披露，默认不自动切备、不自动重发。一旦开始生成、流中断且已有 token、或 JSON 不合格：记 `unknown`，禁止切备、禁止自动重发。思考必须关闭：DeepSeek 发送 `thinking: {type: disabled}`；百炼不启用 `enable_thinking`，并丢掉 `reasoning_content`。
 
 合成案例中的「新建真实 API 演示任务」仍需审批并产生费用。正式外发门禁保持失败关闭。**交付验证没有调用真实云端模型。** mock 传输仍走本地拼装，不打云端。
 

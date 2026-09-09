@@ -1,4 +1,5 @@
 from lexaegis.policy import assess, ledger_usage, resolve_disclosure_budget
+from lexaegis.service import anchor_index
 
 
 def _ready(output):
@@ -54,6 +55,21 @@ def test_resolve_disclosure_budget_defaults_are_conservative(monkeypatch):
     monkeypatch.delenv("LEX_DISCLOSURE_BUDGET_ENTRIES", raising=False)
     assert resolve_disclosure_budget() == (50000, 20)
     assert ledger_usage([]) == (0, 0)
+
+
+def test_assess_treats_missing_ir_as_pending_parse():
+    case, facts, decisions, _ = _ready("短文本")
+    result = assess(case, {"forbidden_terms": []}, facts, decisions, [{"status": "pending", "ir": None}], [], "mock")
+    assert "材料解析或 OCR 复核未完成" in result["blockers"]
+    assert result["approval_allowed"] is False
+
+
+def test_anchor_index_skips_unparsed_documents():
+    class Repo:
+        def list(self, kind, case_id):
+            return [{"ir": None, "status": "pending"}, {"ir": {"blocks": [{"id": "b1", "text": "x"}]}}]
+
+    assert list(anchor_index(Repo(), "case_x")) == ["b1"]
 
 
 def test_resolve_disclosure_budget_ignores_invalid_or_nonpositive_env(monkeypatch):

@@ -49,6 +49,78 @@ class FieldRule(Contract):
     forbidden: bool = False
 
 
+class LegalSourceRef(Contract):
+    id: str = Field(pattern=r"^[a-z][a-z0-9_]{1,80}$")
+    title: str
+    articles: list[str] = Field(default_factory=list)
+    version_note: str = ""
+    effective_from: str | None = None
+    snapshot: str = ""
+    historical_mapping: dict[str, str] = Field(default_factory=dict)
+    citation_status: Literal["draft_reference", "published"] = "draft_reference"
+
+
+class ImmutableRelation(Contract):
+    id: str = Field(pattern=r"^[a-z][a-z0-9_]{1,80}$")
+    kind: Literal["subject_ownership", "date_relation", "numeric_relation", "negation", "dispute_status", "source"]
+    description: str = ""
+
+
+class DisclosureCondition(Contract):
+    id: str = Field(pattern=r"^[a-z][a-z0-9_]{1,80}$")
+    attribute: str = Field(pattern=r"^[a-z][a-z0-9_]{1,80}$")
+    operator: Literal["eq", "in", "known"]
+    values: list[str] = Field(default_factory=list)
+
+
+class ConditionalDisclosureRule(Contract):
+    id: str = Field(pattern=r"^[a-z][a-z0-9_]{1,80}$")
+    task_id: str
+    sub_purpose: str
+    conditions: list[DisclosureCondition] = Field(default_factory=list)
+    affected_fields: list[str] = Field(default_factory=list)
+    necessity: Literal["required", "conditional", "unnecessary", "uncertain"] = "uncertain"
+    min_precision: str = ""
+    allowed_transforms: list[Literal["original_precision", "tokenize", "moderate_generalize", "delete"]] = Field(
+        default_factory=lambda: ["original_precision", "tokenize", "moderate_generalize", "delete"]
+    )
+    forbidden_default_transforms: list[str] = Field(default_factory=list)
+    immutable_relations: list[str] = Field(default_factory=list)
+    legal_source_ids: list[str] = Field(default_factory=list)
+    missing_item_strategy: Literal["review", "delete", "keep"] = "review"
+    unknown_condition_strategy: Literal["review"] = "review"
+    preferred_transform: Literal["original_precision", "tokenize", "moderate_generalize", "delete"] = "original_precision"
+    reason: str = ""
+
+
+class ProcessingBasis(Contract):
+    subject_category: Literal["natural_person", "legal_person", "unknown"] = "unknown"
+    collection_source: str = ""
+    local_purpose: str = ""
+    cloud_purpose: str = ""
+    proposed_basis: str = ""
+    necessity_note: str = ""
+    consent_or_other_evidence: str = ""
+    notice_status: Literal["unknown", "not_notified", "notified", "not_applicable"] = "unknown"
+    review_conclusion: Literal["pending", "review", "insufficient"] = "pending"
+    necessity_judgment: Literal["unknown", "necessary", "not_necessary", "review"] = "unknown"
+    processability_judgment: Literal["unknown", "processable", "not_processable", "review"] = "unknown"
+    residual_risk_judgment: Literal["unknown", "elevated", "unverified", "review"] = "unknown"
+
+
+class ConfidentialityRecord(Contract):
+    case_level: Literal["unknown", "ordinary", "elevated", "restricted"] = "unknown"
+    information_category: Literal[
+        "unknown", "personal_information", "party_privacy", "trade_secret", "state_secret", "other_confidential"
+    ] = "unknown"
+    team_policy_block: bool = False
+    statutory_duty_note: str = ""
+    lawyer_law_article: str | None = None
+    lawyer_law_snapshot: str = ""
+    lawyer_law_mapping_note: str = ""
+    lawyer_law_text_date: str | None = None
+
+
 class DomainPack(Contract):
     schema_version: Literal[1] = 1
     id: str = Field(pattern=r"^[a-z][a-z0-9_]{1,60}$")
@@ -112,6 +184,9 @@ class DomainPackV2(Contract):
     published_by: str | None = None
     risk_protocols: list[RiskProtocolRef] = Field(default_factory=list)
     synthetic_cases: list[dict[str, Any]] = Field(default_factory=list)
+    legal_sources: list[LegalSourceRef] = Field(default_factory=list)
+    immutable_relations: list[ImmutableRelation] = Field(default_factory=list)
+    disclosure_rules: list[ConditionalDisclosureRule] = Field(default_factory=list)
 
 
 class TaskDefinition(Contract):
@@ -254,7 +329,11 @@ class AttackRun(Contract):
 class ProviderProfile(Contract):
     id: str = Field(pattern=r"^[a-z][a-z0-9_-]{1,60}$")
     name: str
+    legal_entity: str | None = None
+    product: str | None = None
     role: Literal["processor", "independent_controller", "other", "unknown"] = "unknown"
+    endpoint: str | None = None
+    model: str | None = None
     processing_regions: list[str] = Field(default_factory=list)
     retention: str | None = None
     training_use: Literal["forbidden", "allowed", "unknown"] = "unknown"
@@ -263,7 +342,9 @@ class ProviderProfile(Contract):
     subprocessor_status: Literal["none", "declared", "unknown"] = "unknown"
     deletion_mechanism: str | None = None
     contract_reference: str | None = None
+    contract_version: str | None = None
     impact_assessment_reference: str | None = None
+    impact_assessment_version: str | None = None
     valid_until: str | None = None
     allowed_tasks: list[str] = Field(default_factory=list)
     allowed_domains: list[str] = Field(default_factory=list)
@@ -273,6 +354,21 @@ class ProviderProfile(Contract):
     profile_version: int = Field(default=1, ge=1)
     reviewed_by: str | None = None
     reviewed_at: str | None = None
+
+
+class DispatchAttempt(Contract):
+    id: str
+    slot: Literal["primary", "standby"]
+    target: str
+    model: str = ""
+    request_digest: str
+    started_at: str
+    finished_at: str | None = None
+    generation_state: Literal["not_started", "started", "complete"] = "not_started"
+    transmission_state: Literal["not_left_local", "sent_unconfirmed", "response_received"] = "not_left_local"
+    disclosure_state: Literal["undisclosed", "possible", "disclosed"] = "undisclosed"
+    error_type: str | None = None
+    output_state: Literal["none", "partial", "complete"] = "none"
 
 
 class ApprovalV2(Contract):

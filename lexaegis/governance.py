@@ -17,6 +17,25 @@ def pack_content_hash(pack: dict) -> str:
     })
 
 
+def profile_not_dispatchable(profile: dict | None) -> str | None:
+    """Return a send-time reason if this recipient profile cannot be used."""
+    if not profile:
+        return "未选择服务商档案"
+    if profile.get("status") != "reviewed":
+        return "服务商档案未复核或已退役"
+    if not profile.get("valid_until"):
+        return None
+    try:
+        expires = datetime.fromisoformat(profile["valid_until"])
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        if expires <= datetime.now(timezone.utc):
+            return "服务商档案已过期"
+    except (ValueError, TypeError):
+        return "服务商档案有效期无效"
+    return None
+
+
 def provider_checks(profile: dict | None, *, domain: str, task_type: str, fields: set[str]) -> list[dict]:
     checks = []
 
@@ -36,14 +55,9 @@ def provider_checks(profile: dict | None, *, domain: str, task_type: str, fields
     valid = (profile.get("status") == "reviewed" and bool(profile.get("contract_reference"))
              and bool(profile.get("impact_assessment_reference")) and bool(profile.get("reviewed_by"))
              and bool(profile.get("reviewed_at")))
-    if profile.get("valid_until"):
-        try:
-            expires = datetime.fromisoformat(profile["valid_until"])
-            if expires.tzinfo is None:
-                expires = expires.replace(tzinfo=timezone.utc)
-            valid = valid and expires > datetime.now(timezone.utc)
-        except (ValueError, TypeError):
-            valid = False
+    validity_error = profile_not_dispatchable(profile) if profile.get("status") == "reviewed" else "服务商档案未复核或已退役"
+    if validity_error:
+        valid = False
     add("合同与影响评估", valid, "档案须经复核且合同、影响评估在有效期内")
     add("任务范围", task_type in profile.get("allowed_tasks", []), "任务必须在允许清单内")
     add("案由范围", domain in profile.get("allowed_domains", []), "案由必须在允许清单内")

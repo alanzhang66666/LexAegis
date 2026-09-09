@@ -73,6 +73,28 @@ class InterruptClient:
         return InterruptAfterContent()
 
 
+class TimeoutAfterAccept:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    status_code = 200
+    headers = {"content-type": "text/event-stream"}
+
+    def iter_lines(self):
+        raise httpx.ReadTimeout("first byte")
+
+    def read(self):
+        raise httpx.ReadTimeout("first byte")
+
+
+class TimeoutAfterAcceptClient:
+    def stream(self, *args, **kwargs):
+        return TimeoutAfterAccept()
+
+
 def _provider(*scripts, primary="primary-key", standby="standby-key"):
     transport = ScriptedTransport(scripts)
     client = httpx.Client(transport=transport, timeout=5, follow_redirects=False, trust_env=False)
@@ -126,27 +148,40 @@ def test_wire_allows_field_but_rejects_local_keys():
     assert wire_contract_error(leaked)
 
 
-def test_pre_generation_401_failsover_to_standby_and_completes():
+def test_pre_generation_401_does_not_expand_recipients():
     claims = _claims()
     provider, transport = _provider(httpx.Response(401, json={"error": "no"}), _sse(claims))
     outcome = provider.dispatch("https://api.deepseek.com/v1/chat/completions", {
         "model": "deepseek-v4-flash", "messages": [{"role": "user", "content": "{}"}],
     }, dual_slot=provider_slot())
-    assert outcome.status == "complete"
-    assert outcome.selected_slot == "standby"
-    assert outcome.failover_reason == "unauthorized"
-    assert outcome.result == claims
-    assert "deepseek" in transport.calls[0] and "dashscope" in transport.calls[1]
+    assert outcome.status == "unknown"
+    assert outcome.selected_slot == "primary"
+    assert outcome.disclosure_state == "possible"
+    assert outcome.generation_started is False
+    assert len(transport.calls) == 1
+    assert "deepseek" in transport.calls[0]
     assert transport.bodies[0].get("thinking") == {"type": "disabled"}
-    assert "enable_thinking" not in transport.bodies[1]
+    assert len(outcome.attempts) == 1
+    assert outcome.attempts[0]["disclosure_state"] == "possible"
 
 
 def test_connect_failure_failsover_before_generation():
     claims = _claims()
     provider, transport = _provider(httpx.ConnectError("refused"), _sse(claims))
-    outcome = provider.dispatch("https://api.deepseek.com/v1/chat/completions", {"model": "deepseek-v4-flash", "messages": []})
+    outcome = provider.dispatch("https://api.deepseek.com/v1/chat/completions", {"model": "deepseek-v4-flash", "messages": []}, dual_slot=provider_slot())
     assert outcome.status == "complete" and outcome.selected_slot == "standby"
+    assert outcome.attempts[0]["disclosure_state"] == "undisclosed"
     assert len(transport.calls) == 2
+
+
+def test_unapproved_standby_is_not_invented_on_connect_failure():
+    claims = _claims()
+    provider, transport = _provider(httpx.ConnectError("refused"), _sse(claims))
+    outcome = provider.dispatch("https://api.deepseek.com/v1/chat/completions", {"model": "deepseek-v4-flash", "messages": []})
+    assert outcome.status == "unknown"
+    assert outcome.selected_slot == "primary"
+    assert outcome.disclosure_state == "undisclosed"
+    assert len(transport.calls) == 1
 
 
 def test_generation_started_does_not_call_standby():
@@ -168,10 +203,34 @@ def test_invalid_json_does_not_failover():
 
 def test_stream_interrupt_after_tokens_is_unknown():
     provider = DualSlotProvider("primary-key", "standby-key", client=InterruptClient())
-    outcome = provider.dispatch("https://api.deepseek.com/v1/chat/completions", {"model": "deepseek-v4-flash", "messages": []})
+    outcome = provider.dispatch("https://api.deepseek.com/v1/chat/completions", {"model": "deepseek-v4-flash", "messages": []}, dual_slot=provider_slot())
     assert outcome.status == "unknown"
     assert outcome.generation_started is True
     assert outcome.selected_slot == "primary"
+    assert outcome.disclosure_state == "possible"
+
+
+def test_timeout_after_primary_accepts_body_does_not_failover():
+    provider = DualSlotProvider("primary-key", "standby-key", client=TimeoutAfterAcceptClient())
+    persisted = []
+
+    def persist(attempts, authorized):
+        persisted.append((list(attempts), list(authorized)))
+
+    outcome = provider.dispatch(
+        "https://api.deepseek.com/v1/chat/completions",
+        {"model": "deepseek-v4-flash", "messages": []},
+        dual_slot=provider_slot(),
+        persist_attempt=persist,
+    )
+    assert outcome.status == "unknown"
+    assert outcome.selected_slot == "primary"
+    assert outcome.generation_started is False
+    assert outcome.disclosure_state == "possible"
+    assert outcome.attempts[0]["transmission_state"] == "response_received"
+    assert persisted[0][0][0]["finished_at"] is None
+    assert persisted[-1][0][0]["disclosure_state"] == "possible"
+    assert [item["slot"] for item in persisted[0][1]] == ["primary", "standby"]
 
 
 def test_usage_is_copied_to_outcome():
@@ -195,23 +254,18 @@ def test_assemble_does_not_keep_reasoning_content():
     assert result == claims
 
 
-def test_gateway_failover_completes_and_records_slot(env):
-    provider, transport = _provider(httpx.Response(401, json={"error": "no"}), None)
-
-    def standby_ok(request):
-        body = json.loads(request.content.decode())
-        facts = json.loads(body["messages"][1]["content"])["facts"]
-        return _sse({"claims": [{"text": facts[0]["text"], "source_ids": [facts[0]["id"]]}]})
-
-    transport.scripts[1] = standby_ok
-    case, task, record = _send_cloud(env, provider, "gw-failover")
-    assert record["status"] == "complete"
-    assert record["selected_slot"] == "standby"
-    assert record["failover_reason"] == "unauthorized"
-    assert record["result"]["claims"]
+def test_gateway_server_error_does_not_hit_standby(env):
+    provider, transport = _provider(httpx.Response(401, json={"error": "no"}), _sse(_claims()))
+    case, task, record = _send_cloud(env, provider, "gw-unauthorized")
+    assert record["status"] == "unknown"
+    assert record["selected_slot"] == "primary"
+    assert record["disclosure_state"] == "possible"
+    assert record["result"] is None
+    assert record["attempts"]
+    assert record["attempts"][0]["disclosure_state"] == "possible"
     assert "mapping" not in json.dumps(record)
-    assert task_state(env, case["id"], task["id"])["status"] == "complete"
-    assert len(transport.calls) == 2
+    assert task_state(env, case["id"], task["id"])["status"] == "unknown"
+    assert len(transport.calls) == 1
 
 
 def test_gateway_unknown_after_content_does_not_hit_standby(env):

@@ -80,8 +80,13 @@ def finish_response(repo, task, record):
         task.update(status="unknown", error="发送结果不明。仅可查询网关记录，不会重新提交。")
         disclosure["status"] = "unknown"
     else:
-        task.update(status="failed", error="网关未接受该请求")
+        task.update(status="failed", error=record.get("error") or "网关未接受该请求")
         disclosure["status"] = "rejected"
+    for key in ("attempts", "authorized_recipients", "selected_slot", "failover_reason",
+                "generation_started", "generation_state", "transmission_state", "disclosure_state"):
+        if key in record:
+            disclosure[key] = record[key]
+            task[key] = record[key]
     repo.put("disclosure", disclosure, task["case_id"])
     repo.put("task", task, task["case_id"])
     audit(repo, task["case_id"], "send."+task["status"], task_id=task["id"])
@@ -247,7 +252,7 @@ def process_one(store, root, gateway_client=None, redteam_client=None):
             with store.transaction() as repo:
                 task = repo.get(job["payload"]["task_id"], "task")
                 if job["kind"] == "send":
-                    service.assert_current(repo, task)
+                    service.authorize_dispatch(repo, task, phase="send")
                     task["status"] = "sending"
                     repo.put("task", task, task["case_id"])
             secret = os.getenv("LEX_GATEWAY_SECRET", "")
@@ -291,7 +296,10 @@ def process_one(store, root, gateway_client=None, redteam_client=None):
                 repo.put("document", doc, job["case_id"])
             if job["kind"] == "send":
                 task = repo.get(job["payload"]["task_id"], "task")
-                finish_response(repo, task, {"status": "unknown"})
+                if isinstance(error, service.DomainError) and task.get("status") == "queued":
+                    finish_response(repo, task, {"status": "rejected", "error": str(error)})
+                else:
+                    finish_response(repo, task, {"status": "unknown"})
             audit(repo, job["case_id"], "job.failed", job_id=job["id"], error_type=type(error).__name__)
     return True
 

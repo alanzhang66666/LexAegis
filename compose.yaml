@@ -9,7 +9,7 @@ x-runtime: &runtime
 services:
   api:
     <<: *runtime
-    ports: ["127.0.0.1:${LEX_COMPOSE_API_PORT:-8765}:8765"]
+    ports: ["127.0.0.1:${LEX_COMPOSE_API_PORT:-38765}:8765"]
     environment:
       LEX_DATA_DIR: /data
       LEX_LOCAL_PASSWORD: ${LEX_LOCAL_PASSWORD:?Set a local password}
@@ -17,17 +17,32 @@ services:
       LEX_GATEWAY_URL: http://gateway:8766
       LEX_EDGE_URL: http://edge-model:8080/v1
       LEX_EDGE_MODEL: ${LEX_EDGE_MODEL:-}
+      LEX_API_PORT: ${LEX_COMPOSE_API_PORT:-38765}
+      LEX_CLOUD_ALLOWED_HOSTS: ${LEX_CLOUD_ALLOWED_HOSTS:-api.deepseek.com,dashscope.aliyuncs.com,dashscope-intl.aliyuncs.com,api.openai.com}
       LEX_ISOLATED: "1"
       LEX_DEPLOYMENT_MODE: isolated
       LEX_RUNTIME_ROLE: api
       PYTHONDONTWRITEBYTECODE: "1"
     volumes: ["app-data:/data"]
-    networks: [internal]
+    # publish is not internal: Windows Docker otherwise drops 127.0.0.1 host bindings.
+    # isolate-api-route then deletes the default route so the 1.1.1.1 probe still fails.
+    networks: [internal, publish, redteam]
     healthcheck:
       test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/api/v1/health')"]
       interval: 10s
       timeout: 3s
       retries: 6
+  isolate-api-route:
+    image: alpine:3.20
+    network_mode: service:api
+    depends_on:
+      api: {condition: service_started}
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    command: ["sh", "-c", "ip route del default || true; exec sleep infinity"]
+    restart: unless-stopped
   worker:
     <<: *runtime
     command: [python, -m, lexaegis.worker]
@@ -55,7 +70,10 @@ services:
       LEX_GATEWAY_DIR: /data
       LEX_GATEWAY_SECRET: ${LEX_GATEWAY_SECRET:?Set a signing secret}
       LEX_CLOUD_API_KEY: ${LEX_CLOUD_API_KEY:-}
-      LEX_CLOUD_ALLOWED_HOSTS: ${LEX_CLOUD_ALLOWED_HOSTS:-api.openai.com}
+      LEX_CLOUD_PRIMARY_KEY: ${LEX_CLOUD_PRIMARY_KEY:-}
+      LEX_CLOUD_STANDBY_KEY: ${LEX_CLOUD_STANDBY_KEY:-}
+      LEX_CLOUD_STANDBY_HOST: ${LEX_CLOUD_STANDBY_HOST:-}
+      LEX_CLOUD_ALLOWED_HOSTS: ${LEX_CLOUD_ALLOWED_HOSTS:-api.deepseek.com,dashscope.aliyuncs.com,dashscope-intl.aliyuncs.com,api.openai.com}
       LEX_RUNTIME_ROLE: gateway
       PYTHONDONTWRITEBYTECODE: "1"
     volumes: ["gateway-data:/data"]
@@ -93,6 +111,10 @@ networks:
   internal: {internal: true}
   redteam: {internal: true}
   egress: {}
+  publish:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.enable_ip_masquerade: "false"
 volumes:
   app-data: {}
   gateway-data: {}

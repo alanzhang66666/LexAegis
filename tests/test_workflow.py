@@ -194,6 +194,58 @@ def formal_material(env):
     return case,document,fact
 
 
+def _pending_document(env, case_id, name="pending.txt"):
+    uploaded = env["client"].post(
+        f"/api/v1/cases/{case_id}/documents",
+        files={"file": (name, "尚未解析的补充材料。".encode("utf-8"), "text/plain")},
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    return uploaded.json()
+
+
+def test_empty_ir_does_not_crash_and_blocks_outbound(env):
+    case, _document, _fact = formal_material(env)
+    client = env["client"]
+    _pending_document(env, case["id"])
+    detail = client.get(f"/api/v1/cases/{case['id']}")
+    assert detail.status_code == 200
+    assert any(item.get("ir") is None for item in detail.json()["documents"])
+    anchors = client.get(f"/api/v1/cases/{case['id']}/anchors")
+    assert anchors.status_code == 200
+    task = client.post(f"/api/v1/cases/{case['id']}/tasks", json={"transport": "cloud"})
+    assert task.status_code == 200, task.text
+    evaluated = client.post(f"/api/v1/tasks/{task.json()['id']}/evaluate")
+    assert evaluated.status_code == 200, evaluated.text
+    body = evaluated.json()
+    assert "材料解析或 OCR 复核未完成" in body["risk"]["blockers"]
+    assert body["risk"]["approval_allowed"] is False
+    approved = client.post(
+        f"/api/v1/tasks/{task.json()['id']}/approve",
+        json={"request_hash": body["request_hash"]},
+    )
+    assert approved.status_code == 409
+
+
+def test_pending_parse_extract_does_not_crash(env):
+    case, _document, _fact = formal_material(env)
+    client = env["client"]
+    settings = client.get("/api/v1/bootstrap").json()["settings"]
+    payload = {key: settings[key] for key in (
+        "cloud_url", "cloud_model", "edge_url", "edge_model", "deployment_mode", "isolation_verified",
+    )}
+    payload["edge_model"] = "edge-small"
+    assert client.put("/api/v1/settings", json=payload).status_code == 200
+    _pending_document(env, case["id"])
+    mixed = client.post(f"/api/v1/cases/{case['id']}/extract")
+    assert mixed.status_code == 409
+    assert "复核" in mixed.text
+    pending_only = client.post("/api/v1/cases", json={"name": "仅待解析抽取"}).json()
+    _pending_document(env, pending_only["id"], "only-pending.txt")
+    result = client.post(f"/api/v1/cases/{pending_only['id']}/extract")
+    assert result.status_code == 409
+    assert "复核" in result.text
+
+
 def test_formal_txt_upload_parses_paragraphs(env):
     client = env["client"]
     case = client.post("/api/v1/cases", json={"name": "正式文本案件"}).json()
@@ -353,8 +405,8 @@ def test_cloud_mock_provider_and_unknown_provider_error(env):
     env["client"].put('/api/v1/settings',json={"cloud_url":"https://api.openai.com/v1","cloud_model":"test-model","edge_url":"http://localhost:11434/v1","edge_model":""})
     case,task=demo_task(env,transport="cloud")
     task=approve(env,task)
-    assert task["request"]["dependencies"]["dual_slot"]["primary"]["model"]=="deepseek-v4-flash"
-    assert task["request"]["dependencies"]["dual_slot"]["standby"]["model"]=="qwen3.8-flash"
+    assert task["request"]["dependencies"]["dual_slot"]["primary"]["model"]=="test-model"
+    assert not task["request"]["dependencies"]["dual_slot"].get("standby")
     assert task["request"]["target"].endswith("/chat/completions")
     env["client"].post(f"/api/v1/tasks/{task['id']}/send")
     process_one(env["app"].state.store,env["root"],gateway)

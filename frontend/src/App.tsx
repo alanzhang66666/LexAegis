@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ShieldCheck,
   FolderOpen,
@@ -81,6 +81,53 @@ const labels: Record<string, string> = {
   date: "日期",
   amount: "金额",
   evidence: "证据",
+  claim_stance: "主张或否认",
+  day_nature: "日性质",
+  overtime_hours: "加班小时",
+  wage_base: "工资基数",
+  evidence_holder: "证据持有人",
+  claim: "主张",
+  deny: "否认",
+  hold_evidence: "持有证据",
+  weekday: "工作日",
+  rest_day: "休息日",
+  holiday: "节假日",
+  worker: "劳动者",
+  employer: "用人单位",
+  third_party: "第三人",
+  natural_person: "自然人",
+  legal_person: "法人或其他组织",
+  party_privacy: "当事人隐私",
+  trade_secret: "商业秘密",
+  state_secret: "国家秘密",
+  other_confidential: "其他不愿泄露的信息",
+  personal_information: "个人信息",
+  必须保留: "必须保留",
+  条件保留: "条件保留",
+  必须保留或条件保留: "必须保留或条件保留",
+  假名化保留: "假名化保留",
+  默认删除: "默认删除",
+  禁止外发: "禁止外发",
+  转人工: "转人工",
+  must_keep: "必须保留",
+  conditional_keep: "条件保留",
+  keep_or_conditional: "必须保留或条件保留",
+  pseudonymize_keep: "假名化保留",
+  default_delete: "默认删除",
+  forbid_outbound: "禁止外发",
+  human_review: "转人工",
+  ordinary: "一般",
+  elevated: "较高",
+  restricted: "限制外发",
+  original_precision: "原精度",
+  tokenize: "令牌化",
+  moderate_generalize: "适度泛化",
+  necessary: "必要",
+  not_necessary: "不必要",
+  processable: "可处理",
+  not_processable: "不可处理",
+  unverified: "未验证",
+  "核对加班": "核对加班",
   fact_summary: "事实摘要",
   timeline: "时间线",
   evidence_inventory: "证据整理",
@@ -118,12 +165,16 @@ const labels: Record<string, string> = {
   sensitive_inference: "敏感事实推断",
   cross_round: "跨轮关联",
 };
-const attackLabels: Record<string, string> = { resisted: "攻击未成功", succeeded: "攻击成功 · 阻断", uncertain: "结果不确定 · 阻断", error: "执行错误 · 阻断", not_run: "未运行 · 阻断", not_applicable: "不适用 · 不计通过" };
+const attackLabels: Record<string, string> = { resisted: "工程基线未突破 · 非正式结论", succeeded: "工程基线检出 · 阻断", uncertain: "无候选或不确定 · 阻断", error: "执行错误 · 阻断", not_run: "未运行 · 阻断", not_applicable: "不适用 · 不计通过" };
 const txt = (key: string) => labels[key] || key;
-async function api(path: string, method = "GET", body?: any) {
+function isAbortError(error: unknown) {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+async function api(path: string, method = "GET", body?: any, signal?: AbortSignal) {
   const response = await fetch("/api/v1" + path, {
     method,
     credentials: "same-origin",
+    signal,
     headers:
       body instanceof FormData ? {} : { "Content-Type": "application/json" },
     body:
@@ -168,12 +219,24 @@ export default function App() {
   const [modal, setModal] = useState(""),
     [form, setForm] = useState<Obj>({}),
     [filter, setFilter] = useState("");
-  const reload = useCallback(async () => {
-    const [b,me] = await Promise.all([api("/bootstrap"),api("/me")]);
+  const caseSeq = useRef(0);
+  const caseIdRef = useRef(caseId);
+  caseIdRef.current = caseId;
+  const reload = useCallback(async (signal?: AbortSignal) => {
+    const [b,me] = await Promise.all([
+      api("/bootstrap", "GET", undefined, signal),
+      api("/me", "GET", undefined, signal),
+    ]);
+    if (signal?.aborted) return;
     setBoot(b);
     setPrincipal(me);
     setLogged(true);
-    if (caseId) setData(await api("/cases/" + caseId));
+    const id = caseId;
+    if (!id) return;
+    const seq = caseSeq.current;
+    const payload = await api("/cases/" + id, "GET", undefined, signal);
+    if (signal?.aborted || id !== caseIdRef.current || seq !== caseSeq.current) return;
+    setData(payload);
   }, [caseId]);
   useEffect(()=>{
     document.documentElement.dataset.theme=theme;
@@ -182,9 +245,17 @@ export default function App() {
     localStorage.setItem("lex_palette",palette);
   },[theme,palette]);
   useEffect(() => {
-    reload()
-      .catch(() => setLogged(false))
+    caseSeq.current += 1;
+  }, [caseId]);
+  useEffect(() => {
+    const controller = new AbortController();
+    reload(controller.signal)
+      .catch((error) => {
+        if (isAbortError(error)) return;
+        setLogged(false);
+      })
       .finally(() => setLoginReady(true));
+    return () => controller.abort();
   }, [reload]);
   useEffect(() => {
     if (!logged) return;
@@ -194,13 +265,24 @@ export default function App() {
   }, [logged]);
   useEffect(() => {
     if (!caseId || !logged) return;
-    const events = new EventSource("/api/v1/cases/" + caseId + "/events");
+    const controller = new AbortController();
+    const watched = caseId;
+    const events = new EventSource("/api/v1/cases/" + watched + "/events");
     events.addEventListener("changed", () => {
-      api("/cases/" + caseId)
-        .then(setData)
-        .catch(() => {});
+      const seq = caseSeq.current;
+      api("/cases/" + watched, "GET", undefined, controller.signal)
+        .then((payload) => {
+          if (controller.signal.aborted || watched !== caseIdRef.current || seq !== caseSeq.current) return;
+          setData(payload);
+        })
+        .catch((error) => {
+          if (isAbortError(error)) return;
+        });
     });
-    return () => events.close();
+    return () => {
+      controller.abort();
+      events.close();
+    };
   }, [caseId, logged]);
   const run = async (fn: () => Promise<any>, message = "") => {
     setBusy(true);
@@ -212,6 +294,7 @@ export default function App() {
       if (message) setNotice(message);
       return result;
     } catch (e) {
+      if (isAbortError(e)) return;
       setError((e as Error).message);
     } finally {
       setBusy(false);
@@ -236,6 +319,7 @@ export default function App() {
     ).values(),
   );
   const pickCase = (id: string) => {
+    caseSeq.current += 1;
     setCaseId(id);
     setData(null);
     setTaskId("");
@@ -270,6 +354,15 @@ export default function App() {
             value: "",
             source_ids: activeSource ? [activeSource.id] : [],
             confirmed: false,
+            claim_stance: "",
+            day_nature: "",
+            hours: "",
+            wage_base: "",
+            evidence_holder: "",
+            evidence_attribution: "",
+            subject_role: "",
+            confidentiality_category: "",
+            sensitivity_label: "",
           },
     );
     setModal("fact");
@@ -284,6 +377,15 @@ export default function App() {
           value: form.value,
           source_ids: form.source_ids,
           confirmed: form.confirmed,
+          ...(form.claim_stance ? { claim_stance: form.claim_stance } : {}),
+          ...(form.day_nature ? { day_nature: form.day_nature } : {}),
+          ...(form.hours !== "" && form.hours != null ? { hours: Number(form.hours) } : {}),
+          ...(form.wage_base ? { wage_base: form.wage_base } : {}),
+          ...(form.evidence_holder ? { evidence_holder: form.evidence_holder } : {}),
+          ...(form.evidence_attribution ? { evidence_attribution: form.evidence_attribution } : {}),
+          ...(form.subject_role ? { subject_role: form.subject_role } : {}),
+          ...(form.confidentiality_category ? { confidentiality_category: form.confidentiality_category } : {}),
+          ...(form.sensitivity_label ? { sensitivity_label: form.sensitivity_label } : {}),
         },
       );
       setModal("");
@@ -376,7 +478,7 @@ export default function App() {
           </small>
         </div>
         <div className="login-footer">
-          LEXAEGIS / 0.2 <span>按目的保护</span>
+          LEXAEGIS / 0.9 待发布 <span>按目的保护</span>
         </div>
       </div>
     );
@@ -392,7 +494,7 @@ export default function App() {
           </div>
         </div>
         <div className="workspace-label">
-          个人工作空间 <span>V0.2</span>
+          个人工作空间 <span>V0.9 待发布</span>
         </div>
         <nav>
           {[
@@ -694,7 +796,7 @@ export default function App() {
                   {data.ledger.length} ·{" "}
                   {currentCase.mode === "demo"
                     ? "仅供演示，不构成正式风险结论"
-                    : "未完成的规则与风险检验将阻断外发"}
+                    : "未完成的规则与风险检验将阻断外发。红队结果是工程基线，不是正式攻击结论"}
                 </p>
               </div>
               <button className="secondary" onClick={() => setPage("cases")}>
@@ -900,7 +1002,7 @@ export default function App() {
                         cap?.[key]?.status === "available" ? "green" : "amber"
                       }
                     >
-                      {txt(cap?.[key]?.status || "unconfigured")}
+                      {capabilityStatusLabel(cap?.[key]?.status)}
                     </Tag>
                   </div>
                   <p>{capabilityDetail(key, cap?.[key])}</p>
@@ -1004,6 +1106,7 @@ export default function App() {
                   <label>
                     事实类型
                     <select
+                      aria-label="事实类型"
                       value={form.field}
                       onChange={(e) =>
                         setForm({ ...form, field: e.target.value })
@@ -1019,6 +1122,7 @@ export default function App() {
                   <label>
                     事实内容
                     <textarea
+                      aria-label="事实内容"
                       required
                       rows={4}
                       value={form.value}
@@ -1030,6 +1134,7 @@ export default function App() {
                   <label>
                     原文依据（可多选）
                     <select
+                      aria-label="原文依据（可多选）"
                       multiple
                       required
                       value={form.source_ids}
@@ -1048,6 +1153,78 @@ export default function App() {
                           {b.locator} · {b.text.slice(0, 35)}
                         </option>
                       ))}
+                    </select>
+                  </label>
+                  <p className="small-note">加班小时、工资基数和证据归属须写进事实内容，否则原精度候选会被淘汰。</p>
+                  <label>
+                    主张或否认
+                    <select aria-label="主张或否认" value={form.claim_stance || ""} onChange={(e) => setForm({ ...form, claim_stance: e.target.value })}>
+                      <option value="">未填写</option>
+                      <option value="claim">{txt("claim")}</option>
+                      <option value="deny">{txt("deny")}</option>
+                      <option value="hold_evidence">{txt("hold_evidence")}</option>
+                    </select>
+                  </label>
+                  <label>
+                    日性质
+                    <select aria-label="日性质" value={form.day_nature || ""} onChange={(e) => setForm({ ...form, day_nature: e.target.value })}>
+                      <option value="">未填写</option>
+                      <option value="weekday">{txt("weekday")}</option>
+                      <option value="rest_day">{txt("rest_day")}</option>
+                      <option value="holiday">{txt("holiday")}</option>
+                    </select>
+                  </label>
+                  <label>
+                    加班小时
+                    <input aria-label="加班小时" type="number" min={0} step="0.5" value={form.hours ?? ""} onChange={(e) => setForm({ ...form, hours: e.target.value })} />
+                  </label>
+                  <label>
+                    工资基数
+                    <input aria-label="工资基数" value={form.wage_base || ""} onChange={(e) => setForm({ ...form, wage_base: e.target.value })} />
+                  </label>
+                  <label>
+                    证据持有人
+                    <select aria-label="证据持有人" value={form.evidence_holder || ""} onChange={(e) => setForm({ ...form, evidence_holder: e.target.value })}>
+                      <option value="">未填写</option>
+                      <option value="worker">{txt("worker")}</option>
+                      <option value="employer">{txt("employer")}</option>
+                      <option value="third_party">{txt("third_party")}</option>
+                    </select>
+                  </label>
+                  <label>
+                    证据归属
+                    <input aria-label="证据归属" value={form.evidence_attribution || ""} onChange={(e) => setForm({ ...form, evidence_attribution: e.target.value })} />
+                  </label>
+                  <label>
+                    主体角色
+                    <select aria-label="主体角色" value={form.subject_role || ""} onChange={(e) => setForm({ ...form, subject_role: e.target.value })}>
+                      <option value="">未填写</option>
+                      <option value="worker">{txt("worker")}</option>
+                      <option value="employer">{txt("employer")}</option>
+                      <option value="third_party">{txt("third_party")}</option>
+                    </select>
+                  </label>
+                  <label>
+                    保密类别
+                    <select aria-label="保密类别" value={form.confidentiality_category || ""} onChange={(e) => setForm({ ...form, confidentiality_category: e.target.value })}>
+                      <option value="">未填写</option>
+                      <option value="personal_information">{txt("personal_information")}</option>
+                      <option value="party_privacy">{txt("party_privacy")}</option>
+                      <option value="trade_secret">{txt("trade_secret")}</option>
+                      <option value="other_confidential">{txt("other_confidential")}</option>
+                    </select>
+                  </label>
+                  <label>
+                    脱敏清单类别
+                    <select aria-label="脱敏清单类别" value={form.sensitivity_label || ""} onChange={(e) => setForm({ ...form, sensitivity_label: e.target.value })}>
+                      <option value="">未填写</option>
+                      <option value="必须保留">必须保留</option>
+                      <option value="条件保留">条件保留</option>
+                      <option value="必须保留或条件保留">必须保留或条件保留</option>
+                      <option value="假名化保留">假名化保留</option>
+                      <option value="默认删除">默认删除</option>
+                      <option value="禁止外发">禁止外发</option>
+                      <option value="转人工">转人工</option>
                     </select>
                   </label>
                   <label className="checkbox">
@@ -1140,7 +1317,7 @@ export default function App() {
                   <b>备用模型 · {approveSlots.standby.model || "未提供"}</b>
                   <span>{approveSlots.standby.target || "目标未提供"}</span>
                   <span>
-                    备用仅在主模型尚未开始生成时使用；生成开始后失败不会自动换模型。
+                    未审核备用不会纳入批准目标。仅确认请求未离开本地时才允许切已审核备用；主方已收包后的超时或服务端错误记为可能披露，不会自动扩接收方。
                   </span>
                   {approveSlots.prompt_hash && (
                     <code>{approveSlots.prompt_hash}</code>
@@ -1241,12 +1418,29 @@ function settingsPayload(v: Obj) {
   };
 }
 
+function capabilityStatusLabel(status?: string) {
+  if (!status || status === "unconfigured") return "未验证";
+  return txt(status);
+}
+
 function capabilityDetail(key: string, item: Obj | undefined) {
   const detail = item?.detail || "正在检查配置";
-  if (key !== "cloud") return detail;
-  return detail.includes("双槽")
-    ? detail
-    : `${detail} 界面可配置云端双槽，不代表已完成真实外发验证。`;
+  if (key === "redteam") {
+    return detail.includes("工程基线")
+      ? detail
+      : `${detail} 当前为工程基线执行器，不是正式攻击结论。`;
+  }
+  if (key === "cloud") {
+    return detail.includes("可能披露")
+      ? detail
+      : `${detail} 已收包超时记为可能披露，不自动扩接收方。`;
+  }
+  if (key === "validation") {
+    return detail.includes("未验证")
+      ? detail
+      : `${detail} 未取得证据的能力保持未验证。`;
+  }
+  return detail;
 }
 
 function approvalSlots(task: Obj | undefined) {

@@ -11,6 +11,15 @@ function factMarks(fact: Obj, label: (value: string) => string) {
     if (text) marks.push({ key: `alias-${index}-${text}`, text: `别名 · ${text}` });
   });
   if (fact.role) marks.push({ key: "role", text: `角色 · ${label(String(fact.role))}` });
+  if (fact.subject_role) marks.push({ key: "subject_role", text: `主体角色 · ${label(String(fact.subject_role))}` });
+  if (fact.claim_stance) marks.push({ key: "claim_stance", text: `立场 · ${label(String(fact.claim_stance))}` });
+  if (fact.day_nature) marks.push({ key: "day_nature", text: `日性质 · ${label(String(fact.day_nature))}` });
+  if (fact.hours != null && fact.hours !== "") marks.push({ key: "hours", text: `小时 · ${String(fact.hours)}` });
+  if (fact.wage_base) marks.push({ key: "wage_base", text: `工资基数 · ${String(fact.wage_base)}` });
+  if (fact.evidence_holder) marks.push({ key: "holder", text: `证据持有 · ${label(String(fact.evidence_holder))}` });
+  if (fact.evidence_attribution) marks.push({ key: "attrib", text: `证据归属 · ${String(fact.evidence_attribution)}` });
+  if (fact.confidentiality_category) marks.push({ key: "secrecy", text: `保密 · ${label(String(fact.confidentiality_category))}` });
+  if (fact.sensitivity_label) marks.push({ key: "inventory", text: `清单 · ${label(String(fact.sensitivity_label))}` });
   if (fact.conflict_group) marks.push({ key: "conflict", text: `冲突组 · ${String(fact.conflict_group)}` });
   if (fact.not_stated) marks.push({ key: "not_stated", text: "材料未陈述" });
   return marks;

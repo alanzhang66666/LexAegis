@@ -101,9 +101,12 @@ def main():
     commands.add_parser("check-isolation", help="从宿主机验证 Compose 出口与卷/密钥隔离并记录结果")
     commands.add_parser("_record-isolation", help=argparse.SUPPRESS)
     p = commands.add_parser("bench", help="运行隔离实验能力检查")
-    p.add_argument("--profile", choices=["ianvs-pipl"], required=True)
+    p.add_argument("--profile", choices=["ianvs-pipl", "comparable"], required=True)
     p.add_argument("--input", type=Path, help="显式实验向量、显著性和真实模型输出 JSON")
     p.add_argument("--output", type=Path, help="离线 JSON 报告；拒绝覆盖现有文件")
+    p.add_argument("--dataset-id", default="mock_labor", help="comparable 对照使用的仓库数据集")
+    p.add_argument("--labels", type=Path, help="标注 JSON；缺省或 pending 不生成法学分")
+    p.add_argument("--split", choices=["all", "development", "blind"], default="all")
     p.add_argument("--real-target-outputs", type=Path)
     p.add_argument("--seed", type=int, default=23)
     p.add_argument("--target-dim", type=int, default=2)
@@ -139,6 +142,13 @@ def main():
     p.add_argument("data_root", nargs="?", type=Path, default=None, help="默认仓库 data/")
     p = dataset_commands.add_parser("show", help="显示指定数据集清单")
     p.add_argument("dataset_id", metavar="id")
+    p = dataset_commands.add_parser("compare", help="五组方法离线对照；评测专用，不外发")
+    p.add_argument("--dataset-id", default="mock_labor")
+    p.add_argument("--output", type=Path)
+    p.add_argument("--labels", type=Path, help="标注 JSON；缺省或 pending 不生成法学分")
+    p.add_argument("--split", choices=["all", "development", "blind"], default="all")
+    p = dataset_commands.add_parser("labels-template", help="写出空的待标注 schema，不含标签")
+    p.add_argument("--output", type=Path, required=True)
     p = dataset_commands.add_parser("probe-edge", help="对仓库合成集跑边侧抽取工程指标，无法学分")
     p.add_argument("--dataset-id", default="mock_labor")
     p.add_argument("--output", type=Path)
@@ -208,6 +218,25 @@ def main():
             audit(repo, "", "isolation.verified", checks=report["checks"])
         print("Isolation attestation recorded in the API data store.")
     elif args.command == "bench":
+        if args.profile == "comparable":
+            from .dataset import default_comparable_path, run_catalog_comparison
+            result = run_catalog_comparison(args.dataset_id, labels_path=args.labels, split=args.split)
+            output = args.output or default_comparable_path(args.dataset_id)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            with output.open("x", encoding="utf-8") as stream:
+                json.dump(result, stream, ensure_ascii=False, indent=2)
+                stream.write("\n")
+            restrict_mode(output, 0o600)
+            print(json.dumps({
+                "status": result["status"],
+                "profile": result["profile"],
+                "production_dispatch": result["production_dispatch"],
+                "dispatch_allowed": result["dispatch_allowed"],
+                "scale": result["scale"],
+                "legal_availability": result["legal_availability"],
+                "output": str(output),
+            }, ensure_ascii=False, indent=2))
+            raise SystemExit(0)
         from .experiments import run_ianvs_profile
         payload = None
         if args.input:
@@ -317,6 +346,23 @@ def main():
             from .data_registry import find_dataset
             path, _manifest = find_dataset(args.dataset_id)
             print(path.read_text(encoding="utf-8"), end="")
+        elif args.dataset_command == "compare":
+            from .dataset import default_comparable_path, run_catalog_comparison
+            result = run_catalog_comparison(args.dataset_id, labels_path=args.labels, split=args.split)
+            output = args.output or default_comparable_path(args.dataset_id)
+            write_once(output, result)
+            print(json.dumps({
+                "status": result["status"],
+                "production_dispatch": result["production_dispatch"],
+                "dispatch_allowed": result["dispatch_allowed"],
+                "scale": result["scale"],
+                "legal_availability": result["legal_availability"],
+                "output": str(output),
+            }, ensure_ascii=False, indent=2))
+        elif args.dataset_command == "labels-template":
+            from .experiments import pending_labels_document
+            write_once(args.output, pending_labels_document())
+            print("Pending labels template written:", args.output)
         elif args.dataset_command == "probe-edge":
             from .edge_eval import probe_edge, write_probe_report
             report = probe_edge(args.dataset_id)

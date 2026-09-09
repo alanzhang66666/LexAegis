@@ -1,4 +1,6 @@
-# 0.2 工程验证记录
+# 0.9 待发布工程验证记录
+
+产品版本现为 **0.9.0 待发布（`0.9.0rc0`）**，不是正式发行版。下文 2026-09-08/09 条目仍是 0.2.0 周期的本机证据，未因改号重跑。
 
 验证日期：2026-09-08。当前验证设备为 Windows / AMD64、Python 3.13、Docker Compose v5.5.0 / Engine 29.7.2。本文只记录实际执行证据；不填充隐私风险降低率、法律任务准确率或摘要质量等未经盲测的数据。
 
@@ -6,12 +8,13 @@
 
 | 验证项 | 实际结果 |
 | --- | --- |
-| `python -m pytest -q` | 2026-09-08 本机 186 项通过、1 项跳过 |
+| `python -m pytest -q` | 2026-09-09 本机 216 项通过、1 项跳过 |
 | `lexaegis dataset validate` | `ok=true`；catalog 仅 `mock_labor` 1.0.0，`dispatch_allowed=false`。本机 `.data/semi_labor_v1` 脚手架存在且契约通过（`legal_annotation_status=pending`，`dispatch_allowed=false`），未写入 `data/catalog.json`，无 `data/semi_labor_v1` |
 | TypeScript 类型检查与 Vite 生产构建 | 2026-09-08 三色系本轮：`pnpm exec tsc --noEmit` 通过；`pnpm build` 通过，1588 个模块 |
 | 远端 CI | 未取得 / 本轮不跑 |
 | Python wheel 构建与归档检查 | 通过；`lexaegis-0.2.0-py3-none-any.whl` 含编译前端、内置案由包、`NOTICE` 和许可证 |
 | `lexaegis bench --profile ianvs-pipl`（无输入） | `status=input_required`，`production_dispatch=false`，未造伪向量 |
+| `lexaegis dataset compare`（`mock_labor` 8 条） | 五组均写出对照产物；身份 top-1/top-k 与确定性效用代理含分子/分母/失败类；`legal_availability=not_scored`，`privacy_reduction_rate=not_scored`，AURA/人工成本/`interval_estimate=not_applicable`；`production_dispatch=false`。8 条冒烟，不宣布方法胜出 |
 | 桌面浏览器完整流程 | 2026-09-08 三色系本轮 `desktop-1280` 6 项通过（`--grep-invert five-viewport`，含复原空态 / 回写待办）；Playwright 复用已有 18765/18766，不抢 8765，未杀边侧 8080 |
 | 三色系六态手工 | 2026-09-08 在 `127.0.0.1:18765` 登录页与案件列表点击「配色」林绿/墨青/缃褐与深浅钮。计算样式确认 `data-palette`/`data-theme` 与 Token（林绿 `#225b48`/`#f6f4ee`，墨青 `#2f4f6d`/`#eef1f5`，缃褐 `#8a5a32`/`#f6f1e8`；成功色保持绿色、未并入品牌）。截图可读，侧栏深底浅字。另开演示案事实页（墨青深）与披露页（缃褐浅）。默认仍是林绿浅。未跑五视口 |
 | 响应式浏览器矩阵 | 本轮未跑 `five-viewport` |
@@ -22,6 +25,7 @@
 | 本机 PaddleOCR 合成扫描冒烟 | CPU `paddlepaddle` 3.3.1 + `paddleocr` 3.7.0（非 GPU）。用户缓存已有 `PP-OCRv6_medium_det` 与 `PP-OCRv6_medium_rec`。`examples/synthetic_scan.pdf` 解析得 3 块 `kind=ocr`（含 bbox，`needs_review=true`）。`test_live_paddleocr_scan_smoke` 通过。无识别率结论 |
 | Compose 隔离探测 | `check-isolation` 五项探测全部为 true；`isolation_verified=true` 于 2026-09-08T09:39:34Z 写入隔离 API 卷。运行态探测不能替代宿主机防火墙与镜像供应链审计 |
 | Compose 正式合成真云 | 隔离阻断消失；其余门禁仍在；`formal_dispatch=blocked`。E1：`docker compose port api 8765` 在宿主机 28765 与 38765 recreate 后输出恰好为 `invalid IP:0`。容器内 `http://127.0.0.1:8765/api/v1/health` 为 200。宿主机 38765/28765/8765 未连通。能力面板已拆开 `host_publish` 与 isolation。**本轮跳过 Compose 登录页**（宿主机未发布），不主张浏览器可达隔离 |
+| 2026-09-10 本机隔离试点 | Compose `docker compose port api 8765`=`127.0.0.1:38765`；`check-isolation` 五项通过并写入隔离卷；10 案迁入后云端 evaluate 仍 409（四类攻击 `uncertain`，未改成 resisted）；隔离库试点包 `2.0.0-pilot.1` 已 publish，仓库 `packs/labor_v2_draft.json` 仍为 draft。`formal_dispatch=blocked`，非正式外发开通。 |
 | Unicode 路径、跨进程文件锁与进程退出 | 自动化测试通过 |
 | DOCX、文本/扫描 PDF、PNG/JPEG 与 OCR Provider 契约 | 自动化测试通过 |
 | 材料版本、历史锚点、事实失效和任务期间材料变化 | 自动化测试通过 |
@@ -31,7 +35,8 @@
 | 通用任务引擎与本地确定性时间线 | 自动化测试通过 |
 | 服务商、角色、具名审批、请求哈希和累计披露失效 | 自动化测试通过 |
 | 网关 HMAC、幂等、结果不明和禁止盲目重发 | 自动化测试通过 |
-| 四类冻结攻击状态与正式门禁 | 自动化测试通过 |
+| 四类冻结攻击状态与正式门禁 | 自动化测试通过。当前执行器是工程基线：空辅助不得四类 `resisted`；已知泄漏的合成阳性对照必须 `identity=succeeded`。这不是正式攻击结论，也不能作为法学背书。`validate_formal_gate` 仍失败关闭，仅四类 `resisted` 消除红队阻断 |
+| 发送控制 7 组回归探针 | 自动化测试覆盖：未审核备用不进批准目标；主方收包后首字节超时不切备；空辅助不得四类 `resisted`；入队后规则退役拒发；空 IR 待解析不崩且阻断外发；能力面板区分未验证 / 可能披露 / 工程基线。正式外发仍失败关闭 |
 | DP clipping/RDP、JL/PCA/随机投影和真实 MIA 输入约束 | 自动化测试通过 |
 | 合成数据生成、冻结、四组文本对照和 Ianvs 补充组 | 自动化测试通过 |
 | 迁移前备份、完整性验证、失败回滚和恢复 | 自动化测试通过 |
@@ -68,9 +73,9 @@
 
 ## 当前合成数据范围
 
-`lexaegis dataset generate-mock` 生成 8 份完全合成的劳动争议记录，固定为 6:2 开发/盲测划分。`freeze` 冻结数据、模板、依赖和随机种子哈希；`run` 生成原文、查找替换、一致假名化、任务驱动最小披露四组文本对照，以及独立的 Ianvs 向量补充组。
+`lexaegis dataset generate-mock` 生成 8 份完全合成的劳动争议记录，固定为 6:2 开发/盲测划分。`freeze` 冻结数据、模板、依赖和随机种子哈希；`run` 生成原文、查找替换、一致假名化、任务驱动最小披露四组文本对照，以及独立的 Ianvs 向量补充组。`dataset compare` / `bench --profile comparable` 在同一攻击预算下另跑五组方法离线对照（查找替换、一致假名化、任务矩阵、通用 generalize 薄基线、Phase 2 法律约束候选），攻击器与评分器分开，开发/盲测分开汇总。
 
-这些数据不来自真实案件，只验证管线可复现性。法律可用性、人工耗时、正式四类攻击效果和 MIA 效果均明确记为 `not_applicable` 或待标注，不生成伪造分数。
+这些数据不来自真实案件，只验证管线可复现性。8 条是冒烟规模，不是代表性保证。法律可用性、隐私降低率、AURA、人工耗时、正式四类攻击效果和 MIA 效果均明确记为 `not_scored` / `not_applicable` 或待标注，不生成伪造分数，也不宣布方法胜出。仓库内红队执行器只证明工程基线可复现，不构成正式攻击结论或法学背书。标注与盲审完成前，对照结果不得写成正式实验结论。
 
 ## 对照原 PLAN 的未决项
 
@@ -85,13 +90,14 @@
 
 ## 有意保留的外发阻断
 
-法学案由规则与法源尚未定稿、服务商材料和影响评估未审核、正式攻击阈值未冻结、真实材料未获组织授权时，正式外发保持关闭。本机 Compose 隔离探测通过**不能**替代上述法学条件。技术实现状态不得替代法律审核或合规结论。
+发送控制已按槽位分档审核、逐次 Attempt 与发送时重验实现；能力面板区分未验证 / 可能披露 / 工程基线，正式外发保持失败关闭。法学案由规则与法源尚未定稿、服务商材料和影响评估未审核、正式攻击阈值未冻结、真实材料未获组织授权时，正式外发保持关闭。本机 Compose 隔离探测通过**不能**替代上述法学条件。技术实现状态不得替代法律审核或合规结论。
 
 ## 复现命令
 
 ```powershell
 python -m pytest -q
 python -m lexaegis.cli dataset validate
+python -m lexaegis.cli dataset compare --output .data/comparable/mock_labor.json
 cd frontend
 pnpm exec tsc --noEmit
 pnpm build

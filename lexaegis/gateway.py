@@ -85,14 +85,22 @@ def create_gateway(data_dir=None, secret=None, provider=None):
             raise HTTPException(403, "Missing synthetic demonstration scope")
         dual_slot = (request.get("dependencies") or {}).get("dual_slot") if request["transport"] == "cloud" else None
         if request["transport"] == "cloud":
-            targets = [request["target"]]
-            if isinstance(dual_slot, dict):
-                for name in ("primary", "standby"):
-                    slot = dual_slot.get(name) or {}
-                    if slot.get("target"):
-                        targets.append(slot["target"])
-            if any(not cloud_endpoint_allowed(target) for target in targets):
-                raise HTTPException(403, "Cloud endpoint is outside gateway allowlist")
+            slots = dual_slot if isinstance(dual_slot, dict) else {}
+            approved_targets = []
+            for name in ("primary", "standby"):
+                slot = slots.get(name) or {}
+                target = slot.get("target")
+                if not target:
+                    continue
+                if not cloud_endpoint_allowed(target):
+                    raise HTTPException(403, "Cloud endpoint is outside gateway allowlist")
+                if name == "primary" and slot.get("model") and request.get("body", {}).get("model") not in (None, "", slot["model"]):
+                    raise HTTPException(403, "Request model is not the approved primary slot")
+                approved_targets.append(target)
+            if not approved_targets:
+                raise HTTPException(403, "No approved cloud recipient")
+            if request["target"] not in approved_targets:
+                raise HTTPException(403, "Request target is not an approved recipient")
             if not cloud_ready():
                 raise HTTPException(409, "Cloud credential is not configured")
         with store.transaction() as repo:
@@ -103,8 +111,16 @@ def create_gateway(data_dir=None, secret=None, provider=None):
                 return old
             except KeyError:
                 pass
-            record = {"id": request["request_id"], "request_hash": digest(request), "status": "sending", "at": now(), "result": None}
+            record = {"id": request["request_id"], "request_hash": digest(request), "status": "sending",
+                      "at": now(), "result": None, "attempts": [], "authorized_recipients": []}
             repo.put("send", record)
+
+        def persist_attempt(attempts, authorized):
+            record["attempts"] = attempts
+            record["authorized_recipients"] = authorized
+            with store.transaction() as repo:
+                repo.put("send", record)
+
         try:
             if request["transport"] == "mock":
                 import json
@@ -113,7 +129,8 @@ def create_gateway(data_dir=None, secret=None, provider=None):
                           "unused_fact_ids": [], "gaps": []}
                 record.update(status="complete", result=result)
             elif hasattr(provider, "dispatch"):
-                outcome = provider.dispatch(request["target"], request["body"], dual_slot=dual_slot)
+                outcome = provider.dispatch(request["target"], request["body"], dual_slot=dual_slot,
+                                           persist_attempt=persist_attempt)
                 record.update(outcome.ledger_fields())
                 if outcome.status == "complete":
                     record.update(status="complete", result=outcome.result)

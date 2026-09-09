@@ -1,6 +1,6 @@
 # 评测数据资产
 
-`data/` 是仓库内的版本化评测与回归语料，和 `packs/` 一样进 git。运行期案件、原文、映射和网关账本仍只存在于被忽略的 `.data/`，不要把两套目录混用。
+`data/` 是仓库内的版本化评测与回归语料，和 `packs/` 一样进 git。运行期案件、原文、映射和网关账本仍只存在于被忽略的 `.data/`，不要把两套目录混用。本机真实案件材料放在 `.data/real_cases/`，不要拷回本目录或提交进 git。
 
 ## 能进库
 
@@ -28,6 +28,8 @@
 python -m lexaegis.cli dataset list
 python -m lexaegis.cli dataset validate
 python -m lexaegis.cli dataset show mock_labor
+python -m lexaegis.cli dataset compare
+python -m lexaegis.cli dataset labels-template --output .data/labels-pending.json
 python -m lexaegis.cli dataset probe-edge
 python -m lexaegis.cli dataset promote-semi
 ```
@@ -35,5 +37,7 @@ python -m lexaegis.cli dataset promote-semi
 `promote-semi [src] [data-root]` 在标注完成、警告清空、且 `dispatch_allowed` / `contains_real_case_content` 均为 false 时才复制到 `data/semi_labor_v1` 并写 catalog；否则拒绝，不改主库。
 
 `probe-edge` 对 `mock_labor` 调已有 `EdgeClient.extract`，只记 JSON / `source_ids` / `quote` / 数字 / 别名等工程指标，**不打法律可用性分**。报告写到被忽略的 `.data/edge-probe/`。未配置或未启动 llama-server 时状态为 `unconfigured`，退出码 0，不把整个 `doctor` 失败关闭。
+
+`compare` 在同一攻击预算下对五组方法做离线对照：查找替换、一致假名化、当前任务矩阵、通用 generalize/删除薄基线、以及 Phase 2 法律约束候选。原文只作本地效用参照和隔离阳性对照，不送公共搜索。8 条是冒烟规模，不是代表性结论；双人标注仍为 pending，`labels-template` 只写出空 schema。报告只写分子/分母与失败类，不生成法律可用性分、隐私降低率或 AURA 数字，也不宣布方法胜出。正式外发保持 `dispatch_allowed=false`。
 
 `generate-mock` / `freeze` / `run` 仍写到调用方指定路径，且禁止覆盖；它们不会自动改写本目录。

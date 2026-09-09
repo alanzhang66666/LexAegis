@@ -1,8 +1,9 @@
 import math
+from pathlib import Path
 
 import pytest
 
-from lexaegis.attacks import evaluate as attack
+from lexaegis.attacks import POSITIVE_CONTROL_REQUEST, evaluate as attack
 from lexaegis.contracts import MappingEntry
 from lexaegis.detection import bind_source_spans, detect_text, merge_overlaps, risk_signals
 from lexaegis.dataset import build_semisynthetic_manifest, validate_annotations
@@ -179,9 +180,9 @@ def test_wire_payload_excludes_local_only_data(env):
     assert "林澄" not in str(wire) and "mapping" not in str(wire).lower()
     assert "[[LEX:P0001]]" in str(wire)
     deps=evaluated["request"]["dependencies"]
-    assert deps["dual_slot"]["primary"]["model"]=="deepseek-v4-flash"
-    assert deps["dual_slot"]["standby"]["model"]=="qwen3.8-flash"
-    assert deps["primary_model"]=="deepseek-v4-flash" and deps["standby_model"]=="qwen3.8-flash"
+    assert not deps["dual_slot"].get("standby")
+    assert "备用" in (deps.get("standby_note") or "")
+    assert not deps.get("standby_model")
     assert deps["prompt_hash"]
 
 
@@ -353,8 +354,8 @@ def test_dp_budget_projection_and_real_mia_inputs():
 
 def test_frozen_attack_is_data_driven_and_rejects_local_fields():
     protocol={"kind":"candidate_set","threshold":.2,"query_budget":3}
-    assert attack(protocol,{"facts":[]},[],[{"candidate_count":10}])["outcome"]=="resisted"
-    assert attack(protocol,{"facts":[]},[],[{"candidate_count":2}])["outcome"]=="succeeded"
+    assert attack(protocol,{"facts":[]},[],[{"candidate_count":10}])["outcome"]=="uncertain"
+    assert attack(protocol,POSITIVE_CONTROL_REQUEST,[],[])["outcome"]=="succeeded"
     with pytest.raises(ValueError):
         attack(protocol,{"mapping_entries":[]},[],[])
 
@@ -372,6 +373,9 @@ def test_capabilities_report_separate_axes(env):
     assert "隔离部署仍未验收" in result["validation"]["detail"]
     assert "真实云端外发仍未验收" in result["validation"]["detail"]
     assert "正式案件仍未验收" in result["validation"]["detail"]
+    assert "未验证" in result["validation"]["detail"]
+    assert "可能披露" in result["cloud"]["detail"]
+    assert "工程基线" in result["redteam"]["detail"]
 
     with env["app"].state.store.transaction() as repo:
         settings = repo.get("settings")
@@ -391,6 +395,18 @@ def test_capabilities_report_separate_axes(env):
     assert "隔离仍未验收" not in detail
     isolation_clause = next(part for part in detail.split("；") if "隔离部署" in part)
     assert "仍未验收" not in isolation_clause
+    assert "未验证" in isolated["validation"]["detail"]
+    assert "可能披露" in isolated["cloud"]["detail"]
+    assert "工程基线" in isolated["redteam"]["detail"]
+
+
+def test_capability_panel_copy_distinguishes_honesty_states():
+    source = Path(__file__).resolve().parents[1] / "frontend" / "src" / "App.tsx"
+    text = source.read_text(encoding="utf-8")
+    assert "未验证" in text
+    assert "可能披露" in text
+    assert "工程基线" in text
+    assert "尚未开始生成" not in text
 
 
 def test_semisynthetic_scaffold_has_frozen_split_but_never_fake_labels():

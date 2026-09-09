@@ -1,4 +1,8 @@
-"""Isolated red-team service. It rejects edge-only data and authenticates jobs."""
+"""Isolated red-team service. It rejects edge-only data and authenticates jobs.
+
+The bundled executor in attacks.py is an engineering baseline, not a formal
+attack conclusion. Scoring truth must not appear in the attacker view.
+"""
 import hmac
 import os
 from fastapi import FastAPI, HTTPException

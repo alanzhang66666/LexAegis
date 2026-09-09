@@ -1220,6 +1220,21 @@ nav button:not(.active):hover {
   line-height: 1.9;
   color: #8a997c;
 }
+.judgment-list {
+  margin: 12px 0 0;
+}
+.judgment-list dt {
+  font-size: 12px;
+  color: #9ba68e;
+  margin: 10px 0 4px;
+}
+.judgment-list dd {
+  font-size: 12px;
+  color: #6e815b;
+  margin: 0;
+  overflow-wrap: anywhere;
+  line-height: 1.7;
+}
 .metadata {
   margin: 19px 16px;
 }

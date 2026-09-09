@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { AlertTriangle, ArrowRight, Check, Play, ShieldCheck } from "lucide-react";
 import { Empty, IssueList, Tag } from "../components/ui";
 
@@ -47,6 +47,27 @@ export function RiskWorkspace({ task, busy, label, attackLabels, onAction, onApp
     <details className="request-detail" open>
       <summary>完整请求快照 <Tag>v{task.version}</Tag></summary>
       <div className="request-target"><b>目标</b>{task.request.target}<b>模型</b>{task.request.body.model}</div>
+      <p className="small-note">{task.request.dependencies?.standby_note || "未审核备用不会纳入批准目标。仅确认请求未离开本地才允许切备。"}</p>
+      {(task.authorized_recipients || task.request.dependencies?.authorized_recipients || []).length > 0 && (
+        <dl className="metadata">
+          {(task.authorized_recipients || task.request.dependencies?.authorized_recipients || []).map((item: Obj, index: number) => (
+            <Fragment key={item.slot || index}>
+              <dt>授权 {item.slot || "接收方"}</dt>
+              <dd>{item.model || "模型未提供"} · {item.target || "目标未提供"}</dd>
+            </Fragment>
+          ))}
+        </dl>
+      )}
+      {(task.attempts || []).length > 0 && (
+        <dl className="metadata">
+          {task.attempts.map((attempt: Obj, index: number) => (
+            <Fragment key={attempt.id || index}>
+              <dt>{attempt.slot || "槽位"} · {attempt.disclosure_state === "possible" ? "可能披露" : attempt.disclosure_state === "disclosed" ? "已披露" : "未离开本地"}</dt>
+              <dd>{attempt.generation_state || "not_started"} · {attempt.target || "目标未记录"}</dd>
+            </Fragment>
+          ))}
+        </dl>
+      )}
       <pre>{JSON.stringify(task.request.body,null,2)}</pre><small>SHA-256 · {task.request_hash}</small>
     </details>
     <div className="approval-actions">

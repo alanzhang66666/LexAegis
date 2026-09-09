@@ -67,7 +67,31 @@ def validate_pack(raw):
             if (set(pack.risk_weights) != allowed_weights or not pack.dispatch_allowed
                     or pack.legal_status != "reviewed" or not pack.published_scope):
                 raise ValueError("正式案由包缺少冻结权重、法学发布状态或适用范围")
+        _validate_disclosure_overlay(pack)
     return pack
+
+
+def _validate_disclosure_overlay(pack):
+    fields = {item.id for item in pack.fact_fields}
+    sources = {item.id for item in pack.legal_sources}
+    relations = {item.id for item in pack.immutable_relations}
+    rule_ids = []
+    for rule in pack.disclosure_rules:
+        rule_ids.append(rule.id)
+        if rule.task_id not in pack.task_ids:
+            raise ValueError("披露规则引用了未注册任务")
+        if any(field not in fields for field in rule.affected_fields):
+            raise ValueError("披露规则引用了未定义字段")
+        if any(source_id not in sources for source_id in rule.legal_source_ids):
+            raise ValueError("披露规则引用了未定义法源")
+        if any(relation_id not in relations for relation_id in rule.immutable_relations):
+            raise ValueError("披露规则引用了未定义不可破坏关系")
+        if rule.preferred_transform not in set(rule.allowed_transforms):
+            raise ValueError("披露规则的缺省变换不在允许集合内")
+    if len(set(rule_ids)) != len(rule_ids):
+        raise ValueError("披露规则标识不可重复")
+    if any(item.citation_status == "published" for item in pack.legal_sources) and pack.legal_status != "reviewed":
+        raise ValueError("未完成法学审核的案由包不能把法源标成已发布")
 
 
 def _validate_pattern(spec):

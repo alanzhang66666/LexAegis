@@ -2,7 +2,7 @@
 
 云边协同的法律材料披露工作台：边侧整理原文与身份映射，律师批准完整请求后，由独立网关调用云端大模型 API，结果回到边侧校核和回链。
 
-**当前版本：0.2.0。** 工作台、V2 契约、稳定 wire token、门禁与跨平台 CLI 已进入代码。法学规则尚未发布、真实攻击与隔离尚未验收，因此**正式案件的外发保持阻断**。演示只接受内置合成材料。
+**当前版本：0.9.0 待发布（`0.9.0rc0`）。** 工作台、V2 契约、稳定 wire token、门禁与跨平台 CLI 已进入代码。法学规则尚未发布、真实攻击与隔离尚未验收，因此**正式案件的外发保持阻断**。演示只接受内置合成材料。本号不是正式发行版。
 
 现行入口地图见 [docs/PROJECT_MAP.md](docs/PROJECT_MAP.md)。文档地图见 [docs/README.md](docs/README.md)。架构与门禁见 [架构说明](docs/ARCHITECTURE.md)。评测语料见 [data/README.md](data/README.md)。边侧声明见 [models/catalog/README.md](models/catalog/README.md)。
 
@@ -18,6 +18,7 @@
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.lock
+python -m pip install -e ".[test]"
 cd frontend && pnpm install --frozen-lockfile && pnpm build && cd ..
 python scripts/make_examples.py
 lexaegis start
@@ -42,7 +43,7 @@ lexaegis start
 打开工作台后输入终端中的本地访问口令。`Ctrl+C` 停止三个服务。不配置模型、不下边侧权重，即可体验三个固定合成案例：
 
 1. 生成披露方案。
-2. 检验风险并查看完整请求。四类攻击显示“未运行”不得当作正式通过。
+2. 检验风险并查看完整请求。四类攻击显示“未运行”不得当作正式通过。当前红队执行器是工程基线，不是正式攻击结论。
 3. 批准后执行模拟调用（模拟器组装已披露事实，不声称模型生成）。
 4. 逐项回链并确认最终结果。
 
@@ -54,7 +55,7 @@ lexaegis start
 | --- | --- |
 | `data/` | 评测语料可作为仓库资产，与运行期 `.data/` 分开。当前 `data/mock_labor_v1` 为 8 条完全合成劳动争议记录。`lexaegis dataset list \| validate \| show \| probe-edge`；`generate-mock \| freeze \| run` 仍写到指定路径。`probe-edge` 只记工程指标，无法学分。`dispatch_allowed` 恒为 false。真实案件与运行库不进 git。 |
 | 边侧 | 生产只做事实提取。现行本机单模型 MiniCPM5-2B Q4_K_M 非思考（HF `openbmb/MiniCPM5-2B`，GGUF `MiniCPM5-2B-Q4_K_M.gguf`，服务别名 `edge-small`：`--reasoning-budget 0 --reasoning off --jinja --ctx-size 8192`）。约 4GB 显存，按块抽取。权重不入库，声明在 `models/catalog/`。演示不调边侧。 |
-| 云端双槽 | 主 DeepSeek V4 Flash（`deepseek-v4-flash`），备阿里云百炼 Qwen3.8-Flash（`qwen3.8-flash`）。流式只在网关拼完整 JSON，不进工作台。备用仅当主模型尚未开始生成时可用；一旦有 token，失败记 unknown，禁止自动换模、禁止自动重发。思考关闭。 |
+| 云端双槽 | 主 DeepSeek V4 Flash（`deepseek-v4-flash`），备阿里云百炼 Qwen3.8-Flash（`qwen3.8-flash`）。流式只在网关拼完整 JSON，不进工作台。备用仅当已审核且确认请求未离开本地时可用；主方已收包后的超时或 401 记可能披露，不自动换模。一旦有 token，失败记 unknown，禁止自动换模、禁止自动重发。思考关闭。 |
 | 密钥 | 只在网关：`LEX_CLOUD_PRIMARY_KEY`（兼容旧名 `LEX_CLOUD_API_KEY`）、`LEX_CLOUD_STANDBY_KEY`。`lexaegis start` 不把云端密钥传给 API/worker。 |
 | 工作台 | 运行配置可填主/备并回显；外发目标仍走网关冻结双槽与白名单。审批展示主/备及上述故障转移说明。披露方案可显示「模型建议 · 非规则」。 |
 

@@ -7,9 +7,9 @@ type RequestFn = (path:string,method?:string,body?:any)=>Promise<any>;
 
 const split = (value:string) => value.split(/[,，\n]/).map(item=>item.trim()).filter(Boolean);
 const providerDefault = {
-  id:"",name:"",role:"unknown",processing_regions:"",retention:"",training_use:"unknown",
+  id:"",name:"",legal_entity:"",product:"",role:"unknown",endpoint:"",model:"",processing_regions:"",retention:"",training_use:"unknown",
   human_access:"unknown",subprocessors:"",subprocessor_status:"unknown",deletion_mechanism:"",
-  contract_reference:"",impact_assessment_reference:"",valid_until:"",allowed_tasks:"fact_summary",
+  contract_reference:"",contract_version:"",impact_assessment_reference:"",impact_assessment_version:"",valid_until:"",allowed_tasks:"fact_summary",
   allowed_domains:"labor",allowed_fields:"entity,relation,event,date,amount,evidence",allowed_transports:["cloud"],status:"draft",
 };
 
@@ -24,7 +24,9 @@ export function ProviderCenter({providers=[],request,refresh,busy}:{providers?:O
         processing_regions:split(form.processing_regions),subprocessors:split(form.subprocessors),
         allowed_tasks:split(form.allowed_tasks),allowed_domains:split(form.allowed_domains),allowed_fields:split(form.allowed_fields),
         valid_until:form.valid_until||null,retention:form.retention||null,deletion_mechanism:form.deletion_mechanism||null,
-        contract_reference:form.contract_reference||null,impact_assessment_reference:form.impact_assessment_reference||null,
+        legal_entity:form.legal_entity||null,product:form.product||null,endpoint:form.endpoint||null,model:form.model||null,
+        contract_reference:form.contract_reference||null,contract_version:form.contract_version||null,
+        impact_assessment_reference:form.impact_assessment_reference||null,impact_assessment_version:form.impact_assessment_version||null,
       });setForm(null);await refresh();
     } catch(e){setError((e as Error).message)}
   };
@@ -47,7 +49,7 @@ export function ProviderCenter({providers=[],request,refresh,busy}:{providers?:O
     </Panel>)}</div>
     {form&&<Panel title={form.id?"编辑服务商档案":"新建服务商档案"} actions={<button onClick={()=>setForm(null)}>取消</button>}>
       <div className="governance-form">
-        {["id","name","processing_regions","retention","deletion_mechanism","contract_reference","impact_assessment_reference","valid_until","subprocessors","allowed_tasks","allowed_domains","allowed_fields"].map(key=>
+        {["id","name","legal_entity","product","endpoint","model","processing_regions","retention","deletion_mechanism","contract_reference","contract_version","impact_assessment_reference","impact_assessment_version","valid_until","subprocessors","allowed_tasks","allowed_domains","allowed_fields"].map(key=>
           <label key={key}>{key}<input disabled={key==="id"&&providers.some(p=>p.id===form.id)} value={form[key]||""} onChange={e=>setForm({...form,[key]:e.target.value})}/></label>)}
         {(["role","training_use","human_access","subprocessor_status"] as const).map(key=><label key={key}>{key}<select value={form[key]}
           onChange={e=>setForm({...form,[key]:e.target.value})}>

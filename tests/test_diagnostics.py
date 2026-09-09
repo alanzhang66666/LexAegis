@@ -9,6 +9,7 @@ from lexaegis.diagnostics import (
     doctor_report,
     host_publish_capability,
     isolation_capability,
+    legal_capability,
     parse_compose_host_bind,
     redteam_capability,
     resolve_redteam_url,
@@ -147,6 +148,19 @@ def test_doctor_native_isolation_does_not_fail_close(monkeypatch):
     assert "native" in note["detail"]
 
 
+def test_legal_capability_never_opens_product_dispatch():
+    empty = legal_capability([])
+    assert empty["status"] == "unconfigured"
+    assert "formal_dispatch 保持阻断" in empty["detail"]
+    published = legal_capability([
+        {"schema_version": 2, "status": "published", "dispatch_allowed": True},
+    ])
+    assert published["status"] == "available"
+    assert "dispatch_allowed=true" in published["detail"]
+    assert "不等于法学验收" in published["detail"]
+    assert "formal_dispatch 保持阻断" in published["detail"]
+
+
 def test_isolation_capability_native_cannot_attest():
     available = isolation_capability({"isolation_verified": True, "deployment_mode": "isolated"})
     assert available["status"] == "available"
@@ -160,9 +174,11 @@ def test_redteam_capability_requires_reachable_host():
     down = redteam_capability(protocols, probe={"ok": False, "detail": "红队服务不可达（http://127.0.0.1:8767）"})
     assert down["status"] == "unconfigured"
     assert "不可达" in down["detail"]
+    assert "工程基线" in down["detail"]
     up = redteam_capability(protocols, probe={"ok": True})
     assert up["status"] == "available"
     assert "不确定" in up["detail"]
+    assert "工程基线" in up["detail"]
     missing = redteam_capability([{"status": "draft"}], probe={"ok": True})
     assert missing["status"] == "unconfigured"
 
@@ -173,6 +189,20 @@ def test_parse_compose_host_bind_rejects_unpublished_and_non_loopback():
     assert parse_compose_host_bind("0.0.0.0:38765") == ""
     assert parse_compose_host_bind("127.0.0.1:0") == ""
     assert parse_compose_host_bind("127.0.0.1:38765") == "127.0.0.1:38765"
+
+
+def test_host_publish_isolated_api_cannot_attest_host_bind(monkeypatch):
+    monkeypatch.setenv("LEX_RUNTIME_ROLE", "api")
+    monkeypatch.setenv("LEX_ISOLATED", "1")
+
+    def boom(*args, **kwargs):
+        raise AssertionError("isolated api must not probe compose port")
+
+    monkeypatch.setattr("lexaegis.diagnostics.compose_host_port_line", boom)
+    report = host_publish_capability()
+    assert report["ok"] is True
+    assert report["status"] == "unconfigured"
+    assert "不能证明宿主机发布" in report["detail"]
 
 
 def test_host_publish_unpublished_does_not_fail_close():
@@ -242,6 +272,7 @@ def test_capabilities_host_publish_separate_from_isolation(env, monkeypatch):
     assert "浏览器已通" not in detail
     isolation_clause = next(part for part in detail.split("；") if "隔离部署" in part)
     assert "仍未验收" not in isolation_clause
+    assert "formal_dispatch 保持阻断" in result["legal"]["detail"]
 
 
 def test_capabilities_redteam_unconfigured_when_url_down(env, monkeypatch):

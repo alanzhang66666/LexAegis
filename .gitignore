@@ -18,3 +18,5 @@ models/**
 .pnpm-store/
 # examples/ is created by scripts/make_examples.py and tests
 examples/
+# Local real-case intake; runtime copies live in gitignored .data/real_cases/
+data/真实案件/

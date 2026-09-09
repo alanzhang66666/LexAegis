@@ -162,6 +162,17 @@ def native_isolation_note() -> dict:
     }
 
 
+def legal_capability(published: list[dict] | None = None) -> dict:
+    """Published isolation packs are not a product legal endorsement."""
+    packs = list(published or [])
+    allowed = sum(1 for pack in packs if pack.get("dispatch_allowed"))
+    closer = "仓库劳动包仍为待审草稿。隔离库 publish 不等于法学验收，产品 formal_dispatch 保持阻断。"
+    if not packs:
+        return {"status": "unconfigured", "detail": f"尚无已发布 V2 案由包。{closer}"}
+    extra = f"，其中 {allowed} 个 dispatch_allowed=true" if allowed else "，均未打开产品外发"
+    return {"status": "available", "detail": f"已发布 V2 案由包 {len(packs)} 个{extra}。{closer}"}
+
+
 def isolation_capability(settings: dict | None = None) -> dict:
     settings = settings or {}
     mode = settings.get("deployment_mode") or os.getenv("LEX_DEPLOYMENT_MODE", "native")
@@ -216,6 +227,17 @@ def compose_host_port_line(timeout=3) -> str:
 
 def host_publish_capability(timeout=0.8, port_line: str | None = None) -> dict:
     """Host publish is not isolation. Does not fail-close. Never implies the login page opened."""
+    if port_line is None and isolated_runtime() and os.getenv("LEX_RUNTIME_ROLE") == "api":
+        return {
+            "ok": True,
+            "status": "unconfigured",
+            "bind": "",
+            "detail": (
+                "未验收：隔离 API 容器不能证明宿主机发布；"
+                "请在宿主机执行 docker compose port api 8765 与健康检查。"
+                "隔离探测通过不等于浏览器已通"
+            ),
+        }
     raw = compose_host_port_line() if port_line is None else port_line
     bind = parse_compose_host_bind(raw)
     if not bind:
@@ -259,14 +281,15 @@ def redteam_capability(protocols, probe=None) -> dict:
     """Available only with ≥4 frozen protocols *and* a reachable redteam host."""
     probe = probe if probe is not None else probe_redteam()
     frozen = len([item for item in protocols if item.get("status") == "frozen"])
+    baseline = "当前为工程基线执行器，不是正式攻击结论"
     if not probe.get("ok"):
-        return {"status": "unconfigured", "detail": probe.get("detail") or "红队服务不可达"}
+        return {"status": "unconfigured", "detail": f"{probe.get('detail') or '红队服务不可达'}。{baseline}"}
     if frozen < 4:
         return {
             "status": "unconfigured",
-            "detail": f"冻结协议 {frozen}/4；未运行、错误和不确定均不算通过",
+            "detail": f"冻结协议 {frozen}/4；未运行、错误和不确定均不算通过。{baseline}",
         }
-    return {"status": "available", "detail": "未运行、错误和不确定均不算通过"}
+    return {"status": "available", "detail": f"未运行、错误和不确定均不算通过。{baseline}"}
 
 
 def isolation_report(timeout=.4) -> dict:

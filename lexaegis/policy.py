@@ -41,7 +41,7 @@ def _replacement_pairs(mappings):
 def transform(value, method, mappings):
     if method == "delete":
         return ""
-    if method in ("pseudonymize", "generalize"):
+    if method in ("pseudonymize", "generalize", "moderate_generalize"):
         for original, alias in sorted(_replacement_pairs(mappings), key=lambda pair: -len(pair[0])):
             if original:
                 value = value.replace(original, alias)
@@ -167,7 +167,7 @@ def assess(case, pack, facts, decisions, docs, ledger, transport, provider_resul
     fact_by_id = {fact["id"]: fact for fact in facts}
     detector_inputs = [(fact_by_id.get(decision["fact_id"], {}).get("source_ids", []),
                         decision["output"]) for decision in decisions if decision.get("output")]
-    anchor_index = {block["id"]: block for document in docs for block in document.get("ir", {}).get("blocks", [])}
+    anchor_index = {block["id"]: block for document in docs for block in (document.get("ir") or {}).get("blocks", [])}
     detected_findings = [
         finding
         for source_ids, text in detector_inputs
@@ -189,7 +189,7 @@ def assess(case, pack, facts, decisions, docs, ledger, transport, provider_resul
         blockers.append("没有可发送的事实")
     if any(not f["confirmed"] or f.get("stale") for f in facts):
         blockers.append("事实尚未确认或来源版本已更新")
-    if any(d["status"] != "ready" or d.get("ir", {}).get("needs_review") for d in docs):
+    if any(d.get("status") != "ready" or not isinstance(d.get("ir"), dict) or (d.get("ir") or {}).get("needs_review") for d in docs):
         blockers.append("材料解析或 OCR 复核未完成")
     terms = [term for term in (pack or {}).get("forbidden_terms") or [] if term]
     matched = [term for term in terms if term in emitted]

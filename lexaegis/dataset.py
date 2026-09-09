@@ -8,13 +8,47 @@ from __future__ import annotations
 
 import json
 import random
+import time
+from datetime import date
 from pathlib import Path
 
-from .experiments import run_ianvs_profile
+from .experiments import (
+    UNSCORED_COMPARABLE,
+    aggregate_comparable_rows,
+    assert_honest_comparable_report,
+    isolated_identity_probe,
+    legal_utility_proxies,
+    load_comparable_labels,
+    pending_labels_document,
+    run_ianvs_profile,
+)
 from .util import digest
 
 
 GROUPS = ("original", "find_replace", "consistent_pseudonym", "task_minimal", "ianvs_experimental")
+METHOD_GROUPS = (
+    "find_replace",
+    "consistent_pseudonym",
+    "task_matrix",
+    "generic_privacy_utility",
+    "legal_constraint",
+)
+COMPARABLE_ARTIFACT_KEYS = (
+    "case_id", "group", "payload", "source_ids", "fact_outputs",
+    "experimental_only", "legal_necessity_determined", "production_dispatch",
+    "latency_ms", "attempt_count", "output_hash",
+)
+FIND_REPLACE_TABLE = {
+    "person_name": "某劳动者",
+    "organization": "某用人单位",
+    "phone": "[电话已删除]",
+    "email": "[邮箱已删除]",
+    "address": "[地址已删除]",
+}
+OVERLAY_NOTE = (
+    "加班条件覆盖只从合成原文可核对线索派生（主张字样、日历星期），"
+    "不是双人标注，不得当作法学标签。"
+)
 
 SEMI_LABOR_GENERATOR = "lexaegis.semi_labor.v1"
 SEMI_LABOR_METHOD = "structure_abstracted_recombined_template"
@@ -489,3 +523,472 @@ def run_mock_comparison(records: list[dict], manifest: dict) -> dict:
         "production_dispatch": False,
     }
     return {**core, "report_hash": digest(core)}
+
+
+def default_eval_pack_path() -> Path:
+    return Path(__file__).resolve().parent.parent / "packs" / "labor_v2_draft.json"
+
+
+def default_comparable_path(dataset_id: str) -> Path:
+    return Path(".data") / "comparable" / f"{dataset_id}.json"
+
+
+def load_eval_pack(path: Path | None = None) -> dict:
+    from .registry import validate_pack
+    raw = json.loads((path or default_eval_pack_path()).read_text(encoding="utf-8"))
+    pack = validate_pack(raw).model_dump()
+    if pack.get("dispatch_allowed") is not False:
+        raise ValueError("评测案由包 dispatch_allowed 必须为 false")
+    return pack
+
+
+def task_matrix_fallback(pack: dict, task_type: str, field: str) -> dict:
+    fallback = {"necessity": "uncertain", "transform": "delete", "reason": "未定义适用规则", "forbidden": False}
+    rules = {item["field"]: item for item in pack.get("rules") or []}
+    if pack.get("schema_version") == 2:
+        matrix = [item for item in pack.get("task_field_matrix") or [] if item.get("task_id") == task_type]
+        if not matrix:
+            return {**fallback, "reason": "任务字段矩阵缺失，按保守策略处理"}
+        item = next((row for row in matrix if row.get("field") == field), None)
+        if not item:
+            return {**fallback, "reason": "字段未出现在任务矩阵中，按保守策略处理"}
+        rule = rules.get(field, fallback)
+        forbidden = bool(rule.get("forbidden"))
+        return {
+            "necessity": item.get("necessity") or "uncertain",
+            "transform": "delete" if forbidden else rule.get("transform") or "delete",
+            "reason": item.get("rationale") or rule.get("reason") or fallback["reason"],
+            "forbidden": forbidden,
+        }
+    return rules.get(field, fallback)
+
+
+def experiment_sub_purpose(record: dict) -> str | None:
+    event = next((fact.get("text") or "" for fact in record.get("facts") or [] if fact.get("field") == "event"), "")
+    return "核对加班" if "加班" in event else None
+
+
+def _derived_day_nature(date_text: str) -> str | None:
+    try:
+        parsed = date.fromisoformat(date_text)
+    except ValueError:
+        return None
+    return "rest_day" if parsed.weekday() >= 5 else "weekday"
+
+
+def disclosure_facts_from_record(record: dict) -> list[dict]:
+    source = _record_text(record)
+    overtime = experiment_sub_purpose(record) == "核对加班"
+    facts = []
+    for fact in record.get("facts") or []:
+        item = {
+            "id": fact["id"],
+            "field": fact["field"],
+            "value": fact.get("text") or fact.get("value") or "",
+            "source_ids": list(fact.get("source_ids") or []),
+        }
+        if fact["id"] == "fact_person":
+            item["subject_role"] = "worker"
+        elif fact["id"] == "fact_employer":
+            item["subject_role"] = "employer"
+        if overtime:
+            if "主张" in source or "提出请求" in source:
+                item["claim_stance"] = "claim"
+            if fact["field"] == "date":
+                day_nature = _derived_day_nature(item["value"])
+                if day_nature:
+                    item["day_nature"] = day_nature
+            if fact["field"] == "evidence":
+                item["evidence_attribution"] = item["value"]
+        facts.append(item)
+    return facts
+
+
+def mappings_from_record(record: dict) -> list[dict]:
+    index = int(str(record["id"]).rsplit("_", 1)[-1])
+    entries = []
+    for finding in record["technical_truth"]["direct_identifiers"]:
+        category = finding["category"]
+        if category == "person_name":
+            token = f"[[LEX:P{index:04d}]]"
+        elif category == "organization":
+            token = f"[[LEX:O{index:04d}]]"
+        else:
+            continue
+        entries.append({
+            "entity_id": f"entity_{category}_{index:04d}",
+            "wire_token": token,
+            "original_value": finding["value"],
+            "aliases": [],
+            "source_ids": [finding.get("source_id") or "block_001"],
+        })
+    return entries
+
+
+def _record_text(record: dict) -> str:
+    return record["document"]["blocks"][0]["text"]
+
+
+def _record_index(record: dict) -> int:
+    return int(str(record["id"]).rsplit("_", 1)[-1])
+
+
+def _fact_row(fact, output, transform_name, *, necessity="uncertain", status="candidate",
+              selected_candidate_id=None, block_reasons=None, candidate_count=0):
+    return {
+        "fact_id": fact.get("id"),
+        "field": fact.get("field"),
+        "output": output,
+        "transform": transform_name,
+        "necessity": necessity,
+        "status": status,
+        "selected_candidate_id": selected_candidate_id,
+        "block_reasons": list(block_reasons or []),
+        "candidate_count": candidate_count,
+    }
+
+
+def _wrap_artifact(record: dict, group: str, payload: str, source_ids: list[str],
+                   fact_outputs: list[dict], started: float) -> dict:
+    artifact = {
+        "case_id": record["id"],
+        "group": group,
+        "payload": payload,
+        "source_ids": sorted(set(source_ids)),
+        "fact_outputs": fact_outputs,
+        "experimental_only": True,
+        "legal_necessity_determined": False,
+        "production_dispatch": False,
+        "latency_ms": int((time.monotonic() - started) * 1000),
+        "attempt_count": 1,
+    }
+    artifact["output_hash"] = digest({key: value for key, value in artifact.items() if key not in {"output_hash", "latency_ms"}})
+    return artifact
+
+
+def _artifact_find_replace(record: dict, started: float) -> dict:
+    raw = _record_text(record)
+    payload = _replace_identifiers(raw, record, FIND_REPLACE_TABLE)
+    outputs = []
+    for fact in record["facts"]:
+        outputs.append(_fact_row(fact, _replace_identifiers(fact["text"], record, FIND_REPLACE_TABLE), "find_replace"))
+    return _wrap_artifact(record, "find_replace", payload, ["block_001"], outputs, started)
+
+
+def _pseudonym_table(record: dict) -> dict[str, str]:
+    index = _record_index(record)
+    return {
+        "person_name": f"[[LEX:P{index:04d}]]",
+        "organization": f"[[LEX:O{index:04d}]]",
+        "phone": f"[[LEX:C{index:04d}]]",
+        "email": f"[[LEX:C{index + 20:04d}]]",
+        "address": f"[[LEX:L{index:04d}]]",
+    }
+
+
+def _artifact_pseudonym(record: dict, started: float) -> dict:
+    table = _pseudonym_table(record)
+    raw = _record_text(record)
+    payload = _replace_identifiers(raw, record, table)
+    outputs = []
+    for fact in record["facts"]:
+        outputs.append(_fact_row(fact, _replace_identifiers(fact["text"], record, table), "pseudonymize"))
+    return _wrap_artifact(record, "consistent_pseudonym", payload, ["block_001"], outputs, started)
+
+
+def _artifact_task_matrix(record: dict, pack: dict, mappings: list[dict], started: float) -> dict:
+    from .disclosure import fallback_decision
+    facts = disclosure_facts_from_record(record)
+    outputs = []
+    parts = []
+    source_ids = []
+    for fact in facts:
+        fallback = task_matrix_fallback(pack, "fact_summary", fact["field"])
+        decision = fallback_decision(fact, fallback, mappings)
+        outputs.append(_fact_row(
+            fact, decision.get("output") or "", decision.get("transform") or "delete",
+            necessity=decision.get("necessity") or "uncertain",
+            status=decision.get("status") or "candidate",
+            block_reasons=decision.get("block_reasons"),
+        ))
+        if decision.get("output"):
+            parts.append(decision["output"])
+            source_ids.extend(fact.get("source_ids") or [])
+    return _wrap_artifact(record, "task_matrix", "；".join(parts), source_ids, outputs, started)
+
+
+def _artifact_generic(record: dict, mappings: list[dict], started: float) -> dict:
+    from .policy import transform
+    raw = _record_text(record)
+    payload = transform(raw, "generalize", mappings)
+    outputs = []
+    contacts = {item["value"] for item in record["technical_truth"]["direct_identifiers"]
+                if item["category"] in {"phone", "email", "address"}}
+    for fact in record["facts"]:
+        method = "delete" if fact["text"] in contacts else "generalize"
+        output = transform(fact["text"], method, mappings)
+        outputs.append(_fact_row(fact, output, method))
+    return _wrap_artifact(record, "generic_privacy_utility", payload, ["block_001"], outputs, started)
+
+
+def _artifact_legal(record: dict, pack: dict, mappings: list[dict], started: float,
+                    *, drop_hard_constraints: bool = False) -> dict:
+    from .disclosure import build_disclosure_decision, infer_sub_purpose
+    from .policy import transform
+    facts = disclosure_facts_from_record(record)
+    purpose = infer_sub_purpose(facts, "fact_summary", experiment_sub_purpose(record))
+    outputs = []
+    parts = []
+    source_ids = []
+    group = "legal_constraint_no_hard_constraints" if drop_hard_constraints else "legal_constraint"
+    for fact in facts:
+        fallback = task_matrix_fallback(pack, "fact_summary", fact["field"])
+        decision = build_disclosure_decision(fact, pack, "fact_summary", mappings, fallback, purpose, facts)
+        if drop_hard_constraints and decision.get("rule_id") and decision.get("status") != "review":
+            decision = {
+                **decision,
+                "output": transform(fact.get("value") or "", "generalize", mappings),
+                "transform": "generalize",
+                "selected_candidate_id": "unconstrained_generalize",
+                "block_reasons": [],
+            }
+        outputs.append(_fact_row(
+            fact, decision.get("output") or "", decision.get("transform") or "delete",
+            necessity=decision.get("necessity") or "uncertain",
+            status=decision.get("status") or "candidate",
+            selected_candidate_id=decision.get("selected_candidate_id"),
+            block_reasons=decision.get("block_reasons"),
+            candidate_count=len(decision.get("candidates") or []),
+        ))
+        if decision.get("output"):
+            parts.append(decision["output"])
+            source_ids.extend(fact.get("source_ids") or [])
+    return _wrap_artifact(record, group, "；".join(parts), source_ids, outputs, started)
+
+
+def emit_comparable_artifact(record: dict, group: str, pack: dict | None = None,
+                             mappings: list[dict] | None = None, *,
+                             drop_hard_constraints: bool = False) -> dict:
+    if group not in METHOD_GROUPS:
+        raise ValueError(f"对照只支持五组方法：{', '.join(METHOD_GROUPS)}")
+    pack = pack or load_eval_pack()
+    mappings = mappings if mappings is not None else mappings_from_record(record)
+    started = time.monotonic()
+    if group == "find_replace":
+        return _artifact_find_replace(record, started)
+    if group == "consistent_pseudonym":
+        return _artifact_pseudonym(record, started)
+    if group == "task_matrix":
+        return _artifact_task_matrix(record, pack, mappings, started)
+    if group == "generic_privacy_utility":
+        return _artifact_generic(record, mappings, started)
+    return _artifact_legal(record, pack, mappings, started, drop_hard_constraints=drop_hard_constraints)
+
+
+def frozen_auxiliary_directory(records: list[dict]) -> list[dict]:
+    items = []
+    for record in records:
+        person = None
+        phone = None
+        email = None
+        for finding in record["technical_truth"]["direct_identifiers"]:
+            if finding["category"] == "person_name":
+                person = finding["value"]
+            elif finding["category"] == "phone":
+                phone = finding["value"]
+            elif finding["category"] == "email":
+                email = finding["value"]
+        if not person:
+            continue
+        items.append({"candidate": person, "clue": phone or ""})
+        if email:
+            items.append({"candidate": person, "clue": email})
+    return items
+
+
+def identity_label_for(record: dict, labels: dict | None) -> str | None:
+    tagged = ((labels or {}).get("records") or {}).get(record["id"]) or {}
+    if tagged.get("identity"):
+        return tagged["identity"]
+    for finding in record.get("technical_truth", {}).get("direct_identifiers") or []:
+        if finding.get("category") == "person_name":
+            return finding.get("value")
+    return None
+
+
+def _score_artifact(record: dict, artifact: dict, auxiliary: list[dict], labels: dict | None) -> dict:
+    identity = identity_label_for(record, labels)
+    probe = isolated_identity_probe(artifact["payload"], auxiliary, {"identity": identity} if identity else None)
+    proxies = legal_utility_proxies(record, artifact)
+    return {
+        "case_id": record["id"],
+        "group": artifact["group"],
+        "split": None,
+        "output_hash": artifact["output_hash"],
+        "latency_ms": artifact["latency_ms"],
+        "attempt_count": artifact["attempt_count"],
+        "identity_top1": probe["ranks"]["top1"],
+        "identity_topk": probe["ranks"]["topk"],
+        "attacker_view_hash": probe["attacker_view_hash"],
+        "protocol_outcome": probe["protocol_outcome"],
+        "isolation": probe["isolation"],
+        **proxies,
+    }
+
+
+def run_comparable_comparison(records: list[dict], manifest: dict, *, labels: dict | None = None,
+                              pack: dict | None = None, split: str = "all") -> dict:
+    if manifest.get("dispatch_allowed") is not False:
+        raise ValueError("对照只接受 dispatch_allowed=false 的评测集")
+    frozen = freeze_mock_corpus(
+        records,
+        seed=manifest["seed"],
+        dependency_hash=manifest.get("dependency_hash", "unrecorded"),
+        generator_version=manifest.get("generator_version", "lexaegis.mock_labor.v1"),
+    )
+    if manifest.get("freeze_hash") != frozen["freeze_hash"]:
+        raise ValueError("数据、划分或冻结配置已经变化")
+    labels = labels or pending_labels_document()
+    pack = pack or load_eval_pack()
+    auxiliary = frozen_auxiliary_directory(records)
+    selected = []
+    for record in records:
+        bucket = (manifest.get("split") or {}).get(record["id"])
+        if split != "all" and bucket != split:
+            continue
+        selected.append(record)
+    if not selected:
+        raise ValueError("当前划分没有可对照记录")
+
+    artifacts = {group: [] for group in METHOD_GROUPS}
+    rows_by_group = {group: [] for group in METHOD_GROUPS}
+    split_rows = {"development": {group: [] for group in METHOD_GROUPS},
+                  "blind": {group: [] for group in METHOD_GROUPS}}
+    ablation_keep = []
+    ablation_drop = []
+
+    for record in selected:
+        mappings = mappings_from_record(record)
+        bucket = (manifest.get("split") or {}).get(record["id"])
+        for group in METHOD_GROUPS:
+            artifact = emit_comparable_artifact(record, group, pack, mappings)
+            artifacts[group].append(artifact)
+            row = _score_artifact(record, artifact, auxiliary, labels)
+            row["split"] = bucket
+            rows_by_group[group].append(row)
+            if bucket in split_rows:
+                split_rows[bucket][group].append(row)
+        keep = emit_comparable_artifact(record, "legal_constraint", pack, mappings)
+        drop = emit_comparable_artifact(record, "legal_constraint", pack, mappings, drop_hard_constraints=True)
+        keep_row = _score_artifact(record, keep, auxiliary, labels)
+        drop_row = _score_artifact(record, drop, auxiliary, labels)
+        ablation_keep.append(keep_row)
+        ablation_drop.append(drop_row)
+
+    original_text = _record_text(selected[0])
+    original_identity = identity_label_for(selected[0], labels)
+    positive = isolated_identity_probe(original_text, auxiliary, {"identity": original_identity} if original_identity else None)
+    negative = isolated_identity_probe("", auxiliary, {"identity": original_identity} if original_identity else None)
+
+    groups = {}
+    group_hashes = {}
+    for group in METHOD_GROUPS:
+        groups[group] = aggregate_comparable_rows(rows_by_group[group])
+        group_hashes[group] = digest([item["output_hash"] for item in artifacts[group]])
+    splits = {
+        name: {group: aggregate_comparable_rows(split_rows[name][group]) for group in METHOD_GROUPS}
+        for name in ("development", "blind")
+        if split == "all" or split == name
+    }
+    core = {
+        "schema_version": 1,
+        "profile": "comparable-methods",
+        "status": "complete_technical_mock_smoke",
+        "scale": "pilot_smoke_n8_not_representative",
+        "production_dispatch": False,
+        "dataset_id": manifest.get("id") or "mock_labor",
+        "dataset_version": manifest.get("version"),
+        "dataset_freeze_hash": manifest["freeze_hash"],
+        "dispatch_allowed": False,
+        "legal_annotation_status": labels.get("status") or manifest.get("legal_annotation_status") or "pending",
+        "downstream_model": {
+            "outcome": "not_applicable",
+            "id": "deterministic_local_transforms",
+            "runtime_model_hash": "not_applicable",
+            "runtime_prompt_hash": "not_applicable",
+            "detail": "五组均为本地确定性变换，未调用下游生成模型；比较的是披露方法而不是模型差异",
+        },
+        "attack_budget": {
+            "kind": "identity",
+            "query_budget": 8,
+            "k": 3,
+            "same_budget_for_all_groups": True,
+            "auxiliary": "frozen_local_synthetic_directory",
+            "public_search": False,
+        },
+        "groups": groups,
+        "group_output_hashes": group_hashes,
+        "splits": splits,
+        "artifacts": {
+            group: [{key: item[key] for key in COMPARABLE_ARTIFACT_KEYS} for item in artifacts[group]]
+            for group in METHOD_GROUPS
+        },
+        "controls": {
+            "positive_identity": {
+                "outcome": positive["ranks"]["outcome"],
+                "top1": positive["ranks"]["top1"],
+                "protocol_outcome": positive["protocol_outcome"],
+                "source_hash": digest(original_text),
+                "detail": "原文只作本地效用参照和隔离阳性对照，未送公共搜索",
+            },
+            "negative_identity": {
+                "outcome": negative["ranks"]["outcome"],
+                "top1": negative["ranks"]["top1"],
+                "protocol_outcome": negative["protocol_outcome"],
+                "detail": "空披露阳性对照：无候选不得记为 resisted",
+            },
+        },
+        "ablations": {
+            "drop_hard_constraints": {
+                "question": "去掉法律硬约束、改用通用 generalize，日期或金额关系失败是否增加",
+                "keep_hard_constraints": aggregate_comparable_rows(ablation_keep),
+                "drop_hard_constraints": aggregate_comparable_rows(ablation_drop),
+            }
+        },
+        "isolation": {
+            "attacker_scorer_separated": True,
+            "development_blind_split": True,
+            "original_text_use": "local_utility_and_isolated_positive_control",
+            "public_search": False,
+            "labels_status": labels.get("status") or "pending",
+            "overlay_note": OVERLAY_NOTE,
+        },
+        "method_notes": {
+            "find_replace": "直接标识查找替换为角色标签或删除标记",
+            "consistent_pseudonym": "同一主体在同一记录内使用稳定 token",
+            "task_matrix": "当前案由包任务字段矩阵加保守缺省，不含加班硬约束候选",
+            "generic_privacy_utility": "薄基线：已有 policy.generalize 与联系方式删除，不是新的研究堆栈",
+            "legal_constraint": "Phase 2 disclosure.py 有界候选与硬约束；草稿包，非正式法源",
+        },
+        **UNSCORED_COMPARABLE,
+        "annotation_labels": {
+            "status": labels.get("status") or "pending",
+            "annotator_a": labels.get("annotator_a"),
+            "annotator_b": labels.get("annotator_b"),
+            "adjudication": labels.get("adjudication"),
+            "record_label_count": len((labels.get("records") or {})),
+        },
+    }
+    report = {**core, "report_hash": digest({key: value for key, value in core.items()
+                                            if key not in {"artifacts"}})}
+    assert_honest_comparable_report(report)
+    return report
+
+
+def run_catalog_comparison(dataset_id: str = "mock_labor", *, labels_path=None,
+                           split: str = "all") -> dict:
+    from .data_registry import find_dataset
+    path, manifest = find_dataset(dataset_id)
+    records = read_records_jsonl(path.parent / manifest.records_path)
+    labels = load_comparable_labels(labels_path)
+    return run_comparable_comparison(records, manifest.model_dump(mode="json"), labels=labels, split=split)
