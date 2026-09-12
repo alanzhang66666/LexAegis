@@ -27,15 +27,29 @@ def _mapping_names(entry):
     return [name for name in names if name]
 
 
+def _usable_name(name):
+    return bool(name) and len(name) >= 2
+
+
 def _replacement_pairs(mappings):
     if isinstance(mappings, list):
         pairs = []
         for entry in mappings:
             token = entry["wire_token"]
-            pairs.append((entry["original_value"], token))
-            pairs.extend((alias, token) for alias in entry.get("aliases") or [] if alias)
+            original = entry.get("original_value")
+            if _usable_name(original):
+                pairs.append((original, token))
+            pairs.extend((alias, token) for alias in entry.get("aliases") or [] if _usable_name(alias))
         return pairs
-    return list(mappings.items())
+    return [(name, token) for name, token in mappings.items() if _usable_name(name)]
+
+
+def registered_name_residuals(output, mappings):
+    leftovers = []
+    for original, token in sorted(_replacement_pairs(mappings), key=lambda pair: -len(pair[0])):
+        if original and len(original) >= 2 and original != token and original in (output or ""):
+            leftovers.append(original)
+    return leftovers
 
 
 def transform(value, method, mappings):
@@ -91,7 +105,10 @@ def ensure_mappings(case, facts):
     for fact in facts:
         if fact["field"] != "entity":
             continue
-        value = fact["value"]
+        value = (fact.get("value") or "").strip()
+        if len(value) < 2:
+            skipped.append({"alias": value, "entity_id": None, "reason": "entity_value_too_short"})
+            continue
         aliases = _fact_aliases(fact)
         if value not in by_original:
             for entry in entries:
@@ -176,21 +193,24 @@ def assess(case, pack, facts, decisions, docs, ledger, transport, provider_resul
     detected = list(dict.fromkeys(finding["category"] for finding in detected_findings))
     if detected:
         blockers.append("仍包含直接标识：" + "、".join(detected))
-    registered = [name for entry in case.get("mapping_entries", []) for name in _mapping_names(entry)]
-    for original in registered or case.get("mapping", {}):
+    registered = [name for entry in case.get("mapping_entries", []) for name in _mapping_names(entry) if name and len(name) >= 2]
+    for original in registered or [name for name in (case.get("mapping") or {}) if name and len(str(name)) >= 2]:
         if original and original in emitted:
             blockers.append("仍包含未替换的登记主体")
             break
     if any(d.get("forbidden") and d["output"] for d in decisions):
         blockers.append("命中规则硬性禁止项")
-    if any(d["necessity"] == "uncertain" or d["status"] == "review" for d in decisions):
-        blockers.append("存在尚未解决的字段复核事项")
+    if any(d["necessity"] == "uncertain" or d["status"] in {"review", "restricted"} for d in decisions):
+        blockers.append("存在尚未解决的字段复核事项或已被规则限制的字段")
+    required = [item for item in decisions if item.get("necessity") == "required"]
+    if required and not any(item.get("output") for item in required):
+        blockers.append("必要内容被删光，不能按零泄露计成功")
     if not any(d["output"] for d in decisions):
         blockers.append("没有可发送的事实")
     if any(not f["confirmed"] or f.get("stale") for f in facts):
         blockers.append("事实尚未确认或来源版本已更新")
     if any(d.get("status") != "ready" or not isinstance(d.get("ir"), dict) or (d.get("ir") or {}).get("needs_review") for d in docs):
-        blockers.append("材料解析或 OCR 复核未完成")
+        blockers.append("材料解析、OCR 或转写复核未完成")
     terms = [term for term in (pack or {}).get("forbidden_terms") or [] if term]
     matched = [term for term in terms if term in emitted]
     if matched:

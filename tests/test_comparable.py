@@ -44,7 +44,7 @@ def test_five_groups_emit_comparable_artifacts_on_frozen_mock():
     assert "某劳动者" in payloads["find_replace"]
     assert "合成人物003" not in payloads["find_replace"]
     assert "[[LEX:P0003]]" in payloads["consistent_pseudonym"]
-    assert payloads["task_matrix"] == ""
+    assert "[[LEX:P0003]]" in payloads["task_matrix"]
     assert "2026-03-12" in payloads["legal_constraint"]
     assert "[[LEX:P0003]]" in payloads["legal_constraint"]
 

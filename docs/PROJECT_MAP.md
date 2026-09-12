@@ -10,7 +10,7 @@
 2. 打开 **http://127.0.0.1:8765**（不要用 `localhost`），输入终端里的本地口令。
 3. 打开「01 完整披露流程」：生成披露方案 → 检验风险并冻结 → 批准 → 执行模拟调用。「02」批准 409（合同线索风险：唯一岗位或公开事件仍保留），不要批准。
 4. 新建正式案件并上传 `examples/` 合成材料：预期审批/发送 **409**，不要当成已开通。
-5. `Ctrl+C` 停三个服务。四类攻击显示「未运行」不得写成通过。当前红队是工程基线，不是正式攻击结论。
+5. `Ctrl+C` 停三个服务。隔离栈已实跑工程基线攻击，**不是**四类 `resisted`，不得写成通过。红队不是正式攻击结论。
 
 ## 2. 运行时
 
@@ -58,7 +58,7 @@ flowchart LR
 1. **`data/`**：仓库评测语料（当前 `mock_labor_v1` 8 条合成）。`dispatch_allowed` 恒为 false。
 2. **`.data/`**：运行库、口令、案件、截图。不进 git。
 3. **三份 pack**：`packs/labor_demo.json` = v1 `demo`；`packs/labor_v2_draft.json` = v2 `draft`（加班核对条件规则为待审草稿，非正式法源，`dispatch_allowed=false`）；`packs/contract_test.json` = v1 `draft` 扩展夹具。重启时 `seed_packs` 刷新已有 `demo`/`draft`，不覆盖 `published`。无一 `published`。
-4. **正式外发仍缺**（不要写成开关没开）：法学发布与必要性矩阵、经审核服务商与影响评估、四类攻击全部 `resisted`（工程基线 `resisted` 不是正式攻击结论）、真实材料授权、真实云端外发取证。
+4. **正式外发仍缺**（不要写成开关没开）：法学发布与必要性矩阵、经审核服务商与影响评估、法学承认的四类 `resisted`（隔离栈工程基线已跑，不是正式结论）、真实材料授权、真实云端外发取证。
 5. 五类事实分开写：技术已在代码里；运行有本机证据；法学仍是 draft；攻击未全部 resisted；当前正式案 409。不合成「安全」。
 
 ## 5. 文档与验证
@@ -71,7 +71,9 @@ flowchart LR
 4. [PROVENANCE.md](PROVENANCE.md)
 5. [DESIGN.md](DESIGN.md)
 
-Stub 路径（只跳转，不当规格）：[PLAN.md](../PLAN.md)、[案隐盾_项目核心共识与系统架构.md](../案隐盾_项目核心共识与系统架构.md)、[PLAN_STATUS.md](PLAN_STATUS.md)、[IMPLEMENTATION_V2.md](IMPLEMENTATION_V2.md)、[THIRD_PARTY.md](THIRD_PARTY.md)。索引见 [README.md](README.md)。
+法学只走 [legal/README.md](legal/README.md)。
+
+Stub 路径（只跳转，不当规格）：[PLAN.md](../PLAN.md)、[案隐盾_项目核心共识与系统架构.md](../案隐盾_项目核心共识与系统架构.md)、根目录两份法学跳转、[PLAN_STATUS.md](PLAN_STATUS.md)、[IMPLEMENTATION_V2.md](IMPLEMENTATION_V2.md)、[THIRD_PARTY.md](THIRD_PARTY.md)。索引见 [README.md](README.md)。
 
 本机复现（按需，本批不跑全量 pytest）：
 
@@ -83,4 +85,4 @@ Stub 路径（只跳转，不当规格）：[PLAN.md](../PLAN.md)、[案隐盾_�
 
 稍后（只列标题，本批不修）：e2e demo 03 / 治理四页进 CI；bootstrap 仍发 v1 `TASKS`，工作台 `task_definitions||tasks` 回退仍要留；`semi_labor_v1` 标注后 `promote-semi`；法学发布与真实外发取证。
 
-正式外发不可用：`labor_v2` 仍是 draft，四类攻击未全部 `resisted`，无真实外发成功记录。工程基线红队不能当作正式风险背书。
+正式外发不可用：仓库 `labor_v2` 仍是 draft，四类攻击未全部法学 `resisted`，无真实外发成功记录。工程基线红队不能当作正式风险背书。 **10 案层 A 评估完成，0 案真实发送。**

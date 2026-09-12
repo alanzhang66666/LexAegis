@@ -1,8 +1,12 @@
-"""Bounded overtime disclosure candidates. Draft legal overlay, not published law."""
+"""Bounded disclosure candidates. Draft legal overlay, not published law."""
 import re
 
 from .contracts import ConfidentialityRecord, ProcessingBasis
-from .policy import transform
+from .policy import registered_name_residuals, transform
+
+GUIDE_VERSION = "G-2026-09-12-v1.0"
+GENERAL_SUB_PURPOSE = "劳动争议文书事实保真整理"
+OVERTIME_SUB_PURPOSE = "核对加班"
 
 OVERTIME_FIELDS = frozenset({
     "claim_stance", "day_nature", "overtime_hours", "wage_base", "evidence_holder",
@@ -59,6 +63,16 @@ CLAIM_VALUES = {
     "deny": "deny", "否认": "deny",
     "hold_evidence": "hold_evidence", "持有证据": "hold_evidence",
 }
+STATEMENT_VALUES = {
+    "claimed": "claimed", "主张": "claimed",
+    "denied": "denied", "否认": "denied",
+    "admitted": "admitted", "承认": "admitted", "认可": "admitted",
+    "court_found": "court_found", "法院认定": "court_found",
+    "document_recorded": "document_recorded", "文书记载": "document_recorded",
+    "not_stated": "not_stated", "未记载": "not_stated",
+    "unknown": "unknown",
+}
+FINDING_MARKERS = ("法院认定", "本院认定", "已查明", "无争议事实")
 HOLDER_VALUES = {
     "worker": "worker", "劳动者": "worker",
     "employer": "employer", "用人单位": "employer",
@@ -78,6 +92,8 @@ LAWYER_LAW_ARTICLE = "第41条"
 LAWYER_LAW_DATE = "2026-09-01"
 LAWYER_LAW_MAPPING = "2017年文本第38条对应2026-09-01施行文本第41条，不得沿用旧条号。"
 SEPARATE_JUDGMENT_NOTE = "必要性、可处理性与残余风险分别判定，不输出综合安全分。"
+INSTRUCTION_MARKERS = ("忽略规则", "忽略以上", "发送完整身份证")
+RESTRICTED_CONFIDENTIALITY = frozenset({"state_secret"})
 
 
 def known(value):
@@ -89,12 +105,7 @@ def infer_sub_purpose(facts, task_type, requested=None):
         return requested
     if task_type != "fact_summary":
         return None
-    for fact in facts or []:
-        if fact.get("field") in OVERTIME_FIELDS:
-            return "核对加班"
-        if any(known(fact.get(name)) for name in OVERTIME_ATTRS):
-            return "核对加班"
-    return None
+    return GENERAL_SUB_PURPOSE
 
 
 def fact_attr(fact, name):
@@ -117,7 +128,12 @@ def _normalize(name, value):
     if name == "day_nature":
         return DAY_NATURE_VALUES.get(text, text if text in DAY_NATURE_VALUES.values() else None)
     if name == "claim_stance":
-        return CLAIM_VALUES.get(text, text if text in CLAIM_VALUES.values() else None)
+        stance = CLAIM_VALUES.get(text, text if text in CLAIM_VALUES.values() else None)
+        if stance == "hold_evidence":
+            return None
+        return stance
+    if name == "statement_status":
+        return STATEMENT_VALUES.get(text, text if text in STATEMENT_VALUES.values() else None)
     if name in {"evidence_holder", "subject_role"}:
         table = HOLDER_VALUES if name == "evidence_holder" else ROLE_VALUES
         return table.get(text, text if text in table.values() else None)
@@ -145,6 +161,7 @@ def _context(fact, sub_purpose):
         "wage_base": fact_attr(fact, "wage_base"),
         "subject_role": fact_attr(fact, "subject_role"),
         "dispute_status": fact.get("dispute_status"),
+        "statement_status": fact_attr(fact, "statement_status") or fact.get("statement_status") or fact.get("dispute_status"),
     }
 
 
@@ -267,9 +284,9 @@ def constraint_reasons(fact, candidate, rule, mappings, all_facts=None):
         }
     if "date_relation" in relations:
         if month_truncated(original, output):
-            reasons.append("禁止将日期截到月份，以免破坏期限与日性质")
+            reasons.append("阻断：截月导致期限或先后关系错误（一般整理与加班同一等级）")
         elif lost_calendar_day(original, output) and kind != "delete":
-            reasons.append("核对加班须保持日历日精度，不能去掉日期中的日")
+            reasons.append("须保持来源日历日精度，不能去掉日期中的日")
         if shifted_calendar(original, output):
             reasons.append("禁止整体平移日历，以免改变星期、节假日或法规范生效日")
     if "numeric_relation" in relations and kind != "delete":
@@ -284,10 +301,12 @@ def constraint_reasons(fact, candidate, rule, mappings, all_facts=None):
         if _negated(fact, original) and output and not _keeps_negation(original, output):
             reasons.append("否认或抗辩被删成肯定陈述")
     if "dispute_status" in relations and kind != "delete":
-        stance = fact_attr(fact, "claim_stance") or fact.get("dispute_status")
+        stance = fact_attr(fact, "claim_stance") or fact.get("statement_status") or fact.get("dispute_status")
         if stance in {"claim", "deny", "claimed", "denied", "disputed"} and output:
             if _flattens_dispute(original, output, stance):
                 reasons.append("主张或否认被写成无争议事实")
+        if output and _upgrades_to_finding(fact, original, output):
+            reasons.append("主张或文书记载被提升为法院认定")
     if "subject_ownership" in relations and kind != "delete":
         swapped = _subject_swap(fact, output, mappings, all_facts)
         if swapped:
@@ -337,6 +356,16 @@ def _flattens_dispute(original, output, stance):
     return False
 
 
+def _upgrades_to_finding(fact, original, output):
+    status = fact_attr(fact, "statement_status") or fact.get("statement_status") or fact.get("dispute_status")
+    stance = fact_attr(fact, "claim_stance")
+    if status == "court_found":
+        return False
+    if status not in {"claimed", "denied", "admitted", "document_recorded", "not_stated", "disputed"} and stance not in {"claim", "deny"}:
+        return False
+    return any(marker in output for marker in FINDING_MARKERS) and not any(marker in original for marker in FINDING_MARKERS)
+
+
 def _mapping_entries(mappings):
     if isinstance(mappings, list):
         return mappings
@@ -350,7 +379,7 @@ def _subject_swap(fact, output, mappings, all_facts):
     entries = _mapping_entries(mappings)
     for entry in entries:
         other = entry.get("original_value")
-        if not other or other == own:
+        if not other or len(other) < 2 or other == own:
             continue
         if own and other in (output or "") and own not in (output or "") and entry.get("wire_token") not in (output or ""):
             return "主体归属被改写为其他主体"
@@ -358,7 +387,7 @@ def _subject_swap(fact, output, mappings, all_facts):
     if role == "worker" and "用人单位" in (output or "") and "劳动者" not in (output or "") and fact.get("field") == "entity":
         return "劳动者与用人单位主体被互换"
     others = [item.get("value") for item in all_facts or [] if item.get("field") == "entity" and item.get("value") != own]
-    if own and any(name and name in output and own not in output for name in others):
+    if own and any(name and len(str(name)) >= 2 and name in output and own not in output for name in others):
         return "主体归属被改写为其他主体"
     return None
 
@@ -374,7 +403,7 @@ def _holder_flipped(holder, original, output, fact):
 
 def apply_candidate_transform(value, kind, mappings):
     if kind == "original_precision":
-        return transform(value, "keep", mappings)
+        return transform(value, "pseudonymize", mappings)
     if kind == "tokenize":
         return transform(value, "pseudonymize", mappings)
     if kind == "moderate_generalize":
@@ -389,7 +418,7 @@ def information_loss_note(kind, fact, output):
     if kind == "delete":
         return "本项不进入外发，任务可能失去该加班要件"
     if kind == "original_precision":
-        return "未降低精度"
+        return "主体已按映射替换，日期与数值精度未降"
     if kind == "tokenize":
         return "主体已令牌化，日期、小时数与争议状态未改"
     if kind == "moderate_generalize":
@@ -422,6 +451,8 @@ def generate_candidates(fact, mappings, rule, pack, all_facts=None):
             "information_loss": information_loss_note(kind, fact, output),
         }
         reasons = constraint_reasons(fact, candidate, rule, mappings, all_facts)
+        if kind != "delete" and registered_name_residuals(output, mappings):
+            reasons.append("登记主体未替换，替换后仍有残留")
         candidate["block_reasons"] = reasons
         candidate["allowed"] = not reasons
         items.append(candidate)
@@ -467,7 +498,7 @@ def build_processing_basis(fact, rule, selected, pack, unknown_conditions):
     return ProcessingBasis(
         subject_category=fact.get("subject_category") or "unknown",
         collection_source=fact.get("collection_source") or "案件材料",
-        local_purpose="劳动争议事实摘要 / 核对加班" if (rule or {}).get("sub_purpose") == "核对加班" else "劳动争议事实摘要",
+        local_purpose=(rule or {}).get("sub_purpose") or GENERAL_SUB_PURPOSE,
         cloud_purpose="可选云端摘要，不等于办案必要",
         proposed_basis="待审草稿，非正式处理依据",
         necessity_note=(rule or {}).get("reason") or "",
@@ -549,11 +580,11 @@ def fallback_decision(fact, fallback, mappings):
         "transform": method,
         "reason": fallback.get("reason") or "未定义适用规则",
         "forbidden": bool(fallback.get("forbidden")),
-        "status": "review" if necessity == "uncertain" else "candidate",
+        "status": "restricted" if necessity == "uncertain" else "candidate",
         "output": "" if method == "delete" else output,
         "retain_reason": fallback.get("reason") or "",
-        "information_loss": "本项按保守缺省处理" if method == "delete" else "未适用加班条件规则",
-        "block_reasons": ["字段复核：未匹配加班条件规则"] if necessity == "uncertain" else [],
+        "information_loss": "本项按缺省限制输出，不进入披露候选" if method == "delete" else "未适用条件规则",
+        "block_reasons": ["条件或必要性未确定，限制输出，不默许进入披露候选"] if necessity == "uncertain" else [],
         "unknown_conditions": [],
         "rule_id": None,
         "disclosure_rule": None,
@@ -575,38 +606,40 @@ def build_disclosure_decision(fact, pack, task_type, mappings, fallback, sub_pur
             processing_basis=build_processing_basis(fact, None, None, pack, []),
             confidentiality=build_confidentiality(fact, pack),
         )
-        return apply_sensitivity_overlay(decision, fact, mappings)
+        return apply_sensitivity_overlay(apply_material_restrictions(decision, fact), fact, mappings)
     rule = resolved["rule"]
     unknown = resolved["unknown_conditions"]
     candidates = generate_candidates(fact, mappings, rule, pack, all_facts)
     selected = select_candidate(candidates, rule, fact, fallback.get("transform") or "delete")
     if unknown:
-        status = "review"
-        necessity = "uncertain"
-        reason = "加班规则条件未知，进入复核，不默认外发"
+        necessity = rule.get("necessity") or fallback.get("necessity") or "conditional"
+        reason = "条件未知，限制输出，不默许进入披露候选"
         block_reasons = [f"条件未知：{item}" for item in unknown]
-        if (rule.get("unknown_condition_strategy") or "review") == "review":
+        strategy = rule.get("unknown_condition_strategy") or "restrict"
+        if strategy in {"review", "restrict"}:
+            status = "restricted"
             output = ""
             transform_name = "delete"
             selected = next((item for item in candidates if item["kind"] == "delete"), selected)
         else:
+            status = "restricted"
             output = selected["output"] if selected else ""
             transform_name = selected["transform"] if selected else "delete"
     else:
         necessity = rule.get("necessity") or fallback.get("necessity") or "uncertain"
-        status = "review" if necessity == "uncertain" else "candidate"
+        status = "restricted" if necessity == "uncertain" else "candidate"
         reason = rule.get("reason") or fallback.get("reason") or ""
         block_reasons = []
         if selected is None:
-            status = "review"
+            status = "restricted"
             output = ""
             transform_name = "delete"
-            block_reasons.append("有界候选全部被硬约束淘汰，进入复核")
+            block_reasons.append("有界候选全部被硬约束淘汰，限制输出")
         else:
             output = selected["output"]
             transform_name = selected["transform"]
     if selected and not selected.get("allowed"):
-        status = "review"
+        status = "restricted"
         block_reasons.extend(selected.get("block_reasons") or [])
     retain = rule.get("reason") or ""
     if rule.get("min_precision"):
@@ -637,7 +670,20 @@ def build_disclosure_decision(fact, pack, task_type, mappings, fallback, sub_pur
         "processing_basis": build_processing_basis(fact, rule, selected, pack, unknown),
         "confidentiality": build_confidentiality(fact, pack),
     }
-    return apply_sensitivity_overlay(decision, fact, mappings)
+    return apply_sensitivity_overlay(apply_material_restrictions(decision, fact), fact, mappings)
+
+
+def apply_material_restrictions(decision, fact):
+    reasons = list(decision.get("block_reasons") or [])
+    value = fact.get("value") or ""
+    if fact.get("confidentiality_category") in RESTRICTED_CONFIDENTIALITY:
+        reasons.append("国家秘密或明确保密限制不进入普通模型处理路径")
+        decision.update(transform="delete", output="", status="restricted", forbidden=True, block_reasons=list(dict.fromkeys(reasons)))
+        return decision
+    if any(marker in value for marker in INSTRUCTION_MARKERS):
+        reasons.append("材料内嵌指令按不可信内容处理，不执行、不写入业务摘要")
+        decision.update(transform="delete", output="", status="restricted", block_reasons=list(dict.fromkeys(reasons)))
+    return decision
 
 
 def apply_decision_choice(decision, fact, pack, mappings, method, necessity, custom_output=None, candidate_id=None, all_facts=None):
@@ -672,10 +718,10 @@ def apply_decision_choice(decision, fact, pack, mappings, method, necessity, cus
             raise ValueError("自定义披露文本违反硬约束：" + "；".join(illegal))
     if method == "delete":
         output = ""
-    status = "review" if necessity == "uncertain" or decision.get("unknown_conditions") else "candidate"
+    status = "restricted" if necessity == "uncertain" or decision.get("unknown_conditions") else "candidate"
     block_reasons = list(decision.get("unknown_conditions") and [f"条件未知：{item}" for item in decision["unknown_conditions"]] or [])
     if selected and not selected.get("allowed"):
-        status = "review"
+        status = "restricted"
         block_reasons.extend(selected.get("block_reasons") or [])
     decision.update(
         transform=method,

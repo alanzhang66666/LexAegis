@@ -4,7 +4,7 @@
 
 **当前版本：0.9.0 待发布（`0.9.0rc0`）。** 工作台、V2 契约、稳定 wire token、门禁与跨平台 CLI 已进入代码。法学规则尚未发布、真实攻击与隔离尚未验收，因此**正式案件的外发保持阻断**。演示只接受内置合成材料。本号不是正式发行版。
 
-现行入口地图见 [docs/PROJECT_MAP.md](docs/PROJECT_MAP.md)。文档地图见 [docs/README.md](docs/README.md)。架构与门禁见 [架构说明](docs/ARCHITECTURE.md)。评测语料见 [data/README.md](data/README.md)。边侧声明见 [models/catalog/README.md](models/catalog/README.md)。
+现行入口地图见 [docs/PROJECT_MAP.md](docs/PROJECT_MAP.md)。文档地图见 [docs/README.md](docs/README.md)。法学文件见 [docs/legal/README.md](docs/legal/README.md)。架构与门禁见 [架构说明](docs/ARCHITECTURE.md)。评测语料见 [data/README.md](data/README.md)。边侧声明见 [models/catalog/README.md](models/catalog/README.md)。
 
 ## 快速启动
 
@@ -47,14 +47,14 @@ lexaegis start
 3. 批准后执行模拟调用（模拟器组装已披露事实，不声称模型生成）。
 4. 逐项回链并确认最终结果。
 
-「组合线索风险」和「主动停止」默认阻断审批。正式案件可上传 `examples/` 下合成 DOCX/PDF，或 UTF-8 文本，体验解析与正式外发阻断。边侧未监听时 `lexaegis start` 会提示，或运行 `lexaegis edge --start`。
+「组合线索风险」和「主动停止」默认阻断审批。正式案件可上传 `examples/` 下合成 DOCX/PDF，或 UTF-8 文本、表格、音视频，体验解析与正式外发阻断。OCR/转写结果须人工复核后才能抽取。边侧未监听时 `lexaegis start` 会提示，或运行 `lexaegis edge --start`。
 
 ## 评测语料、边侧与云端
 
 | 项 | 现状 |
 | --- | --- |
 | `data/` | 评测语料可作为仓库资产，与运行期 `.data/` 分开。当前 `data/mock_labor_v1` 为 8 条完全合成劳动争议记录。`lexaegis dataset list \| validate \| show \| probe-edge`；`generate-mock \| freeze \| run` 仍写到指定路径。`probe-edge` 只记工程指标，无法学分。`dispatch_allowed` 恒为 false。真实案件与运行库不进 git。 |
-| 边侧 | 生产只做事实提取。现行本机单模型 MiniCPM5-2B Q4_K_M 非思考（HF `openbmb/MiniCPM5-2B`，GGUF `MiniCPM5-2B-Q4_K_M.gguf`，服务别名 `edge-small`：`--reasoning-budget 0 --reasoning off --jinja --ctx-size 8192`）。约 4GB 显存，按块抽取。权重不入库，声明在 `models/catalog/`。演示不调边侧。 |
+| 边侧 | 生产只做事实提取。现行本机单模型 MiniCPM5-2B Q4_K_M（HF `openbmb/MiniCPM5-2B`，GGUF `MiniCPM5-2B-Q4_K_M.gguf`，服务别名 `edge-small`：`--jinja --ctx-size 32768`，KV F16，FlashAttn，`--n-gpu-layers 99`，并发 1）。服务进程不再加 `--reasoning off`；抽取请求仍是 temperature 0 + json_schema。这是部署方案，不是已装或已跑通结论。权重不入库，声明在 `models/catalog/`。演示不调边侧。 |
 | 云端双槽 | 主 DeepSeek V4 Flash（`deepseek-v4-flash`），备阿里云百炼 Qwen3.8-Flash（`qwen3.8-flash`）。流式只在网关拼完整 JSON，不进工作台。备用仅当已审核且确认请求未离开本地时可用；主方已收包后的超时或 401 记可能披露，不自动换模。一旦有 token，失败记 unknown，禁止自动换模、禁止自动重发。思考关闭。 |
 | 密钥 | 只在网关：`LEX_CLOUD_PRIMARY_KEY`（兼容旧名 `LEX_CLOUD_API_KEY`）、`LEX_CLOUD_STANDBY_KEY`。`lexaegis start` 不把云端密钥传给 API/worker。 |
 | 工作台 | 运行配置可填主/备并回显；外发目标仍走网关冻结双槽与白名单。审批展示主/备及上述故障转移说明。披露方案可显示「模型建议 · 非规则」。 |

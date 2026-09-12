@@ -1,5 +1,6 @@
 import json
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -25,6 +26,7 @@ def test_score_extract_records_engineering_checks_only():
     assert score["numbers_from_source"] is True
     assert score["aliases_no_conflict"] is True
     assert score["field_in_enum"] is True
+    assert score["role_in_enum"] is True
     assert "legal" not in json.dumps(score)
 
 
@@ -203,3 +205,40 @@ def test_default_gguf_uses_minicpm_or_env(tmp_path, monkeypatch):
     configured.write_bytes(b"z")
     monkeypatch.setenv("LEX_EDGE_GGUF", str(configured))
     assert default_gguf() == configured
+
+
+def test_start_command_uses_32k_kv_f16_and_omits_reasoning_off(monkeypatch):
+    monkeypatch.setattr(edge_runtime, "default_llama_bin", lambda: Path("llama-server"))
+    monkeypatch.setattr(edge_runtime, "default_gguf", lambda: Path("MiniCPM5-2B-Q4_K_M.gguf"))
+    command = edge_runtime.start_command()
+    assert "--reasoning" not in command
+    assert "--reasoning-budget" not in command
+    assert command[command.index("--ctx-size") + 1] == "32768"
+    assert command[command.index("--ubatch-size") + 1] == "512"
+    assert command[command.index("--batch-size") + 1] == "2048"
+    assert command[command.index("--parallel") + 1] == "1"
+    assert command[command.index("--cache-type-k") + 1] == "f16"
+    assert command[command.index("--cache-type-v") + 1] == "f16"
+    assert command[command.index("--flash-attn") + 1] == "on"
+    assert "--jinja" in command
+
+
+def test_start_edge_retries_lower_ubatch_on_oom(monkeypatch):
+    calls = []
+
+    def popen(command, stdout=None, stderr=None, **kwargs):
+        calls.append(command)
+        if any(command[i] == "--ubatch-size" and command[i + 1] == "512" for i in range(len(command) - 1)):
+            return _FakeEdgeProcess(returncode=1, stderr=stderr, stderr_text="CUDA out of memory")
+        return _FakeEdgeProcess()
+
+    monkeypatch.setattr(edge_runtime, "edge_status", lambda: _ready_edge_status())
+    monkeypatch.setattr(edge_runtime, "edge_port_open", lambda timeout=0.4: len(calls) >= 2)
+    monkeypatch.setattr(edge_runtime.subprocess, "Popen", popen)
+    result = start_edge(wait=5)
+    assert result["started"] is True
+    assert len(calls) >= 2
+    first = calls[0]
+    second = calls[1]
+    assert first[first.index("--ubatch-size") + 1] == "512"
+    assert int(second[second.index("--ubatch-size") + 1]) < 512

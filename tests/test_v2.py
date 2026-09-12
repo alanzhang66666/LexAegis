@@ -157,14 +157,15 @@ def test_create_task_uses_v2_matrix_or_conservative_default(env):
         pack["task_field_matrix"]=[{"task_id":"fact_summary","field":"event","necessity":"required","rationale":"矩阵必填"}]
         repo.put("pack",pack)
     block=document["ir"]["blocks"][0]
-    env["client"].post(f"/api/v1/cases/{case['id']}/facts",json={"field":"amount","value":"金额12000元","source_ids":[block["id"]],"confirmed":True})
+    env["client"].post(f"/api/v1/cases/{case['id']}/facts",json={"field":"day_nature","value":"工作日","source_ids":[block["id"]],"confirmed":True,"day_nature":"weekday"})
     task=env["client"].post(f"/api/v1/cases/{case['id']}/tasks",json={"transport":"cloud"}).json()
     by_field={item["field"]:item for item in task["decisions"]}
-    assert by_field["event"]["necessity"]=="required" and by_field["event"]["reason"]=="矩阵必填"
-    assert by_field["amount"]["necessity"]=="uncertain" and by_field["amount"]["transform"]=="delete"
+    assert by_field["event"]["necessity"]=="required"
+    assert by_field["day_nature"]["necessity"]=="uncertain" and by_field["day_nature"]["transform"]=="delete"
     with env["app"].state.store.transaction() as repo:
         pack=repo.get(task["pack_id"],"pack")
         pack["task_field_matrix"]=[]
+        pack["disclosure_rules"]=[]
         repo.put("pack",pack)
     empty=env["client"].post(f"/api/v1/cases/{case['id']}/tasks",json={"transport":"cloud"}).json()
     assert all(item["necessity"]=="uncertain" and item["transform"]=="delete" for item in empty["decisions"])

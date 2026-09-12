@@ -11,8 +11,10 @@ dependencies = ["fastapi>=0.115,<1", "uvicorn>=0.30,<1", "sqlalchemy>=2,<3", "al
 
 [project.optional-dependencies]
 test = ["pytest>=8,<10", "httpx>=0.27,<1"]
-# CPU paddlepaddle only — do not add paddlepaddle-gpu (GPU reserved for llama-server).
-ocr = ["paddleocr>=3,<4", "paddlepaddle>=3,<4"]
+# Default OCR extra is RapidOCR. Install onnxruntime-gpu yourself on NVIDIA hosts.
+# Paddle extra is CPU rollback only — do not add paddlepaddle-gpu.
+ocr = ["rapidocr>=2,<4"]
+ocr-paddle = ["paddleocr>=3,<4", "paddlepaddle>=3,<4"]
 experiment = ["numpy>=2,<3", "scikit-learn>=1.6,<2"]
 
 [project.scripts]

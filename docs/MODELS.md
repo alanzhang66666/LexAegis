@@ -9,11 +9,11 @@
 - `LEX_EDGE_URL`、`LEX_EDGE_MODEL`，或在工作台「运行配置」保存。
 - 默认主机白名单：`127.0.0.1`、`localhost`、`edge-model`；内网另设 `LEX_EDGE_ALLOWED_HOSTS`。
 - 训练/微调可在外部完成，本地只部署最终权重（`models/` 不入库）。
-- 现行权重：**MiniCPM5-2B** Q4_K_M 非思考（[openbmb/MiniCPM5-2B](https://huggingface.co/openbmb/MiniCPM5-2B)，GGUF 见 [MiniCPM5-2B-GGUF](https://huggingface.co/openbmb/MiniCPM5-2B-GGUF)）。约 4GB 显存即可按块抽取；无显卡可用 CPU 或纯人工。
+- 现行权重：**MiniCPM5-2B** Q4_K_M（[openbmb/MiniCPM5-2B](https://huggingface.co/openbmb/MiniCPM5-2B)，GGUF 见 [MiniCPM5-2B-GGUF](https://huggingface.co/openbmb/MiniCPM5-2B-GGUF)）。启动预算为 32K、KV F16、FlashAttn、`--n-gpu-layers 99`、并发 1；8GB 为方案预算，不是实测。无显卡可用 CPU 或纯人工。不换 MiniCPM-V，不上非官方 Vision-2B。
 - 演示案例不调用边侧模型。仓库不分发权重。
 - 边侧模型仍只做事实抽取。正式案默认的事实摘要是本地按已披露文本拼装，不调用 MiniCPM，也不自动出网；云端润色须显式创建「云端摘要任务」。
 
-本机 GGUF：`lexaegis edge` 探测 `LEX_EDGE_URL`（默认 `127.0.0.1:8080`）。未监听时打印启动命令；`lexaegis edge --start` 使用 `models/MiniCPM5-2B-Q4_K_M.gguf`，或 `LEX_EDGE_GGUF`。思考由 `--reasoning-budget 0 --reasoning off` 关闭。`lexaegis start` 在边侧未监听时给出同一提示，不自动下载权重。
+本机 GGUF：`lexaegis edge` 探测 `LEX_EDGE_URL`（默认 `127.0.0.1:8080`）。未监听时打印启动命令；`lexaegis edge --start` 使用 `models/MiniCPM5-2B-Q4_K_M.gguf`，或 `LEX_EDGE_GGUF`。服务进程不再加 `--reasoning off`。抽取请求仍用 `temperature: 0`、`json_schema`，默认 `enable_thinking: false`，并带 `max_tokens`（默认 3072，`LEX_EDGE_EXTRACT_MAX_TOKENS`）、`facts.maxItems`（默认 40，`LEX_EDGE_EXTRACT_MAX_FACTS`）与每批 event 上限（默认 8，`LEX_EDGE_EXTRACT_MAX_EVENTS`）。缺字段同站点二次抽取可设 `LEX_EDGE_SECOND_PASS_THINKING=1` 打开有界 thinking（仍剥离 `<think>`）。截断 JSON 会缩批重试；假 quote 会丢弃或回退到原文 value，无效来源条丢弃而不是整批作废。`lexaegis start` 在边侧未监听时给出同一提示，不自动下载权重。本文是部署方案，不是已安装或已评测结论。
 
 合成抽取工程探测：`lexaegis dataset probe-edge`（无法学分，见 [data/README.md](../data/README.md)）。
 
@@ -31,16 +31,18 @@ Compose：`docker compose --profile edge up -d`（见 [DEPLOY.md](DEPLOY.md)）�
 
 合成案例中的「新建真实 API 演示任务」仍需审批并产生费用。正式外发门禁保持失败关闭。**交付验证没有调用真实云端模型。** mock 传输仍走本地拼装，不打云端。
 
-## OCR
+## OCR 与本机转写
 
-无 OCR 时保留扫描页与待处理状态，可看原图并人工转录。自动 OCR 须在本机安装 `paddleocr>=3,<4` 与匹配的 **CPU** `paddlepaddle>=3,<4`（不要安装 `paddlepaddle-gpu`），预置离线模型，并设置：
+无 OCR 时保留扫描页与待处理状态，可看原图并人工转录。默认 Provider 是 **RapidOCR + ONNX Runtime CUDA**（`LEX_OCR_PROVIDER=rapidocr`）。Paddle 仅作 CPU 回滚：`LEX_OCR_PROVIDER=paddle`。不要安装 `paddlepaddle-gpu`。预置离线模型，并设置：
 
 - `LEX_OCR_ENABLED=1`
-- `LEX_OCR_PROVIDER=paddle`
+- `LEX_OCR_PROVIDER=rapidocr`（回滚时改为 `paddle`）
 - `LEX_OCR_MODELS_READY=1`（部署者声明离线资产已就绪，不触发下载，不代表精度验收）
 
-适配器构造 PaddleOCR 时固定传入 `device="cpu"`，避免与占用 GPU 的 llama-server（MiniCPM5-2B GGUF）争用显存。GPU 留给边侧推理。CPU 路径另传 `enable_mkldnn=False`，规避 Paddle 3.3 oneDNN 崩溃，不表示识别质量。`pyproject.toml` extra `ocr` 使用的是 CPU 包名 `paddlepaddle`，不是 `paddlepaddle-gpu`。`LEX_OCR_MODELS_READY=1` 只表示操作员确认离线资产已预置，不代表识别精度已验收。仓库与 `lexaegis doctor` 都不会下载模型。
+RapidOCR 与 MiniCPM5-2B **不同时**占用 GPU：worker 在 OCR/转写前卸载 llama-server，抽取前再加载。Paddle 回滚路径仍固定 `device="cpu"` 与 `enable_mkldnn=False`。`pyproject.toml` extra `ocr` 指向 RapidOCR；`ocr-paddle` 仍是 CPU `paddlepaddle`。`LEX_OCR_MODELS_READY=1` 只表示操作员确认离线资产已预置，不代表识别精度已验收。仓库与 `lexaegis doctor` 都不会下载模型。
 
-`lexaegis doctor` 把 `ocr` 列为可选检查，与 `edge_model` / `edge_json` / `isolation` 一样不失败关闭：未启用或未声明模型资产时为 `unconfigured`（扫描页保留原图并人工转录）。若已设置 `LEX_OCR_ENABLED=1` 且 `LEX_OCR_MODELS_READY=1` 但导入、健康检查或 CPU 构造失败，该检查为 `failed`（doctor 总体仍通过）。`available` 只表示冒烟/资产声明，不代表识别精度。不使用云端 OCR。CI 不安装 `paddleocr`；真实扫描冒烟仅在本机已能 `import paddleocr` 且环境中已有 `LEX_OCR_MODELS_READY=1` 时执行，否则跳过，不要为跑通而 `pip install`。
+音视频文件（`.mp3` `.m4a` `.wav` `.mp4`）经本机 FFmpeg 抽音轨后，由 whisper.cpp CUDA + `large-v3-turbo` 转写为 `kind=transcript` 锚点（时间戳 locator，无 bbox）。须设置 `LEX_WHISPER_ENABLED=1` 与 `LEX_WHISPER_MODELS_READY=1`。无实时录音、无声纹、无说话人分离。空转写不能确认，须人工校正。
 
-失败或未配置时保留扫描锚点并转人工，**绝不**回退云端 OCR。结果默认需人工复核。当前已验证 Provider 契约、doctor 可选检查与手工转录；本机已对 `examples/synthetic_scan.pdf` 做过合成扫描冒烟，**不是识别精度验收**。
+`lexaegis doctor` 把 `ocr` / `whisper` 列为可选检查，与 `edge_model` / `edge_json` / `isolation` 一样不失败关闭。`available` 只表示冒烟/资产声明，不代表识别或转写精度。不使用云端 OCR 或云端 whisper，不加载远程图片 URL。CI 不安装 RapidOCR / whisper.cpp；真实扫描或短音频冒烟仅在本机已能导入对应库且环境已声明模型就绪时执行，否则跳过，不要为跑通而 `pip install`。
+
+`ocr` / `scan` / `transcript` 均 `needs_review`，未复核不能 extract/批准。失败或未配置时分别留扫描锚点或待转写块并转人工。当前已验证 Provider 契约、doctor 可选检查与手工转录；历史 Paddle CPU 合成扫描冒烟见 [VALIDATION.md](VALIDATION.md)，**不是识别精度验收**，也不表示 RapidOCR 或 whisper 已在本机装好。

@@ -8,7 +8,7 @@ from pathlib import Path
 
 from .data_registry import find_dataset
 from .dataset import read_records_jsonl
-from .providers import FACT_FIELDS, EdgeClient
+from .providers import FACT_FIELDS, FACT_ROLES, EdgeClient
 from .util import app_dir, now, restrict_mode
 
 NUMBERS = re.compile(r"\d+(?:\.\d+)?")
@@ -19,6 +19,7 @@ ENGINEERING_CHECKS = (
     "numbers_from_source",
     "aliases_no_conflict",
     "field_in_enum",
+    "role_in_enum",
 )
 
 
@@ -54,8 +55,13 @@ def numbers_from_source(fact, texts) -> bool:
 def quote_is_substring(fact, texts) -> bool:
     quote = fact.get("quote")
     if not quote:
-        return True
+        return False
     return any(quote in texts.get(source_id, "") for source_id in fact.get("source_ids") or [])
+
+
+def role_in_enum(fact) -> bool:
+    role = fact.get("role", "unknown")
+    return role in FACT_ROLES
 
 
 def score_extract(blocks, facts) -> dict:
@@ -65,6 +71,7 @@ def score_extract(blocks, facts) -> dict:
     source_ok = True
     quote_ok = True
     numbers_ok = True
+    role_ok = True
     if not isinstance(facts, list):
         return {
             "json_valid": False,
@@ -73,6 +80,7 @@ def score_extract(blocks, facts) -> dict:
             "numbers_from_source": False,
             "aliases_no_conflict": False,
             "field_in_enum": False,
+            "role_in_enum": False,
             "fact_count": 0,
             "issues": ["返回不是 facts 数组"],
         }
@@ -80,7 +88,7 @@ def score_extract(blocks, facts) -> dict:
     for fact in facts:
         if not isinstance(fact, dict):
             issues.append("事实条目不是对象")
-            source_ok = quote_ok = numbers_ok = field_ok = False
+            source_ok = quote_ok = numbers_ok = field_ok = role_ok = False
             continue
         if fact.get("field") not in FACT_FIELDS:
             field_ok = False
@@ -91,7 +99,10 @@ def score_extract(blocks, facts) -> dict:
             issues.append("source_ids 未落在输入块内")
         if not quote_is_substring(fact, texts):
             quote_ok = False
-            issues.append("quote 不是来源块子串")
+            issues.append("quote 缺失或不是来源块子串")
+        if not role_in_enum(fact):
+            role_ok = False
+            issues.append("role 不是允许枚举")
         if not numbers_from_source(fact, texts):
             numbers_ok = False
             issues.append("数字未出现在来源块原文")
@@ -105,6 +116,7 @@ def score_extract(blocks, facts) -> dict:
         "numbers_from_source": numbers_ok,
         "aliases_no_conflict": alias_ok,
         "field_in_enum": field_ok,
+        "role_in_enum": role_ok,
         "fact_count": len(facts),
         "issues": list(dict.fromkeys(issues)),
     }
@@ -155,6 +167,7 @@ def probe_edge(dataset_id="mock_labor", extract=None, timeout=120) -> dict:
                 "numbers_from_source": False,
                 "aliases_no_conflict": False,
                 "field_in_enum": False,
+                "role_in_enum": False,
                 "fact_count": 0,
                 "issues": [message[:300]],
             }

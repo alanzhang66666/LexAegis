@@ -7,10 +7,11 @@
   "filename": "MiniCPM5-2B-Q4_K_M.gguf",
   "served_model_id": "edge-small",
   "quant": "Q4_K_M",
-  "vram": "4GB",
-  "context": 8192,
+  "vram": "8GB-budget",
+  "context": 32768,
   "native_context": 131072,
   "json_object": "required",
-  "thinking": "disabled",
-  "second_call_site": "forbidden"
+  "thinking": "request_controlled",
+  "vision": false,
+  "second_call_site": "same_site_missing_fields"
 }

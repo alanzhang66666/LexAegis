@@ -217,7 +217,7 @@ def test_empty_ir_does_not_crash_and_blocks_outbound(env):
     evaluated = client.post(f"/api/v1/tasks/{task.json()['id']}/evaluate")
     assert evaluated.status_code == 200, evaluated.text
     body = evaluated.json()
-    assert "材料解析或 OCR 复核未完成" in body["risk"]["blockers"]
+    assert "材料解析、OCR 或转写复核未完成" in body["risk"]["blockers"]
     assert body["risk"]["approval_allowed"] is False
     approved = client.post(
         f"/api/v1/tasks/{task.json()['id']}/approve",

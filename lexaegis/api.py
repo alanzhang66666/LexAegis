@@ -16,7 +16,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from . import __version__, service
 from .auth import create_user_record, current_actor, ensure_initial_admin, public_user, verify_password
 from .diagnostics import host_publish_capability, isolation_capability, legal_capability, redteam_capability
-from .parsing import ocr_capability
+from .parsing import UPLOAD_EXTENSIONS, ocr_capability
+from .transcribe import whisper_capability
 from .providers import EdgeClient
 from .contracts import ProviderProfile, RiskProtocol
 from .governance import protocol_content_hash, publish_pack_record
@@ -69,6 +70,9 @@ class FactInput(Input):
     wage_base: str | None = Field(default=None, max_length=200)
     evidence_attribution: str | None = Field(default=None, max_length=500)
     dispute_status: Literal["claimed", "denied", "disputed", "admitted", "unknown"] | None = None
+    statement_status: Literal[
+        "claimed", "denied", "admitted", "court_found", "document_recorded", "not_stated", "unknown"
+    ] | None = None
     negated: bool | None = None
     subject_role: Literal["worker", "employer", "third_party", "unknown"] | None = None
     subject_category: Literal["natural_person", "legal_person", "unknown"] | None = None
@@ -410,6 +414,7 @@ def create_app(data_dir=None, password=None):
                 },
                 "edge": edge, "cloud": cloud,
                 "ocr": ocr_capability(),
+                "whisper": whisper_capability(),
                 "redteam": redteam_capability(protocols),
                 "host_publish": host_publish,
                 "isolation": isolation}
@@ -575,8 +580,8 @@ def create_app(data_dir=None, password=None):
     async def upload(case_id: str, request: Request, file: UploadFile = File(...)):
         require_role(request, "case_operator")
         extension = Path(file.filename or "").suffix.lower()
-        if extension not in (".docx", ".pdf", ".png", ".jpg", ".jpeg", ".txt"):
-            raise HTTPException(400, "仅支持 DOCX、PDF、PNG、JPEG 和 TXT")
+        if extension not in UPLOAD_EXTENSIONS:
+            raise HTTPException(400, "仅支持 DOCX、PDF、PNG、JPEG、TXT、XLSX、CSV 与常见音视频")
         with store.read() as repo:
             case = service.get_case(repo, case_id)
             if case["mode"] == "demo":
@@ -692,7 +697,7 @@ def create_app(data_dir=None, password=None):
                 raise service.DomainError("边侧模型未配置，请人工添加事实")
             documents = repo.list("document", case_id)
             if any(d.get("status") != "ready" or not isinstance(d.get("ir"), dict) or (d.get("ir") or {}).get("needs_review") for d in documents):
-                raise service.DomainError("请先完成材料和 OCR 复核")
+                raise service.DomainError("请先完成材料、OCR 或转写复核")
             blocks = list(service.anchor_index(repo, case_id).values())
             if not blocks or sum(len(b["text"]) for b in blocks) > 50000:
                 raise service.DomainError("无可提取文本或超过首版 5 万字预算，请缩减材料")

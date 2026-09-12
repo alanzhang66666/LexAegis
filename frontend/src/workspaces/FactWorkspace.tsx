@@ -13,6 +13,7 @@ function factMarks(fact: Obj, label: (value: string) => string) {
   if (fact.role) marks.push({ key: "role", text: `角色 · ${label(String(fact.role))}` });
   if (fact.subject_role) marks.push({ key: "subject_role", text: `主体角色 · ${label(String(fact.subject_role))}` });
   if (fact.claim_stance) marks.push({ key: "claim_stance", text: `立场 · ${label(String(fact.claim_stance))}` });
+  if (fact.statement_status) marks.push({ key: "statement_status", text: `陈述 · ${label(String(fact.statement_status))}` });
   if (fact.day_nature) marks.push({ key: "day_nature", text: `日性质 · ${label(String(fact.day_nature))}` });
   if (fact.hours != null && fact.hours !== "") marks.push({ key: "hours", text: `小时 · ${String(fact.hours)}` });
   if (fact.wage_base) marks.push({ key: "wage_base", text: `工资基数 · ${String(fact.wage_base)}` });

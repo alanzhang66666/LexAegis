@@ -22,7 +22,8 @@ LexAegis 0.9.0 待发布（`0.9.0rc0`）使用模块化单体和独立外发网�
 | `lexaegis/api.py` | 会话、HTTP API、材料上传和页面渲染、SSE |
 | `lexaegis/service.py` | 案件版本、事实与任务、审批及发送状态转换 |
 | `lexaegis/storage.py` | SQLAlchemy 聚合存储、SQLite WAL、Alembic 迁移 |
-| `lexaegis/parsing.py` | DOCX、PDF、扫描识别和可选本地 OCR |
+| `lexaegis/parsing.py` | DOCX、PDF、XLSX/CSV、扫描识别、可选本地 OCR 与本机音视频转写 |
+| `lexaegis/gpu_runtime.py` | GPU 阶段锁：OCR/转写前卸载 llama-server，抽取时加载 2B |
 | `lexaegis/policy.py` | 标识检测、映射、披露变换、门禁及结果检查 |
 | `lexaegis/disclosure.py` | 加班核对的条件规则、有界披露候选与分别判定（待审草稿） |
 | `lexaegis/providers.py` | 边侧 `EdgeClient`；云端调用由网关 `DualSlotProvider` 流式装配 |
@@ -40,8 +41,8 @@ LexAegis 0.9.0 待发布（`0.9.0rc0`）使用模块化单体和独立外发网�
 
 ## 数据和安全契约
 
-- `SourceAnchor` 保存材料版本、段落/单元格或 PDF 页、归一化左上坐标，以及 OCR Provider 的稳定 id/版本。
-- `DocumentIR` 保存版本、来源块、置信度、警告与复核状态。OCR 低质量、缺失、失败都不会计为完成复核。
+- `SourceAnchor` 保存材料版本、段落/单元格或 PDF 页、归一化左上坐标，以及 OCR/转写 Provider 的稳定 id/版本。`kind` 含 `paragraph`、`table`、`pdf_text`、`ocr`、`scan`、`transcript`（时间戳 locator，无 bbox）。
+- `DocumentIR` 保存版本、来源块、置信度、警告与复核状态。OCR/转写低质量、缺失、失败都不会计为完成复核。`ocr` / `scan` / `transcript` 未复核不得抽取或批准。
 - `Fact` 保存字段、陈述、来源列表、提取来源和确认状态。加班核对可另存主张/否认、日性质、小时数、工资基数与证据归属。不同或矛盾陈述并存，不自动覆盖。
 - `DisclosureDecision` 分离必要性、变换方式、外发状态和依据。加班核对子场景另给有界候选、保留理由、信息损失和硬约束淘汰原因。正式规则和硬性禁止不能被界面调整绕过。
 - `ProcessingBasis` 与案件保密类别分开记录：必要性、可处理性、残余风险不合成安全分。律师法条号若引用须用 2026-09-01 文本第41条（旧第38条映射）。

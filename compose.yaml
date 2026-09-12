@@ -100,7 +100,7 @@ services:
   edge-model:
     image: ${LEX_EDGE_IMAGE:-ghcr.io/ggml-org/llama.cpp:server}
     profiles: [edge]
-    command: [--model, /models/MiniCPM5-2B-Q4_K_M.gguf, --host, 0.0.0.0, --port, "8080", --alias, edge-small, --reasoning-budget, "0", --reasoning, off, --jinja, --ctx-size, "8192"]
+    command: [--model, /models/MiniCPM5-2B-Q4_K_M.gguf, --host, 0.0.0.0, --port, "8080", --alias, edge-small, --jinja, --ctx-size, "32768", --batch-size, "2048", --ubatch-size, "512", --parallel, "1", --cache-type-k, f16, --cache-type-v, f16, --n-gpu-layers, "99", --flash-attn, on]
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]

@@ -60,7 +60,7 @@ def test_resolve_disclosure_budget_defaults_are_conservative(monkeypatch):
 def test_assess_treats_missing_ir_as_pending_parse():
     case, facts, decisions, _ = _ready("短文本")
     result = assess(case, {"forbidden_terms": []}, facts, decisions, [{"status": "pending", "ir": None}], [], "mock")
-    assert "材料解析或 OCR 复核未完成" in result["blockers"]
+    assert "材料解析、OCR 或转写复核未完成" in result["blockers"]
     assert result["approval_allowed"] is False
 
 

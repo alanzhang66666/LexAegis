@@ -101,11 +101,14 @@ def _recognize_image(monkeypatch):
 
 def test_ocr_disabled_does_not_import_paddle(monkeypatch):
     monkeypatch.setenv("LEX_OCR_ENABLED", "0")
+    monkeypatch.delenv("LEX_OCR_PROVIDER", raising=False)
     monkeypatch.delenv("LEX_OCR_MODELS_READY", raising=False)
     assert "paddleocr" not in sys.modules
     result = ocr_capability()
     assert result["status"] == "unconfigured"
+    assert result["provider"] == "rapidocr"
     assert "paddleocr" not in sys.modules
+    assert "rapidocr" not in sys.modules
 
 
 def test_paddle_ocr_constructs_with_cpu_device(monkeypatch):

@@ -183,7 +183,12 @@ def seed_packs(repo):
             continue
         record = _pack_record(pack)
         current = existing.get(record["id"])
-        if current is None or current.get("status") not in _REFRESHABLE_PACK_STATUSES:
+        if current is None:
+            if pack.status in _REFRESHABLE_PACK_STATUSES:
+                repo.put("pack", record)
+                existing[record["id"]] = record
+            continue
+        if current.get("status") not in _REFRESHABLE_PACK_STATUSES:
             continue
         if record.get("status") not in _REFRESHABLE_PACK_STATUSES:
             continue

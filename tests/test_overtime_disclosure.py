@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from lexaegis.disclosure import (
+    GENERAL_SUB_PURPOSE,
     LAWYER_LAW_ARTICLE,
     LAWYER_LAW_DATE,
     LAWYER_LAW_MAPPING,
@@ -54,26 +55,28 @@ def test_upgraded_pack_stays_draft_and_valid():
     assert lawyer["historical_mapping"]["2017_article_38"] == "2026-09-01第41条"
 
 
-def test_overtime_rule_requires_known_day_nature():
+def test_overtime_date_keeps_calendar_day_when_day_nature_unknown():
     pack = labor_pack()
     fact = _date_fact()
     resolved = resolve_conditional_rule(pack, fact, "fact_summary", "核对加班")
     assert resolved is not None
-    assert "day_nature_known" in resolved["unknown_conditions"]
+    assert resolved["unknown_conditions"] == []
     decision = build_disclosure_decision(fact, pack, "fact_summary", {}, _fallback(), "核对加班", [fact])
-    assert decision["status"] == "review"
-    assert decision["necessity"] == "uncertain"
+    assert decision["status"] == "candidate"
+    assert "2025年3月12日" in decision["output"]
+    assert decision["transform"] != "delete"
+
+
+def test_empty_or_unknown_hours_restricts_overtime_hours_field():
+    pack = labor_pack()
+    fact = {
+        "id": "f_hours", "field": "overtime_hours", "value": "加班小时未记载",
+        "source_ids": ["b1"], "confirmed": True, "hours": None,
+    }
+    decision = build_disclosure_decision(fact, pack, "fact_summary", {}, _fallback("overtime_hours"), "核对加班", [fact])
+    assert decision["status"] == "restricted"
     assert decision["transform"] == "delete"
     assert any("条件未知" in item for item in decision["block_reasons"])
-
-
-def test_empty_or_unknown_condition_goes_to_review():
-    pack = labor_pack()
-    for day_nature in (None, "", "unknown"):
-        fact = _date_fact(day_nature=day_nature)
-        decision = build_disclosure_decision(fact, pack, "fact_summary", {}, _fallback(), "核对加班", [fact])
-        assert decision["status"] == "review"
-        assert decision["necessity"] == "uncertain"
 
 
 def test_overtime_date_keeps_calendar_day_when_conditions_known():
@@ -107,7 +110,7 @@ def test_month_truncation_and_calendar_shift_rejected():
     rule = next(item for item in pack["disclosure_rules"] if item["id"] == "overtime_date")
     truncated = {"id": "bad_month", "kind": "moderate_generalize", "transform": "generalize", "output": "劳动者主张2025年3月加班3小时"}
     shifted = {"id": "bad_shift", "kind": "original_precision", "transform": "keep", "output": "劳动者主张2025年3月13日加班3小时"}
-    assert any("截到月份" in item for item in constraint_reasons(fact, truncated, rule, {}, [fact]))
+    assert any("截月" in item for item in constraint_reasons(fact, truncated, rule, {}, [fact]))
     assert any("平移日历" in item for item in constraint_reasons(fact, shifted, rule, {}, [fact]))
 
 
@@ -146,14 +149,18 @@ def test_processing_basis_judgments_are_separate_and_lawyer_law_uses_2026_articl
     assert "38" not in (secrecy["lawyer_law_article"] or "")
 
 
-def test_infer_sub_purpose_and_generic_facts_stay_conservative():
+def test_infer_sub_purpose_does_not_switch_on_overtime_attributes():
     generic = {"id": "g1", "field": "event", "value": "劳动者林甲主张工资12000元。"}
-    assert infer_sub_purpose([generic], "fact_summary") is None
+    overtime_attr = {"id": "g2", "field": "event", "value": "有人提到加班", "hours": 3, "day_nature": "weekday"}
+    assert infer_sub_purpose([generic], "fact_summary") == GENERAL_SUB_PURPOSE
+    assert infer_sub_purpose([overtime_attr], "fact_summary") == GENERAL_SUB_PURPOSE
+    assert infer_sub_purpose([overtime_attr], "fact_summary", "核对加班") == "核对加班"
     pack = labor_pack()
-    decision = build_disclosure_decision(generic, pack, "fact_summary", {}, _fallback("event"), None, [generic])
-    assert decision["necessity"] == "uncertain"
-    assert decision["transform"] == "delete"
-    assert decision["rule_id"] is None
+    decision = build_disclosure_decision(generic, pack, "fact_summary", {}, _fallback("event"), GENERAL_SUB_PURPOSE, [generic])
+    assert decision["necessity"] == "required"
+    assert decision["rule_id"] == "local_event"
+    assert decision["output"]
+    assert "12000" in decision["output"]
 
 
 def test_dispatch_still_blocked_for_complete_overtime_scenario(env):
@@ -204,7 +211,7 @@ def test_create_task_wires_overtime_overlay(env):
         "field": "day_nature", "value": "工作日", "source_ids": [block["id"]], "confirmed": True, "day_nature": "weekday",
     })
     with env["app"].state.store.transaction() as repo:
-        task = create_task(repo, case["id"], "local", "fact_summary")
+        task = create_task(repo, case["id"], "local", "fact_summary", sub_purpose="核对加班")
     assert task["sub_purpose"] == "核对加班"
     nature = next(item for item in task["decisions"] if item["field"] == "day_nature")
     assert nature["necessity"] == "conditional"
@@ -231,6 +238,16 @@ def test_sensitivity_human_review_stays_review():
     assert decision["transform"] == "delete"
     assert decision["output"] == ""
     assert any("转人工" in item for item in decision["block_reasons"])
+
+
+def test_hold_evidence_is_not_a_claim_stance():
+    pack = labor_pack()
+    fact = {
+        "id": "f_hold", "field": "event", "value": "劳动者持有打卡记录",
+        "claim_stance": "hold_evidence", "confirmed": True, "source_ids": ["b1"],
+    }
+    decision = build_disclosure_decision(fact, pack, "fact_summary", {}, _fallback("event"), "核对加班", [fact])
+    assert decision["rule_id"] != "overtime_claim_stance" or "hold_evidence" not in str(decision.get("reason") or "")
 
 
 def test_sensitivity_must_keep_on_fallback_only():

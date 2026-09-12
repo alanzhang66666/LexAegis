@@ -19,7 +19,7 @@ export function SourceViewer({ data, currentCase, caseId, busy, activeSource, bl
   const canConfirm = Boolean(
     currentCase.mode === "formal"
     && viewed
-    && (viewed.kind === "ocr" || viewed.kind === "scan")
+    && (viewed.kind === "ocr" || viewed.kind === "scan" || viewed.kind === "transcript")
     && String(viewed.text || "").trim()
     && !viewed.reviewed
   );
@@ -52,8 +52,8 @@ export function SourceViewer({ data, currentCase, caseId, busy, activeSource, bl
           onClick={event => event.stopPropagation()} title="下载原件"><Download size={14}/></a>}
       </button>)}</div>
     {currentCase.mode === "formal" && <label className="upload"><Upload size={17}/><span>
-      上传 DOCX / PDF / 文本 / 图片<small>TXT 按段落切块 · PNG/JPEG 可选本地 OCR · 最大 20 MB</small></span>
-      <input type="file" accept=".docx,.pdf,.txt,.png,.jpg,.jpeg" disabled={busy}
+      上传 DOCX / PDF / 文本 / 表格 / 图片 / 音视频<small>TXT 按段落切块 · XLSX/CSV 按单元格定位 · PNG/JPEG 可选本地 OCR · 音视频本机转写后复核 · 最大 20 MB</small></span>
+      <input type="file" accept=".docx,.pdf,.txt,.png,.jpg,.jpeg,.xlsx,.csv,.mp3,.m4a,.wav,.mp4" disabled={busy}
         onChange={event => {
           const file = event.target.files?.[0];
           if (file) onUpload(file);
@@ -62,7 +62,7 @@ export function SourceViewer({ data, currentCase, caseId, busy, activeSource, bl
     {viewed ? <>
       <div className="source-label"><span>{viewed.locator} · v{viewed.document_version}</span>
         {viewed.confidence !== null && viewed.confidence !== undefined &&
-          <Tag tone="amber">OCR {Math.round(viewed.confidence * 100)}%</Tag>}</div>
+          <Tag tone="amber">{viewed.kind === "transcript" ? "转写" : "OCR"} {Math.round(viewed.confidence * 100)}%</Tag>}</div>
       {viewed.page && <div className="page-preview">
         <img alt={`原文第 ${viewed.page} 页`}
           src={`/api/v1/cases/${caseId}/documents/${viewed.document_id}/page/${viewed.page}`}/>
@@ -72,7 +72,9 @@ export function SourceViewer({ data, currentCase, caseId, busy, activeSource, bl
           height: (viewed.bbox[3] - viewed.bbox[1]) * 100 + "%",
         }}/>}
       </div>}
-      <div className="source-text">{viewed.text || "未识别文本。请配置本地 OCR 或查看原图后人工转录。"}</div>
+      <div className="source-text">{viewed.text || (viewed.kind === "transcript"
+        ? "未转写文本。请配置本机转写或人工校正。"
+        : "未识别文本。请配置本地 OCR 或查看原图后人工转录。")}</div>
       <div className="source-actions">{currentCase.mode === "formal" && <>
         {canConfirm && <button className="text-button" disabled={busy || confirming} onClick={() => confirmBlock(viewed)}>确认本块</button>}
         <button className="text-button" disabled={busy} onClick={() => onCorrect(viewed)}>校正并生成新版本</button>

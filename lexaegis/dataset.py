@@ -744,7 +744,7 @@ def _artifact_legal(record: dict, pack: dict, mappings: list[dict], started: flo
     for fact in facts:
         fallback = task_matrix_fallback(pack, "fact_summary", fact["field"])
         decision = build_disclosure_decision(fact, pack, "fact_summary", mappings, fallback, purpose, facts)
-        if drop_hard_constraints and decision.get("rule_id") and decision.get("status") != "review":
+        if drop_hard_constraints and decision.get("rule_id") and decision.get("status") not in {"review", "restricted"}:
             decision = {
                 **decision,
                 "output": transform(fact.get("value") or "", "generalize", mappings),
@@ -966,7 +966,7 @@ def run_comparable_comparison(records: list[dict], manifest: dict, *, labels: di
         "method_notes": {
             "find_replace": "直接标识查找替换为角色标签或删除标记",
             "consistent_pseudonym": "同一主体在同一记录内使用稳定 token",
-            "task_matrix": "当前案由包任务字段矩阵加保守缺省，不含加班硬约束候选",
+            "task_matrix": "当前案由包任务字段矩阵加一般整理缺省，不含加班硬约束候选",
             "generic_privacy_utility": "薄基线：已有 policy.generalize 与联系方式删除，不是新的研究堆栈",
             "legal_constraint": "Phase 2 disclosure.py 有界候选与硬约束；草稿包，非正式法源",
         },

@@ -10,4 +10,4 @@
 | [IMPLEMENTATION_V2.md](IMPLEMENTATION_V2.md) | `docs/IMPLEMENTATION_V2.md` | 0.2 能力长文 |
 | [THIRD_PARTY.md](THIRD_PARTY.md) | `docs/THIRD_PARTY.md` | 第三方台账（已并入 PROVENANCE） |
 
-仓库根目录的 `PLAN.md` 与《案隐盾_项目核心共识与系统架构.md》仅保留跳转，正文在上表。现行实现见 [架构说明](../ARCHITECTURE.md)，上手见 [README](../../README.md)。
+仓库根目录的 `PLAN.md` 与《案隐盾_项目核心共识与系统架构.md》仅保留跳转，正文在上表。法学现行文件在 [../legal/README.md](../legal/README.md)，不在本归档。现行实现见 [架构说明](../ARCHITECTURE.md)，上手见 [README](../../README.md)。

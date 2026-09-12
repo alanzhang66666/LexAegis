@@ -43,11 +43,46 @@ def edge_json_probe(timeout=8) -> dict:
         return {"ok": False, "status": "failed", "detail": "边侧 JSON 探测失败；边侧仍为可选能力"}
 
 
-def _ocr_construct_probe() -> None:
-    """CPU engine construct after operator attestation. Does not recognize pages."""
-    from .parsing import PaddleOCRProvider
+def _ocr_construct_probe(provider_id=None) -> None:
+    """Engine construct after operator attestation. Does not recognize pages."""
+    from .parsing import PaddleOCRProvider, RapidOCRProvider
 
-    PaddleOCRProvider()._create_engine()
+    chosen = provider_id or os.getenv("LEX_OCR_PROVIDER", "rapidocr")
+    if chosen == "paddle":
+        PaddleOCRProvider()._create_engine()
+        return
+    RapidOCRProvider()._create_engine()
+
+
+def whisper_probe() -> dict:
+    """Optional transcription doctor. Unconfigured does not fail-close."""
+    if os.getenv("LEX_WHISPER_ENABLED") != "1":
+        return {
+            "ok": True,
+            "status": "unconfigured",
+            "detail": "本机转写为可选能力；未启用时音视频进入人工校正",
+        }
+    from .transcribe import whisper_capability
+
+    capability = whisper_capability()
+    status = capability.get("status")
+    if status == "available":
+        return {
+            "ok": True,
+            "status": "available",
+            "detail": "转写冒烟/资产声明通过，不代表转写准确率已验收",
+        }
+    if os.getenv("LEX_WHISPER_MODELS_READY") == "1" or status == "failed":
+        return {
+            "ok": False,
+            "status": "failed",
+            "detail": capability.get("detail") or "本机转写探测失败；转写仍为可选能力",
+        }
+    return {
+        "ok": True,
+        "status": "unconfigured",
+        "detail": "本机转写为可选能力；模型资产未声明就绪，音视频进入人工校正",
+    }
 
 
 def ocr_probe() -> dict:
@@ -64,11 +99,11 @@ def ocr_probe() -> dict:
 
     capability = ocr_capability()
     status = capability.get("status")
-    provider_id = capability.get("provider") or os.getenv("LEX_OCR_PROVIDER", "paddle")
+    provider_id = capability.get("provider") or os.getenv("LEX_OCR_PROVIDER", "rapidocr")
     if status == "available":
-        if attested and provider_id == "paddle":
+        if attested and provider_id in ("paddle", "rapidocr"):
             try:
-                _ocr_construct_probe()
+                _ocr_construct_probe(provider_id)
             except Exception:
                 return {
                     "ok": False,
@@ -106,8 +141,9 @@ def doctor_report() -> dict:
         "isolation": native_isolation_note(),
         "host_publish": host_publish_capability(),
         "ocr": ocr_probe(),
+        "whisper": whisper_probe(),
     }
-    optional = {"edge_model", "edge_json", "isolation", "host_publish", "ocr"}
+    optional = {"edge_model", "edge_json", "isolation", "host_publish", "ocr", "whisper"}
     return {"ok": all(item["ok"] for key, item in checks.items() if key not in optional), "checks": checks}
 
 

@@ -1,8 +1,8 @@
 {
   "schema_version": 2,
   "id": "labor",
-  "name": "劳动争议（V2 法学待审）",
-  "version": "2.0.0-draft.1",
+  "name": "劳动争议（V2 规格接入草稿，未发布）",
+  "version": "2.0.0-draft.2",
   "status": "draft",
   "compatible_core": ">=0.2,<2",
   "task_ids": ["fact_summary", "timeline", "evidence_inventory", "issue_extraction"],
@@ -13,24 +13,24 @@
     {"id": "date", "label": "日期", "value_type": "date", "description": "事件时间"},
     {"id": "amount", "label": "金额", "value_type": "money", "description": "工资或补偿金额"},
     {"id": "evidence", "label": "证据", "value_type": "text", "description": "证据名称与证明目的"},
-    {"id": "claim_stance", "label": "主张或否认", "value_type": "enum", "description": "加班事实的主张、否认或持有证据立场；不得写成无争议事实"},
+    {"id": "claim_stance", "label": "主张或否认", "value_type": "enum", "description": "主张或否认；持有证据不是陈述立场，须记在证据持有人"},
     {"id": "day_nature", "label": "日性质", "value_type": "enum", "description": "工作日、休息日或法定节假日"},
     {"id": "overtime_hours", "label": "加班小时", "value_type": "number", "description": "主张或争议的加班小时数"},
     {"id": "wage_base", "label": "工资基数", "value_type": "money", "description": "加班费计算所用工资基数"},
     {"id": "evidence_holder", "label": "证据持有人", "value_type": "enum", "description": "谁持有加班事实相关证据"}
   ],
   "task_field_matrix": [
-    {"task_id": "fact_summary", "field": "entity", "necessity": "uncertain", "rationale": "一般事实摘要仍待确认；核对加班时由条件规则覆盖"},
-    {"task_id": "fact_summary", "field": "relation", "necessity": "uncertain", "rationale": "一般事实摘要仍待确认；核对加班时由条件规则覆盖"},
-    {"task_id": "fact_summary", "field": "event", "necessity": "uncertain", "rationale": "一般事实摘要仍待确认；核对加班时由条件规则覆盖"},
-    {"task_id": "fact_summary", "field": "date", "necessity": "uncertain", "rationale": "一般事实摘要仍待确认；核对加班时由条件规则覆盖"},
-    {"task_id": "fact_summary", "field": "amount", "necessity": "uncertain", "rationale": "一般事实摘要仍待确认；核对加班时由条件规则覆盖"},
-    {"task_id": "fact_summary", "field": "evidence", "necessity": "uncertain", "rationale": "一般事实摘要仍待确认；核对加班时由条件规则覆盖"},
-    {"task_id": "fact_summary", "field": "claim_stance", "necessity": "conditional", "rationale": "核对加班须保留主张或否认；条件未知则复核。待审草稿。"},
-    {"task_id": "fact_summary", "field": "day_nature", "necessity": "conditional", "rationale": "核对加班须保留工作日、休息日或节假日性质；条件未知则复核。待审草稿。"},
-    {"task_id": "fact_summary", "field": "overtime_hours", "necessity": "conditional", "rationale": "核对加班须保留小时数；条件未知则复核。待审草稿。"},
-    {"task_id": "fact_summary", "field": "wage_base", "necessity": "conditional", "rationale": "核对加班须保留工资基数；条件未知则复核。待审草稿。"},
-    {"task_id": "fact_summary", "field": "evidence_holder", "necessity": "conditional", "rationale": "核对加班须保留谁持有证据；条件未知则复核。待审草稿。"},
+    {"task_id": "fact_summary", "field": "entity", "necessity": "required", "rationale": "G-2026-09-12-v1.0 local_entity：一般整理须保留任务主体；姓名与登记名假名化"},
+    {"task_id": "fact_summary", "field": "relation", "necessity": "required", "rationale": "G-2026-09-12-v1.0 local_relation：保留关系及争议状态，替换主体名称"},
+    {"task_id": "fact_summary", "field": "event", "necessity": "required", "rationale": "G-2026-09-12-v1.0 local_event：保留影响摘要的事件，去除无关身份线索"},
+    {"task_id": "fact_summary", "field": "date", "necessity": "conditional", "rationale": "G-2026-09-12-v1.0 local_date：涉及起止、通知、期间或归属时保留原文精度，不得一律截月"},
+    {"task_id": "fact_summary", "field": "amount", "necessity": "conditional", "rationale": "G-2026-09-12-v1.0 local_amount：保留数额、期间、款项性质与陈述状态，不把请求写成判决"},
+    {"task_id": "fact_summary", "field": "evidence", "necessity": "conditional", "rationale": "G-2026-09-12-v1.0 local_evidence：保留名称与文书提及状态，不把有名称当成原件已提供"},
+    {"task_id": "fact_summary", "field": "claim_stance", "necessity": "required", "rationale": "G-2026-09-12-v1.0 local_stance：命题须保留主张、否认、承认或法院认定层次"},
+    {"task_id": "fact_summary", "field": "day_nature", "necessity": "conditional", "rationale": "仅在显式子目的核对加班时启用；不得因材料出现加班二字而切换任务"},
+    {"task_id": "fact_summary", "field": "overtime_hours", "necessity": "conditional", "rationale": "仅在显式子目的核对加班时启用"},
+    {"task_id": "fact_summary", "field": "wage_base", "necessity": "conditional", "rationale": "仅在基数本身属于争议或显式核对加班金额时纳入"},
+    {"task_id": "fact_summary", "field": "evidence_holder", "necessity": "conditional", "rationale": "G-2026-09-12-v1.0 local_holder：持有关系影响任务时保留，不从角色推定"},
     {"task_id": "timeline", "field": "entity", "necessity": "uncertain", "rationale": "待法学团队确认"},
     {"task_id": "timeline", "field": "relation", "necessity": "uncertain", "rationale": "待法学团队确认"},
     {"task_id": "timeline", "field": "event", "necessity": "uncertain", "rationale": "待法学团队确认"},
@@ -66,17 +66,17 @@
     {"task_id": "issue_extraction", "field": "evidence_holder", "necessity": "uncertain", "rationale": "本阶段仅冻结事实摘要中的加班核对"}
   ],
   "rules": [
-    {"field": "entity", "necessity": "uncertain", "transform": "delete", "reason": "未匹配加班条件时按保守缺省删除", "forbidden": false},
-    {"field": "relation", "necessity": "uncertain", "transform": "delete", "reason": "未匹配加班条件时按保守缺省删除", "forbidden": false},
-    {"field": "event", "necessity": "uncertain", "transform": "delete", "reason": "未匹配加班条件时按保守缺省删除", "forbidden": false},
-    {"field": "date", "necessity": "uncertain", "transform": "delete", "reason": "未匹配加班条件时按保守缺省删除", "forbidden": false},
-    {"field": "amount", "necessity": "uncertain", "transform": "delete", "reason": "未匹配加班条件时按保守缺省删除", "forbidden": false},
-    {"field": "evidence", "necessity": "uncertain", "transform": "delete", "reason": "未匹配加班条件时按保守缺省删除", "forbidden": false},
-    {"field": "claim_stance", "necessity": "uncertain", "transform": "delete", "reason": "未匹配加班条件时按保守缺省删除", "forbidden": false},
-    {"field": "day_nature", "necessity": "uncertain", "transform": "delete", "reason": "未匹配加班条件时按保守缺省删除", "forbidden": false},
-    {"field": "overtime_hours", "necessity": "uncertain", "transform": "delete", "reason": "未匹配加班条件时按保守缺省删除", "forbidden": false},
-    {"field": "wage_base", "necessity": "uncertain", "transform": "delete", "reason": "未匹配加班条件时按保守缺省删除", "forbidden": false},
-    {"field": "evidence_holder", "necessity": "uncertain", "transform": "delete", "reason": "未匹配加班条件时按保守缺省删除", "forbidden": false}
+    {"field": "entity", "necessity": "required", "transform": "pseudonymize", "reason": "一般整理按 local_entity 假名化主体，不进入未授权外发", "forbidden": false},
+    {"field": "relation", "necessity": "required", "transform": "pseudonymize", "reason": "一般整理按 local_relation 保留关系并替换主体名称", "forbidden": false},
+    {"field": "event", "necessity": "required", "transform": "pseudonymize", "reason": "一般整理按 local_event 保留事件并替换登记名", "forbidden": false},
+    {"field": "date", "necessity": "conditional", "transform": "keep", "reason": "一般整理按 local_date 保留原文精度；名称替换由披露候选执行，禁止默认截月", "forbidden": false},
+    {"field": "amount", "necessity": "conditional", "transform": "keep", "reason": "一般整理按 local_amount 保留数额关系；名称替换由披露候选执行", "forbidden": false},
+    {"field": "evidence", "necessity": "conditional", "transform": "keep", "reason": "一般整理按 local_evidence 保留证据提及，不输出整份原件", "forbidden": false},
+    {"field": "claim_stance", "necessity": "required", "transform": "keep", "reason": "一般整理按 local_stance 保留陈述层次，不得写成无争议事实", "forbidden": false},
+    {"field": "day_nature", "necessity": "conditional", "transform": "delete", "reason": "日性质仅在显式核对加班时进入候选", "forbidden": false},
+    {"field": "overtime_hours", "necessity": "conditional", "transform": "delete", "reason": "加班小时仅在显式核对加班时进入候选", "forbidden": false},
+    {"field": "wage_base", "necessity": "conditional", "transform": "delete", "reason": "工资基数仅在显式核对加班且基数本身相关时进入候选", "forbidden": false},
+    {"field": "evidence_holder", "necessity": "conditional", "transform": "pseudonymize", "reason": "一般整理按 local_holder 保留持有关系并假名化主体", "forbidden": false}
   ],
   "legal_sources": [
     {
@@ -120,12 +120,163 @@
   ],
   "disclosure_rules": [
     {
+      "id": "local_entity",
+      "task_id": "fact_summary",
+      "sub_purpose": "劳动争议文书事实保真整理",
+      "conditions": [
+        {"id": "sub_purpose_general", "attribute": "sub_purpose", "operator": "eq", "values": ["劳动争议文书事实保真整理"]}
+      ],
+      "affected_fields": ["entity"],
+      "necessity": "required",
+      "min_precision": "role_token",
+      "allowed_transforms": ["original_precision", "tokenize", "moderate_generalize", "delete"],
+      "forbidden_default_transforms": [],
+      "immutable_relations": ["subject_ownership"],
+      "legal_source_ids": ["spc_labor_interp_1"],
+      "missing_item_strategy": "restrict",
+      "unknown_condition_strategy": "restrict",
+      "preferred_transform": "tokenize",
+      "reason": "G-2026-09-12-v1.0 local_entity：任务主体须独立编号并一致假名化，不得合并不同主体。"
+    },
+    {
+      "id": "local_relation",
+      "task_id": "fact_summary",
+      "sub_purpose": "劳动争议文书事实保真整理",
+      "conditions": [
+        {"id": "sub_purpose_general", "attribute": "sub_purpose", "operator": "eq", "values": ["劳动争议文书事实保真整理"]}
+      ],
+      "affected_fields": ["relation"],
+      "necessity": "required",
+      "min_precision": "employment_relation",
+      "allowed_transforms": ["original_precision", "tokenize", "moderate_generalize", "delete"],
+      "forbidden_default_transforms": [],
+      "immutable_relations": ["subject_ownership", "dispute_status"],
+      "legal_source_ids": ["spc_labor_interp_1"],
+      "missing_item_strategy": "restrict",
+      "unknown_condition_strategy": "restrict",
+      "preferred_transform": "tokenize",
+      "reason": "G-2026-09-12-v1.0 local_relation：保留两端主体、关系类型与陈述状态，分别保留不同说法。"
+    },
+    {
+      "id": "local_event",
+      "task_id": "fact_summary",
+      "sub_purpose": "劳动争议文书事实保真整理",
+      "conditions": [
+        {"id": "sub_purpose_general", "attribute": "sub_purpose", "operator": "eq", "values": ["劳动争议文书事实保真整理"]}
+      ],
+      "affected_fields": ["event"],
+      "necessity": "required",
+      "min_precision": "actor_action",
+      "allowed_transforms": ["original_precision", "tokenize", "moderate_generalize", "delete"],
+      "forbidden_default_transforms": ["date_month_truncation"],
+      "immutable_relations": ["subject_ownership", "negation", "dispute_status", "date_relation"],
+      "legal_source_ids": ["spc_labor_interp_1"],
+      "missing_item_strategy": "restrict",
+      "unknown_condition_strategy": "restrict",
+      "preferred_transform": "tokenize",
+      "reason": "G-2026-09-12-v1.0 local_event：保留谁实施、做了什么；缺核心主体或动作时不生成完整肯定句。"
+    },
+    {
+      "id": "local_date",
+      "task_id": "fact_summary",
+      "sub_purpose": "劳动争议文书事实保真整理",
+      "conditions": [
+        {"id": "sub_purpose_general", "attribute": "sub_purpose", "operator": "eq", "values": ["劳动争议文书事实保真整理"]}
+      ],
+      "affected_fields": ["date"],
+      "necessity": "conditional",
+      "min_precision": "source_precision",
+      "allowed_transforms": ["original_precision", "tokenize", "moderate_generalize", "delete"],
+      "forbidden_default_transforms": ["date_month_truncation", "calendar_shift"],
+      "immutable_relations": ["date_relation", "subject_ownership"],
+      "legal_source_ids": ["spc_labor_interp_1"],
+      "missing_item_strategy": "restrict",
+      "unknown_condition_strategy": "restrict",
+      "preferred_transform": "original_precision",
+      "reason": "G-2026-09-12-v1.0 local_date：保留原文已给出的精度；不得一律截月或平移；冲突日期并列。"
+    },
+    {
+      "id": "local_amount",
+      "task_id": "fact_summary",
+      "sub_purpose": "劳动争议文书事实保真整理",
+      "conditions": [
+        {"id": "sub_purpose_general", "attribute": "sub_purpose", "operator": "eq", "values": ["劳动争议文书事实保真整理"]}
+      ],
+      "affected_fields": ["amount"],
+      "necessity": "conditional",
+      "min_precision": "amount_relation",
+      "allowed_transforms": ["original_precision", "tokenize", "moderate_generalize", "delete"],
+      "forbidden_default_transforms": [],
+      "immutable_relations": ["numeric_relation", "subject_ownership", "dispute_status"],
+      "legal_source_ids": ["spc_labor_interp_1"],
+      "missing_item_strategy": "restrict",
+      "unknown_condition_strategy": "restrict",
+      "preferred_transform": "original_precision",
+      "reason": "G-2026-09-12-v1.0 local_amount：保留数额、单位、期间、款项性质与程序阶段；不把请求额写成判决额。"
+    },
+    {
+      "id": "local_evidence",
+      "task_id": "fact_summary",
+      "sub_purpose": "劳动争议文书事实保真整理",
+      "conditions": [
+        {"id": "sub_purpose_general", "attribute": "sub_purpose", "operator": "eq", "values": ["劳动争议文书事实保真整理"]}
+      ],
+      "affected_fields": ["evidence"],
+      "necessity": "conditional",
+      "min_precision": "mention_and_presence",
+      "allowed_transforms": ["original_precision", "tokenize", "moderate_generalize", "delete"],
+      "forbidden_default_transforms": [],
+      "immutable_relations": ["source", "subject_ownership"],
+      "legal_source_ids": ["spc_labor_interp_1"],
+      "missing_item_strategy": "restrict",
+      "unknown_condition_strategy": "restrict",
+      "preferred_transform": "tokenize",
+      "reason": "G-2026-09-12-v1.0 local_evidence：保留名称、证明目的与本次提供状态；不能把有名称当作内容已核验。"
+    },
+    {
+      "id": "local_stance",
+      "task_id": "fact_summary",
+      "sub_purpose": "劳动争议文书事实保真整理",
+      "conditions": [
+        {"id": "sub_purpose_general", "attribute": "sub_purpose", "operator": "eq", "values": ["劳动争议文书事实保真整理"]}
+      ],
+      "affected_fields": ["claim_stance"],
+      "necessity": "required",
+      "min_precision": "claim_or_deny",
+      "allowed_transforms": ["original_precision", "tokenize", "moderate_generalize", "delete"],
+      "forbidden_default_transforms": [],
+      "immutable_relations": ["negation", "dispute_status", "subject_ownership"],
+      "legal_source_ids": ["spc_labor_interp_1"],
+      "missing_item_strategy": "restrict",
+      "unknown_condition_strategy": "restrict",
+      "preferred_transform": "original_precision",
+      "reason": "G-2026-09-12-v1.0 local_stance：保留陈述者与认定层次；状态未知时中性转述，不能提升为认定。"
+    },
+    {
+      "id": "local_holder",
+      "task_id": "fact_summary",
+      "sub_purpose": "劳动争议文书事实保真整理",
+      "conditions": [
+        {"id": "sub_purpose_general", "attribute": "sub_purpose", "operator": "eq", "values": ["劳动争议文书事实保真整理"]}
+      ],
+      "affected_fields": ["evidence_holder"],
+      "necessity": "conditional",
+      "min_precision": "who_holds",
+      "allowed_transforms": ["original_precision", "tokenize", "moderate_generalize", "delete"],
+      "forbidden_default_transforms": [],
+      "immutable_relations": ["source", "subject_ownership"],
+      "legal_source_ids": ["spc_labor_interp_1"],
+      "missing_item_strategy": "restrict",
+      "unknown_condition_strategy": "restrict",
+      "preferred_transform": "tokenize",
+      "reason": "G-2026-09-12-v1.0 local_holder：分别记录持有、提交、制作；未知时写未记载，不从角色推定。"
+    },
+    {
       "id": "overtime_date",
       "task_id": "fact_summary",
       "sub_purpose": "核对加班",
       "conditions": [
-        {"id": "sub_purpose_overtime", "attribute": "sub_purpose", "operator": "eq", "values": ["核对加班"]},
-        {"id": "day_nature_known", "attribute": "day_nature", "operator": "known", "values": []}
+        {"id": "sub_purpose_overtime", "attribute": "sub_purpose", "operator": "eq", "values": ["核对加班"]}
       ],
       "affected_fields": ["date"],
       "necessity": "conditional",
@@ -134,10 +285,10 @@
       "forbidden_default_transforms": ["date_month_truncation", "calendar_shift"],
       "immutable_relations": ["date_relation", "numeric_relation", "subject_ownership"],
       "legal_source_ids": ["spc_labor_interp_1"],
-      "missing_item_strategy": "review",
-      "unknown_condition_strategy": "review",
+      "missing_item_strategy": "restrict",
+      "unknown_condition_strategy": "restrict",
       "preferred_transform": "original_precision",
-      "reason": "核对加班须保留日历日，以便对应工作日、休息日或节假日。禁止默认截月或平移日历。待审草稿，引用解释（一）第42条。"
+      "reason": "核对加班须保留日历日。日性质未知不构成删除已知日期的理由。禁止默认截月或平移日历。规格接入草稿，引用解释（一）第42条。"
     },
     {
       "id": "overtime_hours",
@@ -154,8 +305,8 @@
       "forbidden_default_transforms": ["date_month_truncation", "calendar_shift"],
       "immutable_relations": ["numeric_relation"],
       "legal_source_ids": ["spc_labor_interp_1"],
-      "missing_item_strategy": "review",
-      "unknown_condition_strategy": "review",
+      "missing_item_strategy": "restrict",
+      "unknown_condition_strategy": "restrict",
       "preferred_transform": "original_precision",
       "reason": "核对加班须保留小时数。缺项或条件未知则复核。待审草稿。"
     },
@@ -174,8 +325,8 @@
       "forbidden_default_transforms": [],
       "immutable_relations": ["numeric_relation"],
       "legal_source_ids": ["spc_labor_interp_1"],
-      "missing_item_strategy": "review",
-      "unknown_condition_strategy": "review",
+      "missing_item_strategy": "restrict",
+      "unknown_condition_strategy": "restrict",
       "preferred_transform": "original_precision",
       "reason": "核对加班须保留工资基数，供本地计算 overtime 关系。待审草稿。"
     },
@@ -194,8 +345,8 @@
       "forbidden_default_transforms": ["date_month_truncation", "calendar_shift"],
       "immutable_relations": ["date_relation"],
       "legal_source_ids": ["spc_labor_interp_1"],
-      "missing_item_strategy": "review",
-      "unknown_condition_strategy": "review",
+      "missing_item_strategy": "restrict",
+      "unknown_condition_strategy": "restrict",
       "preferred_transform": "original_precision",
       "reason": "须保留该日是工作日、休息日还是法定节假日。待审草稿。"
     },
@@ -214,8 +365,8 @@
       "forbidden_default_transforms": [],
       "immutable_relations": ["negation", "dispute_status", "subject_ownership"],
       "legal_source_ids": ["spc_labor_interp_1"],
-      "missing_item_strategy": "review",
-      "unknown_condition_strategy": "review",
+      "missing_item_strategy": "restrict",
+      "unknown_condition_strategy": "restrict",
       "preferred_transform": "original_precision",
       "reason": "须保留谁主张、谁否认，不得把一方主张写成无争议事实。待审草稿，引用解释（一）第42条。"
     },
@@ -234,8 +385,8 @@
       "forbidden_default_transforms": [],
       "immutable_relations": ["source", "subject_ownership"],
       "legal_source_ids": ["spc_labor_interp_1"],
-      "missing_item_strategy": "review",
-      "unknown_condition_strategy": "review",
+      "missing_item_strategy": "restrict",
+      "unknown_condition_strategy": "restrict",
       "preferred_transform": "tokenize",
       "reason": "须保留谁持有加班证据及出处。待审草稿，引用解释（一）第42条关于证据掌握的举证责任分配。"
     },
@@ -253,8 +404,8 @@
       "forbidden_default_transforms": [],
       "immutable_relations": ["subject_ownership"],
       "legal_source_ids": ["spc_labor_interp_1"],
-      "missing_item_strategy": "review",
-      "unknown_condition_strategy": "review",
+      "missing_item_strategy": "restrict",
+      "unknown_condition_strategy": "restrict",
       "preferred_transform": "tokenize",
       "reason": "核对加班可令牌化姓名与机构品牌，但不得互换劳动者与用人单位。待审草稿。"
     },
@@ -272,8 +423,8 @@
       "forbidden_default_transforms": [],
       "immutable_relations": ["subject_ownership"],
       "legal_source_ids": ["spc_labor_interp_1"],
-      "missing_item_strategy": "review",
-      "unknown_condition_strategy": "review",
+      "missing_item_strategy": "restrict",
+      "unknown_condition_strategy": "restrict",
       "preferred_transform": "tokenize",
       "reason": "保留劳动关系本身，令牌化主体名称。待审草稿。"
     }
@@ -281,12 +432,13 @@
   "direct_identifier_patterns": [],
   "risk_weights": {},
   "forbidden_terms": ["唯一", "公开获奖"],
-  "manual_review_conditions": ["法源未冻结", "规则必要性不确定", "攻击协议未完成", "加班条件未知", "解释（二）适用时间不明"],
+  "manual_review_conditions": ["法源未冻结", "规则必要性不确定", "攻击协议未完成", "解释（二）适用时间不明", "条件未知已限制输出而非默许外发"],
   "references": [
-    "案隐盾申请评议书20260831(1).docx（待法学团队确认）",
-    "最高人民法院关于审理劳动争议案件适用法律问题的解释（一）第42条、第44条（待审草稿引用，非正式法源）",
+    "docs/legal/案隐盾_系统法学规则与验收标准_v1.0.md",
+    "指南版本 G-2026-09-12-v1.0（规则内容定稿，案由包仍为 draft，dispatch_allowed=false）",
+    "最高人民法院关于审理劳动争议案件适用法律问题的解释（一）第42条、第44条（草稿引用，非正式法源）",
     "最高人民法院关于审理劳动争议案件适用法律问题的解释（二）适用时间：2025-09-01（不作为加班举证入口）",
-    "中华人民共和国律师法2026-09-01施行文本第41条（2017年第38条映射；待审草稿）"
+    "中华人民共和国律师法2026-09-01施行文本第41条为条文顺序推算，不生成现行全文引用"
   ],
   "legal_status": "pending_legal_review",
   "dispatch_allowed": false,
@@ -296,8 +448,8 @@
     {
       "id": "conservative_default_001",
       "expected_decisions": [
-        {"field": "entity", "necessity": "uncertain", "transform": "delete"},
-        {"field": "event", "necessity": "uncertain", "transform": "delete"}
+        {"field": "entity", "necessity": "required", "transform": "pseudonymize"},
+        {"field": "event", "necessity": "required", "transform": "pseudonymize"}
       ]
     }
   ]

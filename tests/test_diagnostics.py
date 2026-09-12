@@ -347,6 +347,15 @@ def test_doctor_ocr_available_with_registered_fake(monkeypatch):
     assert report["ok"] is True
 
 
+def test_doctor_whisper_unconfigured_when_disabled(monkeypatch):
+    monkeypatch.setenv("LEX_WHISPER_ENABLED", "0")
+    report = doctor_report()
+    check = report["checks"]["whisper"]
+    assert check["ok"] is True
+    assert check["status"] == "unconfigured"
+    assert report["ok"] is True
+
+
 def test_doctor_ocr_failed_when_construct_raises(monkeypatch):
     monkeypatch.setenv("LEX_OCR_ENABLED", "1")
     monkeypatch.setenv("LEX_OCR_MODELS_READY", "1")

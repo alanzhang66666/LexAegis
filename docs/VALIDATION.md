@@ -26,6 +26,7 @@
 | Compose 隔离探测 | `check-isolation` 五项探测全部为 true；`isolation_verified=true` 于 2026-09-08T09:39:34Z 写入隔离 API 卷。运行态探测不能替代宿主机防火墙与镜像供应链审计 |
 | Compose 正式合成真云 | 隔离阻断消失；其余门禁仍在；`formal_dispatch=blocked`。E1：`docker compose port api 8765` 在宿主机 28765 与 38765 recreate 后输出恰好为 `invalid IP:0`。容器内 `http://127.0.0.1:8765/api/v1/health` 为 200。宿主机 38765/28765/8765 未连通。能力面板已拆开 `host_publish` 与 isolation。**本轮跳过 Compose 登录页**（宿主机未发布），不主张浏览器可达隔离 |
 | 2026-09-10 本机隔离试点 | Compose `docker compose port api 8765`=`127.0.0.1:38765`；`check-isolation` 五项通过并写入隔离卷；10 案迁入后云端 evaluate 仍 409（四类攻击 `uncertain`，未改成 resisted）；隔离库试点包 `2.0.0-pilot.1` 已 publish，仓库 `packs/labor_v2_draft.json` 仍为 draft。`formal_dispatch=blocked`，非正式外发开通。 |
+| 2026-09-12 隔离栈攻击实跑 | Compose 五项仍为真（隔离卷）。工程基线：阳性对照 `identity=succeeded`；空辅助四类 `uncertain`；合成正式案 token 线 uncertain / succeeded / succeeded / uncertain。**不是**四类 resisted。0 案发送。见 [legal/隔离栈攻击实跑-2026-09-12.md](legal/隔离栈攻击实跑-2026-09-12.md) |
 | Unicode 路径、跨进程文件锁与进程退出 | 自动化测试通过 |
 | DOCX、文本/扫描 PDF、PNG/JPEG 与 OCR Provider 契约 | 自动化测试通过 |
 | 材料版本、历史锚点、事实失效和任务期间材料变化 | 自动化测试通过 |
@@ -64,7 +65,7 @@
 ## 已实现但仍需目标环境验证
 
 - 边侧 OpenAI-compatible 提取契约已实现。现行权重为 MiniCPM5-2B Q4_K_M（`edge-small`）。`probe-edge` 工程五项 8/8；工作台抽取正式案作业完成，8 条合法枚举 `field`，无竖线 `field`（契约冒烟，无法学分）。没有系统质量、共指准确率或盲测结论。
-- PaddleOCR 3.x 本地适配器、坐标和失败关闭路径已测试。本机已对 `examples/synthetic_scan.pdf` 做过 CPU 合成扫描冒烟（3 块 `kind=ocr`），**没有识别精度或硬件兼容性结论**。
+- PaddleOCR 3.x 本地适配器、坐标和失败关闭路径已测试。本机已对 `examples/synthetic_scan.pdf` 做过 CPU 合成扫描冒烟（3 块 `kind=ocr`），**没有识别精度或硬件兼容性结论**。RapidOCR / whisper.cpp 以假 provider 与失败关闭路径覆盖；有权重才跑的本机冒烟在 CI 与未声明资产的环境跳过，不写识别率或转写准确率，也不表示本机已安装。
 - 云端网关及双槽适配器已用测试替身验证。本机可配置 DeepSeek / 百炼密钥；正式合成案已点真云但门禁关闭，**没有真实外发成功记录**。
 - GitHub Actions 已定义 Windows、macOS、Linux、浏览器五视口以及 `linux/amd64`、`linux/arm64` 镜像检查；本记录不把尚未取得的远端运行结果写成已通过。
 - Compose 隔离探测已在本机通过并写入容器库（`isolation_verified=true`，2026-09-08T09:39:34Z）。E1 在 28765 与 38765 recreate 后 `docker compose port api 8765` 仍为 `invalid IP:0`；宿主机 38765/28765/8765 未连通。本轮未打开 Compose 登录页，不主张浏览器可达隔离。`host_publish` 与 isolation 已分层；`formal_dispatch=blocked`。`capabilities.validation.detail` 在 `isolation.status=available` 时写「隔离部署已记录」，云端外发与正式案件仍为「仍未验收」。

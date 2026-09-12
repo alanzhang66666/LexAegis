@@ -5,7 +5,9 @@ from .attacks import assert_isolated_payload
 from .cloud import build_dispatch_slot, chat_completions_target
 from .demo import SCENARIOS
 from .governance import frozen_protocol_runs, profile_not_dispatchable, protocols_for_pack, provider_checks
-from .disclosure import SEPARATE_JUDGMENT_NOTE, apply_decision_choice, build_disclosure_decision, infer_sub_purpose
+from .disclosure import (
+    GUIDE_VERSION, SEPARATE_JUDGMENT_NOTE, apply_decision_choice, build_disclosure_decision, infer_sub_purpose,
+)
 from .policy import assess, ensure_mappings
 from .registry import pack_field_ids, seed_packs
 from .task_engine import execute_local, registered_tasks, validate_task_payload
@@ -162,7 +164,8 @@ def queue_attack_run(repo, task_id, auxiliary_by_protocol=None):
 
 
 def _apply_review_status(ir):
-    ir["needs_review"] = any(b["kind"] in ("scan", "ocr") and not b["reviewed"] for b in ir["blocks"])
+    from .contracts import REVIEW_BLOCK_KINDS
+    ir["needs_review"] = any(b["kind"] in REVIEW_BLOCK_KINDS and not b["reviewed"] for b in ir["blocks"])
     ir["review_status"] = "pending" if ir["needs_review"] else "reviewed"
 
 
@@ -211,10 +214,11 @@ def confirm_document_block(repo, case_id, document_id, block_id):
     target = next((block for block in doc["ir"]["blocks"] if block["id"] == block_id), None)
     if target is None:
         raise DomainError("来源已过期，请刷新材料")
-    if target["kind"] not in ("ocr", "scan"):
-        raise DomainError("仅可确认 OCR 或扫描块")
+    from .contracts import REVIEW_BLOCK_KINDS
+    if target["kind"] not in REVIEW_BLOCK_KINDS:
+        raise DomainError("仅可确认 OCR、扫描或转写块")
     if not str(target.get("text") or "").strip():
-        raise DomainError("扫描页尚无文本，请先校正并转录")
+        raise DomainError("扫描或转写块尚无文本，请先校正并转录")
     new_ir = json.loads(json.dumps(doc["ir"]))
     for block in new_ir["blocks"]:
         if block["id"] == block_id:
@@ -518,7 +522,7 @@ def evaluate_task(repo, task_id):
         risk["findings"] = list(risk.get("findings") or []) + [SEPARATE_JUDGMENT_NOTE]
     if pack.get("disclosure_rules") and pack.get("legal_status") != "reviewed":
         risk["findings"] = list(risk.get("findings") or []) + [
-            "加班披露规则为法学待审草稿，非法源已发布文本，正式外发仍失败关闭。"
+            f"披露规则已按 {GUIDE_VERSION} 接入字段规格，案由包仍为 draft 且 dispatch_allowed=false，正式外发仍失败关闭。"
         ]
     cloud = task["transport"] == "cloud"
     local = task["transport"] == "local"

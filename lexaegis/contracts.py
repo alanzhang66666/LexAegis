@@ -7,11 +7,14 @@ class Contract(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+REVIEW_BLOCK_KINDS = ("ocr", "scan", "transcript")
+
+
 class SourceAnchor(Contract):
     id: str
     document_id: str
     document_version: int
-    kind: Literal["paragraph", "table", "pdf_text", "ocr", "scan"]
+    kind: Literal["paragraph", "table", "pdf_text", "ocr", "scan", "transcript"]
     text: str
     page: int | None = None
     bbox: list[float] | None = None
@@ -87,8 +90,8 @@ class ConditionalDisclosureRule(Contract):
     forbidden_default_transforms: list[str] = Field(default_factory=list)
     immutable_relations: list[str] = Field(default_factory=list)
     legal_source_ids: list[str] = Field(default_factory=list)
-    missing_item_strategy: Literal["review", "delete", "keep"] = "review"
-    unknown_condition_strategy: Literal["review"] = "review"
+    missing_item_strategy: Literal["review", "delete", "keep", "restrict"] = "restrict"
+    unknown_condition_strategy: Literal["review", "restrict"] = "restrict"
     preferred_transform: Literal["original_precision", "tokenize", "moderate_generalize", "delete"] = "original_precision"
     reason: str = ""
 

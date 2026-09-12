@@ -89,6 +89,12 @@ const labels: Record<string, string> = {
   claim: "主张",
   deny: "否认",
   hold_evidence: "持有证据",
+  claimed: "主张",
+  admitted: "承认",
+  court_found: "法院认定",
+  document_recorded: "文书记载",
+  not_stated: "未记载",
+  statement_status: "陈述状态",
   weekday: "工作日",
   rest_day: "休息日",
   holiday: "节假日",
@@ -355,6 +361,7 @@ export default function App() {
             source_ids: activeSource ? [activeSource.id] : [],
             confirmed: false,
             claim_stance: "",
+            statement_status: "",
             day_nature: "",
             hours: "",
             wage_base: "",
@@ -378,6 +385,7 @@ export default function App() {
           source_ids: form.source_ids,
           confirmed: form.confirmed,
           ...(form.claim_stance ? { claim_stance: form.claim_stance } : {}),
+          ...(form.statement_status ? { statement_status: form.statement_status } : {}),
           ...(form.day_nature ? { day_nature: form.day_nature } : {}),
           ...(form.hours !== "" && form.hours != null ? { hours: Number(form.hours) } : {}),
           ...(form.wage_base ? { wage_base: form.wage_base } : {}),
@@ -987,6 +995,7 @@ export default function App() {
                 ["edge", "边侧小模型"],
                 ["cloud", "云端网关"],
                 ["ocr", "本地 OCR"],
+                ["whisper", "本机转写"],
                 ["redteam", "风险攻击"],
                 ["isolation", "网络隔离"],
                 ["technical", "技术实现"],
@@ -1163,6 +1172,18 @@ export default function App() {
                       <option value="claim">{txt("claim")}</option>
                       <option value="deny">{txt("deny")}</option>
                       <option value="hold_evidence">{txt("hold_evidence")}</option>
+                    </select>
+                  </label>
+                  <label>
+                    陈述状态
+                    <select aria-label="陈述状态" value={form.statement_status || ""} onChange={(e) => setForm({ ...form, statement_status: e.target.value })}>
+                      <option value="">未填写</option>
+                      <option value="claimed">{txt("claimed")}</option>
+                      <option value="denied">{txt("deny")}</option>
+                      <option value="admitted">{txt("admitted")}</option>
+                      <option value="court_found">{txt("court_found")}</option>
+                      <option value="document_recorded">{txt("document_recorded")}</option>
+                      <option value="not_stated">{txt("not_stated")}</option>
                     </select>
                   </label>
                   <label>

@@ -6,20 +6,22 @@ from . import service
 from .contracts import AttackRun
 from .diagnostics import resolve_redteam_url
 from .governance import protocol_content_hash
+from .gpu_runtime import gpu_stage, maybe_idle_unload, parse_in_aux_process, parse_uses_gpu
 from .parsing import parse
-from .task_engine import validate_cloud_result
-from .providers import EdgeClient
+from .providers import EdgeClient, ExtractTruncatedError, merge_extract_facts
 from .storage import Store
+from .task_engine import validate_cloud_result
 from .util import app_dir, audit, digest, exclusive_lock, now, sign, uid
 
-EXTRACT_CHUNK_CHARS = 6000
+EXTRACT_CHUNK_CHARS = 14000
+EXTRACT_CHUNK_BLOCKS = 8
 
 
-def chunk_extract_blocks(blocks, max_chars=EXTRACT_CHUNK_CHARS):
+def chunk_extract_blocks(blocks, max_chars=EXTRACT_CHUNK_CHARS, max_blocks=EXTRACT_CHUNK_BLOCKS):
     batches, current, size = [], [], 0
     for block in blocks:
         length = len((block or {}).get("text") or "")
-        if current and size + length > max_chars:
+        if current and (size + length > max_chars or len(current) >= max_blocks):
             batches.append(current)
             current, size = [], 0
         current.append(block)
@@ -144,7 +146,13 @@ def process_one(store, root, gateway_client=None, redteam_client=None):
         if job["kind"] == "parse":
             with store.read() as repo:
                 doc = repo.get(job["payload"]["document_id"], "document")
-            result = parse(Path(root)/"files"/doc["path"], doc["id"], doc["version"])
+            material = Path(root) / "files" / doc["path"]
+            stage = "whisper" if material.suffix.lower() in {".mp3", ".m4a", ".wav", ".mp4"} else "ocr"
+            if parse_uses_gpu(material):
+                with gpu_stage(stage):
+                    result = parse_in_aux_process(material, doc["id"], doc["version"])
+            else:
+                result = parse(material, doc["id"], doc["version"])
             with store.transaction() as repo:
                 doc.update(ir=result, status="ready")
                 repo.put("document", doc, job["case_id"])
@@ -156,8 +164,16 @@ def process_one(store, root, gateway_client=None, redteam_client=None):
                 settings = repo.get("settings")
             client = EdgeClient(settings["edge_url"], settings["edge_model"])
             facts = []
-            for batch in chunk_extract_blocks(job["payload"]["blocks"]):
-                facts.extend(client.extract(batch))
+            batch_errors = []
+            with gpu_stage("extract"):
+                for batch in chunk_extract_blocks(job["payload"]["blocks"]):
+                    try:
+                        facts.extend(client.extract(batch, second_pass=True))
+                    except (ValueError, ExtractTruncatedError) as error:
+                        batch_errors.append(str(error)[:200])
+            facts = merge_extract_facts(facts)
+            if not facts:
+                raise ValueError(batch_errors[0] if batch_errors else "边侧模型未返回任何合法 field 的事实")
             with store.transaction() as repo:
                 case = service.get_case(repo, job["case_id"])
                 if case["revision"] != job["payload"]["revision"]:
@@ -313,6 +329,7 @@ def run():
         recover(store)
         while True:
             if not process_one(store, root):
+                maybe_idle_unload()
                 time.sleep(0.7)
 
 
