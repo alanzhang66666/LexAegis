@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import io
 import json
 import os
@@ -7,8 +8,9 @@ import time
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlparse
+from zipfile import ZipFile, BadZipFile
 import httpx
-from fastapi import FastAPI, HTTPException, Request, Response, UploadFile, File
+from fastapi import FastAPI, HTTPException, Request, Response, UploadFile, File, Form
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -189,12 +191,38 @@ class ProviderReviewInput(Input):
     status: Literal["reviewed", "expired"]
 
 
+LEGAL_FORM_TYPES = ("fa01_source", "fa02_authorization", "fa03_provider", "fa05_rules", "fa06_annotation")
+
+
+class LegalEvidenceAssessmentInput(Input):
+    status: Literal["needs_correction", "evidence_checked"]
+    findings: list[str] = Field(default_factory=list, max_length=30)
+    basis_references: list[str] = Field(default_factory=list, max_length=30)
+
+
+def public_legal_evidence(record: dict) -> dict:
+    return {key: value for key, value in record.items() if key != "path"}
+
+
+def assert_docx_payload(data: bytes) -> None:
+    try:
+        with ZipFile(io.BytesIO(data)) as package:
+            members = set(package.namelist())
+            if not {"[Content_Types].xml", "word/document.xml"} <= members:
+                raise HTTPException(400, "文件不是有效的 Word DOCX")
+    except BadZipFile:
+        raise HTTPException(400, "文件不是有效的 Word DOCX")
+
+
 def create_app(data_dir=None, password=None):
     explicit_password = password is not None
     root = Path(data_dir or app_dir()).resolve()
     root.mkdir(parents=True, exist_ok=True)
     restrict_mode(root, 0o700)
     (root / "files").mkdir(exist_ok=True)
+    legal_files = root / "legal-evidence"
+    legal_files.mkdir(exist_ok=True)
+    restrict_mode(legal_files, 0o700)
     store = Store(root / "app.sqlite")
     service.initialize(store)
     password = password or os.getenv("LEX_LOCAL_PASSWORD", "")
@@ -575,6 +603,89 @@ def create_app(data_dir=None, password=None):
             case = service.get_case(repo, case_id)
             docs = [{k: v for k, v in d.items() if k != "path"} for d in repo.list("document", case_id)]
             return {"case": case, "documents": docs, "facts": repo.list("fact", case_id), "tasks": repo.list("task", case_id), "jobs": repo.list("job", case_id), "audit": repo.list("audit", case_id), "ledger": repo.list("disclosure", case_id)}
+
+    @app.get("/api/v1/cases/{case_id}/legal-evidence")
+    def legal_evidence_list(case_id: str, request: Request):
+        require_role(request, "legal_reviewer")
+        with store.read() as repo:
+            service.get_case(repo, case_id)
+            return [public_legal_evidence(item) for item in repo.list("legal_evidence", case_id)]
+
+    @app.post("/api/v1/cases/{case_id}/legal-evidence")
+    async def legal_evidence_upload(case_id: str, request: Request,
+                                    form_type: str = Form(...), file: UploadFile = File(...)):
+        identity = require_role(request, "legal_reviewer")
+        if form_type not in LEGAL_FORM_TYPES:
+            raise HTTPException(400, "不支持的法学表单类型")
+        if Path(file.filename or "").suffix.lower() != ".docx":
+            raise HTTPException(400, "法学证据登记仅接受 DOCX")
+        with store.read() as repo:
+            case = service.get_case(repo, case_id)
+            if case["mode"] == "demo":
+                raise HTTPException(409, "演示案件不接收法学证据")
+        data = await file.read(10*1024*1024+1)
+        if not data or len(data) > 10*1024*1024:
+            raise HTTPException(413, "文件为空或超过 10MB")
+        assert_docx_payload(data)
+        sha256 = hashlib.sha256(data).hexdigest()
+        with store.transaction() as repo:
+            service.get_case(repo, case_id)
+            existing = [item for item in repo.list("legal_evidence", case_id)
+                        if item["form_type"] == form_type and item["sha256"] == sha256]
+            if existing:
+                return public_legal_evidence(existing[0])
+            ident = uid("legal-evidence")
+            path = legal_files / (ident + ".docx")
+            path.write_bytes(data)
+            restrict_mode(path, 0o600)
+            try:
+                record = {
+                    "id": ident, "case_id": case_id, "form_type": form_type,
+                    "name": Path(file.filename).name[:200], "path": path.name,
+                    "sha256": sha256, "size": len(data), "uploaded_by": identity["actor"],
+                    "uploaded_at": now(), "status": "received_unverified",
+                    "findings": [], "basis_references": [], "assessed_by": None, "assessed_at": None,
+                    "gate_pass": False,
+                }
+                repo.put("legal_evidence", record, case_id)
+                audit(repo, case_id, "legal_evidence.uploaded", evidence_id=ident,
+                      form_type=form_type, sha256=sha256, actor=identity["actor"])
+            except Exception:
+                path.unlink(missing_ok=True)
+                raise
+        return public_legal_evidence(record)
+
+    @app.get("/api/v1/cases/{case_id}/legal-evidence/{evidence_id}/file")
+    def legal_evidence_file(case_id: str, evidence_id: str, request: Request):
+        require_role(request, "legal_reviewer")
+        with store.read() as repo:
+            record = repo.get(evidence_id, "legal_evidence")
+        if record["case_id"] != case_id:
+            raise HTTPException(404)
+        return FileResponse(legal_files / record["path"], filename=record["name"])
+
+    @app.put("/api/v1/cases/{case_id}/legal-evidence/{evidence_id}/assessment")
+    def legal_evidence_assess(case_id: str, evidence_id: str,
+                              body: LegalEvidenceAssessmentInput, request: Request):
+        identity = require_role(request, "legal_reviewer")
+        findings = [item.strip() for item in body.findings if item.strip()]
+        basis = [item.strip() for item in body.basis_references if item.strip()]
+        if any(len(item) > 500 for item in findings + basis):
+            raise HTTPException(400, "单项记录超过 500 字")
+        if body.status == "needs_correction" and not findings:
+            raise HTTPException(400, "待补正状态须写具体问题")
+        if body.status == "evidence_checked" and (findings or not basis):
+            raise HTTPException(400, "证据核齐须清空待补项并填写证据引用")
+        with store.transaction() as repo:
+            record = repo.get(evidence_id, "legal_evidence")
+            if record["case_id"] != case_id:
+                raise HTTPException(404)
+            record.update(status=body.status, findings=findings, basis_references=basis,
+                          assessed_by=identity["actor"], assessed_at=now(), gate_pass=False)
+            repo.put("legal_evidence", record, case_id)
+            audit(repo, case_id, "legal_evidence.assessed", evidence_id=evidence_id,
+                  sha256=record["sha256"], status=body.status, actor=identity["actor"])
+            return public_legal_evidence(record)
 
     @app.post("/api/v1/cases/{case_id}/documents")
     async def upload(case_id: str, request: Request, file: UploadFile = File(...)):
