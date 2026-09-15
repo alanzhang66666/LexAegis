@@ -22,7 +22,7 @@ import {
   Sun,
 } from "lucide-react";
 import { Dialog, Empty, StageStepper, Tag } from "./components/ui";
-import { BenchmarkCenter, LegalPackCenter, ProviderCenter, UserCenter } from "./pages/GovernanceCenters";
+import { BenchmarkCenter, LegalEvidenceCenter, LegalPackCenter, ProviderCenter, UserCenter } from "./pages/GovernanceCenters";
 import { RiskWorkspace } from "./workspaces/RiskWorkspace";
 import { RestorationWorkspace } from "./workspaces/RestorationWorkspace";
 import { SourceViewer } from "./workspaces/SourceViewer";
@@ -508,12 +508,13 @@ export default function App() {
           {[
             { id: "cases", name: "案件工作台", icon: FolderOpen },
             { id: "registry", name: "法学规则中心", icon: Layers3 },
+            { id: "legal-evidence", name: "法学证据登记", icon: FolderOpen },
             { id: "providers", name: "服务商治理", icon: LockKeyhole },
             { id: "benchmark", name: "隔离实验", icon: CircleHelp },
             { id: "settings", name: "运行配置", icon: Settings2 },
             { id: "users", name: "本地用户", icon: Users },
           ].filter(item=>!["benchmark","settings","users"].includes(item.id)||principal?.role==="admin")
-            .filter(item=>item.id!=="providers"||["admin","legal_reviewer"].includes(principal?.role))
+            .filter(item=>!["providers","legal-evidence"].includes(item.id)||["admin","legal_reviewer"].includes(principal?.role))
             .map((item) => (
             <button
               key={item.id}
@@ -1045,6 +1046,7 @@ export default function App() {
           </div>
         )}
         {page === "providers" && <ProviderCenter providers={boot?.providers} request={api} refresh={reload} busy={busy}/>}
+        {page === "legal-evidence" && <LegalEvidenceCenter cases={boot?.cases} request={api}/>}
         {page === "benchmark" && <BenchmarkCenter protocols={boot?.risk_protocols} request={api} refresh={reload}/>}
         {page === "registry" && <LegalPackCenter packs={boot?.packs} tasks={boot?.task_definitions||boot?.tasks} request={api}/>}
         {page === "users" && <UserCenter request={api}/>}
@@ -1393,6 +1395,7 @@ function pageCrumb(page: string, caseName?: string) {
       cases: "案件工作台",
       registry: "法学规则中心",
       providers: "服务商治理",
+      "legal-evidence": "法学证据登记",
       benchmark: "隔离实验与风险协议",
       settings: "运行配置",
       users: "本地用户与角色",

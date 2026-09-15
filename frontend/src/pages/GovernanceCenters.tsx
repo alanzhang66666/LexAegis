@@ -61,6 +61,73 @@ export function ProviderCenter({providers=[],request,refresh,busy}:{providers?:O
   </div>;
 }
 
+const legalFormLabels: Record<string,string> = {
+  fa01_source:"法 01 · 来源与人工审查", fa02_authorization:"法 02 · 本次与组织授权",
+  fa03_provider:"法 03 · 本账号服务商证据", fa05_rules:"法 05 · 规则签署",
+  fa06_annotation:"法 06 · 双人标注与仲裁",
+};
+
+export function LegalEvidenceCenter({cases=[],request}:{cases?:Obj[];request:RequestFn}) {
+  const realCases=cases.filter(item=>item.mode!=="demo");
+  const [caseId,setCaseId]=useState(""),[formType,setFormType]=useState("fa01_source");
+  const [file,setFile]=useState<File|null>(null),[items,setItems]=useState<Obj[]>([]);
+  const [notes,setNotes]=useState<Record<string,string>>({}),[basis,setBasis]=useState<Record<string,string>>({});
+  const [error,setError]=useState(""),[busy,setBusy]=useState(false);
+  useEffect(()=>{if(!caseId&&realCases.length)setCaseId(realCases[0].id)},[cases,caseId]);
+  useEffect(()=>{
+    if(!caseId){setItems([]);return}
+    request(`/cases/${caseId}/legal-evidence`).then(setItems).catch(e=>setError((e as Error).message));
+  },[caseId]);
+  const reload=async()=>{if(caseId)setItems(await request(`/cases/${caseId}/legal-evidence`))};
+  const upload=async()=>{
+    if(!caseId||!file)return;
+    setBusy(true);setError("");
+    try{
+      const body=new FormData();body.append("form_type",formType);body.append("file",file);
+      await request(`/cases/${caseId}/legal-evidence`,"POST",body);
+      setFile(null);await reload();
+    }catch(e){setError((e as Error).message)}finally{setBusy(false)}
+  };
+  const assess=async(item:Obj,status:"needs_correction"|"evidence_checked")=>{
+    setBusy(true);setError("");
+    try{
+      await request(`/cases/${caseId}/legal-evidence/${item.id}/assessment`,"PUT",{
+        status,findings:status==="needs_correction"?split(notes[item.id]||""):[],
+        basis_references:split(basis[item.id]||""),
+      });if(status==="evidence_checked")setNotes(previous=>({...previous,[item.id]:""}));
+      await reload();
+    }catch(e){setError((e as Error).message)}finally{setBusy(false)}
+  };
+  return <div className="content governance-page">
+    <div className="section-heading"><div><div className="eyebrow">受控材料</div><h1>法学证据登记</h1>
+      <p>上传表格后系统只记录原件与 SHA-256。核验结论在此留痕；门禁通过仍由对应运行回执判断。</p></div></div>
+    <div className="legal-block"><ShieldAlert/><div><h3>默认保持外发阻断</h3>
+      <p>“已收到”或“证据已核齐”不会把服务商改为 reviewed、规则改为 published，也不会批准请求。</p></div></div>
+    {!realCases.length?<Panel title="暂无正式案件"><p>先在案件工作台建立正式案件，再登记法学表格。</p></Panel>:<>
+      <Panel title="上传已填写表格"><div className="governance-form">
+        <label>对应案件<select value={caseId} onChange={e=>setCaseId(e.target.value)}>{realCases.map(item=><option key={item.id} value={item.id}>{item.name} · {item.id}</option>)}</select></label>
+        <label>表格类别<select value={formType} onChange={e=>setFormType(e.target.value)}>{Object.entries(legalFormLabels).map(([key,label])=><option key={key} value={key}>{label}</option>)}</select></label>
+        <label>DOCX 原件<input type="file" accept=".docx" onChange={e=>setFile(e.target.files?.[0]||null)}/></label>
+      </div><Button variant="primary" disabled={!file||busy} onClick={upload}>上传并计算哈希</Button></Panel>
+      {items.map(item=><Panel key={item.id} title={legalFormLabels[item.form_type]||item.form_type}
+        actions={<StatusBadge tone={item.status==="evidence_checked"?"green":"amber"}>{item.status==="received_unverified"?"待核验":item.status==="needs_correction"?"待补正":"证据已核齐"}</StatusBadge>}>
+        <p>{item.name} · SHA-256：<code>{item.sha256}</code></p>
+        <p>上传：{item.uploaded_by} · {item.uploaded_at}；核验：{item.assessed_by||"尚无"}。门禁通过：否。</p>
+        {!!item.findings?.length&&<p>待补项：{item.findings.join("；")}</p>}
+        <div className="governance-form">
+          <label>待补问题（一行一项）<textarea rows={3} value={notes[item.id]??item.findings?.join("\n")??""} onChange={e=>setNotes({...notes,[item.id]:e.target.value})}/></label>
+          <label>证据位置/哈希或系统回执（一行一项）<textarea rows={3} value={basis[item.id]??item.basis_references?.join("\n")??""} onChange={e=>setBasis({...basis,[item.id]:e.target.value})}/></label>
+        </div><div className="panel-actions">
+          <button onClick={()=>assess(item,"needs_correction")} disabled={busy}>记录待补正</button>
+          <button onClick={()=>assess(item,"evidence_checked")} disabled={busy}>证据已核齐</button>
+          <a href={`/api/v1/cases/${caseId}/legal-evidence/${item.id}/file`}>下载受控原件</a>
+        </div>
+      </Panel>)}
+    </>}
+    {error&&<p className="error">{error}</p>}
+  </div>;
+}
+
 const protocolDefault={id:"",kind:"identity",version:"1.0",status:"draft",attacker_view:["wire_payload"],
   auxiliary_data:[],query_budget:3,time_budget_seconds:30,success_criteria:{operator:"gte",metric:"attack_score"},
   threshold:.5,random_seed:23,content_hash:null};
