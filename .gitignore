@@ -20,3 +20,7 @@ models/**
 examples/
 # Local real-case intake; runtime copies live in gitignored .data/real_cases/
 data/真实案件/
+# Working outbound packets live in .data/outbound_packets/ (covered by .data/).
+# Keep these if a packet is dropped at repo root by mistake.
+LA001_D_外发交付包_*/
+LA001_D_外发交付包_*.zip

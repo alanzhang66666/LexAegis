@@ -1,6 +1,6 @@
-# 0.9 待发布工程验证记录
+# V1.0 工程验证记录
 
-产品版本现为 **0.9.0 待发布（`0.9.0rc0`）**，不是正式发行版。下文 2026-09-08/09 条目仍是 0.2.0 周期的本机证据，未因改号重跑。
+产品版本现为 **V1.0**（`1.0.0`），非正式发行。下文 2026-09-08/09 条目仍是 0.2.0 周期的本机证据，未因改号重跑。
 
 验证日期：2026-09-08。当前验证设备为 Windows / AMD64、Python 3.13、Docker Compose v5.5.0 / Engine 29.7.2。本文只记录实际执行证据；不填充隐私风险降低率、法律任务准确率或摘要质量等未经盲测的数据。
 
@@ -8,7 +8,7 @@
 
 | 验证项 | 实际结果 |
 | --- | --- |
-| `python -m pytest -q` | 2026-09-09 本机 216 项通过、1 项跳过 |
+| `python -m pytest -q` | 2026-09-14 本机 **283 项通过、3 项跳过**（工作树含 `d_path`）。此前 2026-09-09 记录为 216 过 / 1 跳过 |
 | `lexaegis dataset validate` | `ok=true`；catalog 仅 `mock_labor` 1.0.0，`dispatch_allowed=false`。本机 `.data/semi_labor_v1` 脚手架存在且契约通过（`legal_annotation_status=pending`，`dispatch_allowed=false`），未写入 `data/catalog.json`，无 `data/semi_labor_v1` |
 | TypeScript 类型检查与 Vite 生产构建 | 2026-09-08 三色系本轮：`pnpm exec tsc --noEmit` 通过；`pnpm build` 通过，1588 个模块 |
 | 远端 CI | 未取得 / 本轮不跑 |

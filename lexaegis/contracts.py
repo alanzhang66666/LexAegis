@@ -1,6 +1,8 @@
 """Versioned contracts. Domain packs contain data, never executable expressions."""
+from enum import Enum
 from typing import Any, Literal
-from pydantic import BaseModel, ConfigDict, Field
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class Contract(BaseModel):
@@ -61,6 +63,107 @@ class LegalSourceRef(Contract):
     snapshot: str = ""
     historical_mapping: dict[str, str] = Field(default_factory=dict)
     citation_status: Literal["draft_reference", "published"] = "draft_reference"
+    tier: Literal[
+        "法律", "行政法规", "部门规章", "司法解释", "地方性法规", "地方政府规章",
+        "国家标准", "项目自定规则", "参考案例",
+    ] = "法律"
+    provision_text: str = ""
+    norm_summary: str = ""
+    applies_to: str = ""
+    trigger: str = ""
+    consequence: str = ""
+    review_required: bool = False
+    review_trigger: str = ""
+    rule_nature: Literal["statutory", "standard_reference", "provider_terms", "project_control"] = "statutory"
+    granularity: Literal["article", "instrument_scope"] = "article"
+    merged_from: Literal["v0_1_base", "v0_2_added", "v0_1_v0_2_merged", "pack_seed"] = "pack_seed"
+
+
+class ManualReviewCondition(Contract):
+    id: str = Field(pattern=r"^[a-z][a-z0-9_]{1,80}$")
+    trigger: str
+    why_machine_cannot: str = ""
+    what_to_verify: list[str] = Field(default_factory=list)
+    legal_source_ids: list[str] = Field(default_factory=list)
+    gate_id: Literal["G0", "G2", "G3", "G5", "G7", "G8", "G9"] = "G0"
+    blocking: bool = True
+
+
+class SensitiveObjectRule(Contract):
+    id: str = Field(pattern=r"^[a-z][a-z0-9_]{1,80}$")
+    object_type: str
+    object_group: Literal["personal_information", "other_sensitive_object"]
+    carriers: list[str] = Field(default_factory=list)
+    is_sensitive_pi: bool = False
+    default_handling: str = ""
+    provision_text: str = ""
+    norm_summary: str = ""
+    detector_categories: list[str] = Field(default_factory=list)
+    review_condition_ids: list[str] = Field(default_factory=list)
+    legal_source_ids: list[str] = Field(default_factory=list)
+    unresolved_citations: list[str] = Field(default_factory=list)
+    rule_nature: Literal["statutory", "standard_reference", "project_control"] = "project_control"
+
+
+class NotHardBanCategory(Contract):
+    id: str = Field(pattern=r"^[a-z][a-z0-9_]{1,80}$")
+    category: str
+    why_not_automatic_ban: str = ""
+    what_to_judge: list[str] = Field(default_factory=list)
+
+
+class ReplyTemplate(Contract):
+    id: str = Field(pattern=r"^[a-z][a-z0-9_]{1,80}$")
+    disposition: Literal["allowed", "needs_minimization", "needs_verification", "prohibited"]
+    title: str
+    body: str
+
+
+class ConflictChecklistStep(Contract):
+    id: str = Field(pattern=r"^[a-z][a-z0-9_]{1,80}$")
+    step: int = Field(ge=1, le=6)
+    prompt: str
+
+
+class ProhibitionFinding(Contract):
+    category: Literal[
+        "state_secret", "court_confidentiality_order", "trade_secret_restriction",
+        "communicable_disease", "other_special_law",
+    ]
+    protected_object_confirmed: bool = False
+    rule_prohibits_current_act: bool = False
+    applies_to_current_context: bool = False
+    minimization_insufficient: bool = False
+    legal_source_ids: list[str] = Field(default_factory=list)
+    basis_note: str = ""
+    confirmed_by: str | None = None
+    confirmed_at: str | None = None
+
+
+class ManualApprovalRecord(Contract):
+    id: str
+    case_id: str
+    task_id: str
+    request_hash: str
+    material_version: int = Field(ge=0)
+    conclusion: Literal[
+        "allow_processing", "allow_after_minimization",
+        "needs_further_verification", "prohibit_external_processing",
+    ]
+    reason: str = Field(min_length=1)
+    reviewed_condition_ids: list[str] = Field(default_factory=list)
+    legal_source_ids: list[str] = Field(default_factory=list)
+    prohibition_findings: list[ProhibitionFinding] = Field(default_factory=list)
+    minimization_actions: list[str] = Field(default_factory=list)
+    acknowledged_risk_notices: bool = False
+    reviewer: str
+    reviewed_at: str
+    scope_note: str = ""
+    fact_premise: str = ""
+    authority_judgment: str = ""
+    external_processing_note: str = ""
+    minimization_note: str = ""
+    final_basis: str = ""
 
 
 class ImmutableRelation(Contract):
@@ -172,7 +275,11 @@ class DomainPackV2(Contract):
     direct_identifier_patterns: list[dict[str, Any]] = Field(default_factory=list)
     risk_weights: dict[str, float] = Field(default_factory=dict)
     forbidden_terms: list[str] = Field(default_factory=list)
-    manual_review_conditions: list[str] = Field(default_factory=list)
+    manual_review_conditions: list[ManualReviewCondition] = Field(default_factory=list)
+    sensitive_object_rules: list[SensitiveObjectRule] = Field(default_factory=list)
+    not_hard_ban_categories: list[NotHardBanCategory] = Field(default_factory=list)
+    reply_templates: list[ReplyTemplate] = Field(default_factory=list)
+    conflict_checklist: list[ConflictChecklistStep] = Field(default_factory=list)
     references: list[str]
     effective_from: str | None = None
     effective_until: str | None = None
@@ -220,9 +327,13 @@ class RiskAssessment(Contract):
     completion: Literal["complete", "incomplete", "error"]
     findings: list[str]
     blockers: list[str]
+    gates: list[dict[str, Any]] = Field(default_factory=list)
     attacks: list[dict]
     ledger_version: int
     approval_allowed: bool = False
+    disposition: Literal["allowed", "needs_minimization", "needs_verification", "prohibited"] = "allowed"
+    system_readiness: Literal["ready", "not_ready"] = "ready"
+    demo_exception: bool = False
 
 
 class DetectionFinding(Contract):
@@ -424,3 +535,301 @@ class TaskArtifact(Contract):
     claims: list[dict]
     provenance: Literal["simulation", "cloud", "local_deterministic"]
     confirmed: bool = False
+
+
+# Formal outbound release contracts. These types intentionally default to
+# fail-closed states; a caller must supply reviewed evidence before any pass.
+GateID = Literal["G0", "G1", "G2", "G3", "G5", "G6", "G7", "G8", "G9", "G10", "G-product"]
+GateStatus = Literal["unknown", "pending", "pass", "fail", "expired", "stale", "revoked", "not_applicable"]
+ReleaseTuple = dict[str, str]
+
+
+class FormalReleaseState(str, Enum):
+    BLOCKED = "blocked"
+    EVIDENCE_PENDING = "evidence_pending"
+    FROZEN = "frozen"
+    APPROVAL_ELIGIBLE = "approval_eligible"
+    APPROVED_ONCE = "approved_once"
+    RESERVED = "reserved"
+    CLAIMED = "claimed"
+    CONSUMED_COMPLETE = "consumed_complete"
+    CONSUMED_UNKNOWN = "consumed_unknown"
+    FAILED_BEFORE_DISCLOSURE = "failed_before_disclosure"
+    REVOKED = "revoked"
+    EXPIRED = "expired"
+
+
+class LegalSourceAssetPointer(Contract):
+    asset_id: str = Field(min_length=1)
+    content_hash: str = Field(min_length=1)
+    source_path: str = ""
+
+
+class LegalSourceRecord(Contract):
+    id: str = Field(min_length=1)
+    canonical_title: str = Field(min_length=1)
+    articles: list[str] = Field(default_factory=list)
+    provision_hash: str = Field(min_length=1)
+    provision_text_ref: str = Field(min_length=1)
+    effective_from: str | None = None
+    effective_to: str | None = None
+    citation_status: Literal[
+        "unknown", "draft_reference", "verified_text", "historical", "superseded"
+    ] = "unknown"
+    rule_nature: Literal[
+        "unknown", "statutory", "standard_reference", "provider_terms", "project_control"
+    ] = "unknown"
+    granularity: Literal["unknown", "article", "instrument_scope"] = "unknown"
+    source_assets: list[LegalSourceAssetPointer] = Field(min_length=1)
+    duplicate_group_id: str | None = None
+
+
+class CitationMapping(Contract):
+    id: str = Field(min_length=1)
+    instrument: str = Field(min_length=1)
+    from_article: str = Field(min_length=1)
+    to_article: str = Field(min_length=1)
+    effective_from: str = Field(min_length=1)
+    mapping_basis: Literal[
+        "unknown", "official_text", "amendment_sequence", "human_verified"
+    ] = "unknown"
+    basis_artifact_hash: str = Field(min_length=1)
+    status: Literal["pending", "verified", "rejected"] = "pending"
+    note: str = ""
+
+    @field_validator("status")
+    @classmethod
+    def amendment_sequence_cannot_verify_full_text(cls, value, info):
+        if info.data.get("mapping_basis") == "amendment_sequence" and value == "verified":
+            raise ValueError("仅凭条文顺序推算不得标记为已核验全文")
+        return value
+
+
+class EvidenceArtifact(Contract):
+    id: str = Field(min_length=1)
+    content_hash: str = Field(min_length=1)
+    media_type: str = Field(min_length=1)
+    source_path_hint: str = ""
+    template_kind: str | None = None
+    created_at: str = Field(min_length=1)
+    registered_by: str = Field(min_length=1)
+    storage_ref: str = Field(min_length=1)
+
+
+class GateReceiptInput(Contract):
+    """Structured fields transcribed from an existing legal-computing template."""
+
+    gate_id: GateID
+    tuple: ReleaseTuple
+    template_kind: str = Field(min_length=1)
+    template_version: str | None = None
+    template_artifact_id: str | None = None
+    bound_versions: dict[str, str] = Field(default_factory=dict)
+    request_hash: str | None = None
+    conclusion: Literal["unknown", "pending", "pass", "fail"] = "unknown"
+    evidence_artifact_ids: list[str] = Field(default_factory=list)
+    confirmed_by: str | None = None
+    confirmed_role: str | None = None
+    confirmed_at: str | None = None
+    valid_from: str | None = None
+    valid_until: str | None = None
+    supersedes_id: str | None = None
+    revoked_at: str | None = None
+    revocation_reason: str | None = None
+    adopted_fact_ids: list[str] = Field(default_factory=list)
+    authorization_statement: str | None = None
+    organization_authorization_artifact_id: str | None = None
+    technical_evidence_artifact_id: str | None = None
+    technical_evidence_hash: str | None = None
+    technical_evidence_request_hash: str | None = None
+
+
+class GateEvidenceReceipt(Contract):
+    id: str = Field(min_length=1)
+    gate_id: GateID
+    tuple: ReleaseTuple
+    template_kind: str | None = None
+    template_version: str | None = None
+    template_artifact_id: str | None = None
+    bound_versions: dict[str, str] = Field(default_factory=dict)
+    request_hash: str | None = None
+    conclusion: Literal["unknown", "pending", "pass", "fail"] = "unknown"
+    evidence_artifact_ids: list[str] = Field(default_factory=list)
+    evidence_manifest_hash: str = ""
+    confirmed_by: str | None = None
+    confirmed_role: str | None = None
+    confirmed_at: str | None = None
+    valid_from: str | None = None
+    valid_until: str | None = None
+    supersedes_id: str | None = None
+    revoked_at: str | None = None
+    revocation_reason: str | None = None
+    adopted_fact_ids: list[str] = Field(default_factory=list)
+    authorization_statement: str | None = None
+    organization_authorization_artifact_id: str | None = None
+    technical_evidence_artifact_id: str | None = None
+    technical_evidence_hash: str | None = None
+    technical_evidence_request_hash: str | None = None
+
+
+RoleActionRole = Literal["legal_reviewer", "case_operator", "approver", "admin"]
+RoleActionKind = Literal[
+    "legal_confirmation", "engineering_record", "g10_approval", "evidence_revocation"
+]
+
+
+class EvidenceRoleAction(Contract):
+    """One role-specific action performed by one stable local identity.
+
+    Legal confirmation, engineering records, and approver actions are stored as
+    separate records with their own role, actor, and time. One natural person
+    acting under two roles produces two role actions bound to the same
+    ``actor``, never two independent reviewers.
+    """
+
+    id: str = Field(min_length=1)
+    actor: str = Field(min_length=1)
+    role: RoleActionRole
+    action: RoleActionKind
+    gate_id: GateID
+    receipt_id: str = Field(min_length=1)
+    template_kind: str | None = None
+    request_hash: str | None = None
+    acted_at: str = Field(min_length=1)
+    recorded_at: str = Field(min_length=1)
+    recorded_by: str = Field(min_length=1)
+
+
+class ReleaseBuildManifest(Contract):
+    id: str = Field(min_length=1)
+    source_commit: str = ""
+    worktree_clean: bool = False
+    source_tree_hash: str = ""
+    documentation_hash: str = ""
+    frontend_dist_hash: str = ""
+    wheel_hash: str = ""
+    lockfile_hashes: dict[str, str] = Field(default_factory=dict)
+    runtime_pack_hash: str = ""
+    container_image_digests: dict[str, str] = Field(default_factory=dict)
+    migration_revision: str = ""
+    validation_results_hash: str = ""
+    status: Literal["pending", "verified", "revoked"] = "pending"
+    created_at: str = Field(min_length=1)
+    verified_by: str | None = None
+
+
+class FormalReleasePolicy(Contract):
+    id: str = Field(min_length=1)
+    tuple: ReleaseTuple
+    build_manifest_hash: str = ""
+    allowed_target: str = ""
+    allowed_model: str = ""
+    allowed_provider_profile_hash: str = ""
+    maximum_dispatches: int = Field(default=1, ge=1)
+    consumed_dispatches: int = Field(default=0, ge=0)
+    valid_from: str | None = None
+    valid_until: str | None = None
+    status: Literal["blocked", "armed_once", "consumed", "revoked", "expired"] = "blocked"
+    installed_by: str | None = None
+    installed_at: str | None = None
+
+    @field_validator("tuple")
+    @classmethod
+    def require_first_release_scope(cls, value: ReleaseTuple) -> ReleaseTuple:
+        expected = {
+            "case_id": "LA-001",
+            "purpose": "R_fact_summary",
+            "recipient": "D_DeepSeek_official_API",
+        }
+        if value != expected:
+            raise ValueError("first-release policy requires the exact LA-001 × R × D scope")
+        return value
+
+
+class FrozenFormalRequest(Contract):
+    request_id: str = Field(min_length=1)
+    tuple: ReleaseTuple
+    wire_payload: dict[str, Any]
+    prompt: str
+    target: str = Field(min_length=1)
+    model: str = Field(min_length=1)
+    provider_profile_hash: str = Field(min_length=1)
+    runtime_pack_hash: str = Field(min_length=1)
+    material_versions: dict[str, int]
+    rule_versions: dict[str, str]
+    task_version: int = Field(ge=1)
+    mapping_version: int = Field(ge=1)
+    ledger_version: int = Field(ge=0)
+    combination_input_hash: str = Field(min_length=1)
+    attack_protocol_hashes: dict[str, str]
+    build_manifest_hash: str = Field(min_length=1)
+    request_hash: str = Field(min_length=1)
+    created_at: str = Field(min_length=1)
+
+
+class GateHit(Contract):
+    gate_id: GateID
+    status: GateStatus = "unknown"
+    kind: Literal["unknown", "prohibition", "verification", "minimization", "engineering"] = "unknown"
+    reason_code: str = ""
+    message: str = ""
+    evidence_ids: list[str] = Field(default_factory=list)
+
+
+class GateDecision(Contract):
+    phase: Literal["unknown", "evaluate", "approve", "enqueue", "send", "gateway"] = "unknown"
+    request_hash: str = ""
+    hits: list[GateHit] = Field(default_factory=list)
+    snapshot_hash: str = ""
+    disposition: Literal[
+        "unknown", "allowed", "needs_minimization", "needs_verification", "prohibited"
+    ] = "unknown"
+    system_readiness: Literal["blocked", "ready", "not_ready"] = "blocked"
+    approval_eligible: bool = False
+    dispatch_allowed: bool = False
+    evaluated_at: str | None = None
+
+
+class IsolationReceipt(Contract):
+    id: str = Field(min_length=1)
+    request_hash: str = ""
+    build_manifest_hash: str = ""
+    deployment_mode: Literal["unknown", "isolated"] = "unknown"
+    deployment_identity_hash: str = ""
+    compose_hash: str = ""
+    image_digests: dict[str, str] = Field(default_factory=dict)
+    api_no_egress: bool = False
+    worker_no_egress: bool = False
+    gateway_no_case_volume: bool = False
+    redteam_no_secrets: bool = False
+    benchmark_no_secrets: bool = False
+    probe_output_hash: str = ""
+    host_firewall_evidence_hash: str = ""
+    supply_chain_evidence_hash: str = ""
+    generated_at: str | None = None
+    expires_at: str | None = None
+    attested_by: str | None = None
+    legal_confirmation_receipt_id: str | None = None
+    status: Literal[
+        "pending_legal_confirmation", "valid", "failed", "revoked", "expired"
+    ] = "pending_legal_confirmation"
+
+
+class OneTimeDispatchGrant(Contract):
+    id: str = Field(min_length=1)
+    nonce: str = Field(min_length=1)
+    request_hash: str = Field(min_length=1)
+    gate_snapshot_hash: str = Field(min_length=1)
+    evidence_manifest_hash: str = Field(min_length=1)
+    build_manifest_hash: str = Field(min_length=1)
+    release_policy_id: str = Field(min_length=1)
+    tuple: ReleaseTuple
+    actor: str = ""
+    actor_role: Literal["unknown", "approver"] = "unknown"
+    issued_at: str | None = None
+    expires_at: str | None = None
+    state: Literal[
+        "pending", "issued", "reserved", "claimed", "consumed", "revoked", "expired"
+    ] = "pending"
+    claimed_at: str | None = None
+    gateway_attempt_id: str | None = None

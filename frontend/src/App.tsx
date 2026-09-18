@@ -37,6 +37,25 @@ const PALETTES = [
 ] as const;
 type Palette = (typeof PALETTES)[number][0];
 
+function BrandLockup({ wordmark = true }: { wordmark?: boolean }) {
+  return (
+    <>
+      <img
+        src="/logo-mark.png"
+        alt={wordmark ? "" : "案隐盾 LexAegis"}
+        width={189}
+        height={230}
+      />
+      {wordmark ? (
+        <div className="brand-wordmark">
+          <strong>案隐盾</strong>
+          <span>LexAegis</span>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
 function storedPalette(): Palette {
   const value = localStorage.getItem("lex_palette");
   return value === "ink" || value === "dusk" || value === "forest" ? value : "forest";
@@ -134,6 +153,9 @@ const labels: Record<string, string> = {
   not_processable: "不可处理",
   unverified: "未验证",
   "核对加班": "核对加班",
+  "劳动关系经过与争议状态": "劳动关系经过与争议状态",
+  "欠薪、解除与经济补偿经过": "欠薪、解除与经济补偿经过",
+  "工伤待遇争议经过": "工伤待遇争议经过",
   fact_summary: "事实摘要",
   timeline: "时间线",
   evidence_inventory: "证据整理",
@@ -172,7 +194,12 @@ const labels: Record<string, string> = {
   cross_round: "跨轮关联",
 };
 const attackLabels: Record<string, string> = { resisted: "工程基线未突破 · 非正式结论", succeeded: "工程基线检出 · 阻断", uncertain: "无候选或不确定 · 阻断", error: "执行错误 · 阻断", not_run: "未运行 · 阻断", not_applicable: "不适用 · 不计通过" };
+const PRODUCT_RELEASE = "V1.0";
 const txt = (key: string) => labels[key] || key;
+function formalDispatchValue(cap?: Obj | null) {
+  const value = cap?.validation?.formal_dispatch;
+  return typeof value === "string" && value ? value : "";
+}
 function isAbortError(error: unknown) {
   return error instanceof DOMException && error.name === "AbortError";
 }
@@ -218,6 +245,7 @@ export default function App() {
     [taskId, setTaskId] = useState("");
   const [source, setSource] = useState<Obj | null>(null),
     [cap, setCap] = useState<Obj | null>(null),
+    [health, setHealth] = useState<Obj | null>(null),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
     [notice, setNotice] = useState("");
@@ -263,6 +291,15 @@ export default function App() {
       .finally(() => setLoginReady(true));
     return () => controller.abort();
   }, [reload]);
+  useEffect(() => {
+    const controller = new AbortController();
+    api("/health", "GET", undefined, controller.signal)
+      .then(setHealth)
+      .catch((error) => {
+        if (isAbortError(error)) return;
+      });
+    return () => controller.abort();
+  }, []);
   useEffect(() => {
     if (!logged) return;
     api("/capabilities")
@@ -437,13 +474,10 @@ export default function App() {
         <div className="login-appearance">
           <AppearanceSwitch theme={theme} palette={palette} setTheme={setTheme} setPalette={setPalette}/>
         </div>
-        <div className="login-brand">
-          <ShieldCheck size={38} />
-          <b>
-            LexAegis<span>案隐盾</span>
-          </b>
-        </div>
         <div className="login-card">
+          <div className="login-lockup">
+            <BrandLockup />
+          </div>
           <div className="eyebrow">本地工作空间</div>
           <h1 className="display">
             让案件信息，
@@ -486,7 +520,11 @@ export default function App() {
           </small>
         </div>
         <div className="login-footer">
-          LEXAEGIS / 0.9 待发布 <span>按目的保护</span>
+          <span className="footer-brand">
+            <BrandLockup wordmark={false} />
+            {PRODUCT_RELEASE}
+          </span>
+          <span>按目的保护</span>
         </div>
       </div>
     );
@@ -496,13 +534,10 @@ export default function App() {
       <a className="skip-link" href="#main-content">跳到正文</a>
       <aside className="sidebar">
         <div className="brand">
-          <ShieldCheck size={30} />
-          <div>
-            LexAegis<small>案隐盾 · 法律隐私工作台</small>
-          </div>
+          <BrandLockup />
         </div>
         <div className="workspace-label">
-          个人工作空间 <span>V0.9 待发布</span>
+          个人工作空间 <span>{PRODUCT_RELEASE}</span>
         </div>
         <nav>
           {[
@@ -784,7 +819,10 @@ export default function App() {
             <footer className="page-footer">
               <ShieldCheck size={14} />
               正式案件在适用规则与必需风险检验就绪前，始终阻断外发。
-              <span>LEXAEGIS - 2026</span>
+              <span className="footer-brand">
+                <BrandLockup wordmark={false} />
+                2026
+              </span>
             </footer>
           </div>
         )}
@@ -952,10 +990,12 @@ export default function App() {
                       })}/>}
 
                     {tab === "risk" && (
-                      <RiskWorkspace task={task} busy={busy} label={txt} attackLabels={attackLabels}
+                      <RiskWorkspace task={task} pack={(boot?.packs||[]).find((item:Obj)=>item.id===task.pack_id)} busy={busy} label={txt} attackLabels={attackLabels}
                         onAction={taskAction} onApprove={()=>setModal("approve")} onResult={()=>setTab("result")}
                         onRunAttacks={(auxiliary)=>run(()=>api(`/tasks/${task.id}/attacks/run`,"POST",{auxiliary}),
-                          "红队作业已排队；完成后请重新检验。")}/>
+                          "红队作业已排队；完成后请重新检验。")}
+                        onLegalReview={(body)=>run(()=>api(`/tasks/${task.id}/legal-review`,"POST",body),
+                          "已记录法律复核。该记录不授予发送权。")}/>
                     )}
 
                     {tab === "result" && (
@@ -1018,6 +1058,18 @@ export default function App() {
                   <p>{capabilityDetail(key, cap?.[key])}</p>
                 </div>
               ))}
+            </div>
+            <div className="settings-dispatch">
+              <dl className="metadata">
+                <dt>正式外发</dt>
+                <dd>
+                  <Tag tone="amber">{txt(formalDispatchValue(cap) || "unverified")}</Tag>
+                  <span className="tabular"> formal_dispatch={formalDispatchValue(cap) || "未回显"}</span>
+                </dd>
+                <dt>接口版本</dt>
+                <dd className="tabular">{health?.version || "未取到"}</dd>
+              </dl>
+              <p>灯绿只表示连得上或已实现。后四灯不能合成系统已安全。正式外发以本页回显为准，不是发送许可。</p>
             </div>
             {boot && (
               <SettingsForm
@@ -1460,9 +1512,11 @@ function capabilityDetail(key: string, item: Obj | undefined) {
       : `${detail} 已收包超时记为可能披露，不自动扩接收方。`;
   }
   if (key === "validation") {
-    return detail.includes("未验证")
+    const dispatch = item?.formal_dispatch;
+    const base = detail.includes("未验证")
       ? detail
       : `${detail} 未取得证据的能力保持未验证。`;
+    return dispatch ? `${base} formal_dispatch=${dispatch}` : base;
   }
   return detail;
 }

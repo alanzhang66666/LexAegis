@@ -13,11 +13,12 @@ import sqlalchemy as sa
 from .util import assert_local_filesystem, restrict_mode
 
 
-CURRENT_REVISION = "0002_v2_contracts"
+CURRENT_REVISION = "0003_formal_release_uniques"
 
 
-def _backup_before_migration(path: Path) -> Path:
-    backup = path.with_name(path.name + ".pre-0002.bak")
+def _backup_before_migration(path: Path, target_revision: str) -> Path:
+    revision_number = target_revision.split("_", 1)[0]
+    backup = path.with_name(path.name + f".pre-{revision_number}.bak")
     if backup.exists():
         check = sqlite3.connect(backup)
         try:
@@ -45,6 +46,59 @@ def _backup_before_migration(path: Path) -> Path:
     return backup
 
 
+def _create_formal_release_claims(op: Operations) -> None:
+    """Add the durable keys used to enforce at-most-once formal dispatch."""
+    op.create_table(
+        "formal_release_claims",
+        sa.Column("id", sa.String, primary_key=True),
+        sa.Column("request_hash", sa.String, nullable=False),
+        sa.Column("grant_nonce", sa.String, nullable=True),
+        sa.Column("gateway_request_id", sa.String, nullable=True),
+        sa.Column("policy_id", sa.String, nullable=True),
+        sa.Column("policy_slot", sa.Integer, nullable=True),
+        sa.CheckConstraint("request_hash <> ''", name="formal_release_request_hash_nonempty"),
+        sa.CheckConstraint("grant_nonce IS NULL OR grant_nonce <> ''", name="formal_release_grant_nonce_nonempty"),
+        sa.CheckConstraint(
+            "gateway_request_id IS NULL OR gateway_request_id <> ''",
+            name="formal_release_gateway_request_id_nonempty",
+        ),
+        sa.CheckConstraint(
+            "(policy_id IS NULL AND policy_slot IS NULL) "
+            "OR (policy_id <> '' AND policy_slot = 1)",
+            name="formal_release_policy_single_slot",
+        ),
+    )
+    op.create_index(
+        "formal_release_request_hash_unique",
+        "formal_release_claims",
+        ["request_hash"],
+        unique=True,
+    )
+    op.create_index(
+        "formal_release_grant_nonce_unique",
+        "formal_release_claims",
+        ["grant_nonce"],
+        unique=True,
+    )
+    op.create_index(
+        "formal_release_gateway_request_id_unique",
+        "formal_release_claims",
+        ["gateway_request_id"],
+        unique=True,
+    )
+    op.create_index(
+        "formal_release_policy_slot_unique",
+        "formal_release_claims",
+        ["policy_id", "policy_slot"],
+        unique=True,
+    )
+
+
+def _verify_integrity(conn) -> None:
+    if conn.exec_driver_sql("PRAGMA integrity_check").scalar_one() != "ok":
+        raise RuntimeError("Migrated database failed integrity check")
+
+
 class Store:
     def __init__(self, path: Path):
         assert_local_filesystem(path)
@@ -58,24 +112,31 @@ class Store:
             conn.commit()
             context = MigrationContext.configure(conn)
             context._ensure_version_table()
-            if context.get_current_revision() is None:
+            revision = context.get_current_revision()
+            if revision is None:
                 op = Operations(context)
                 op.create_table("records", sa.Column("id", sa.String, primary_key=True), sa.Column("kind", sa.String, nullable=False), sa.Column("scope", sa.String, nullable=False), sa.Column("body", sa.Text, nullable=False))
                 op.create_index("records_kind_scope", "records", ["kind", "scope"])
                 op.create_index("records_scope_kind", "records", ["scope", "kind"])
+                _create_formal_release_claims(op)
+                _verify_integrity(conn)
                 conn.execute(text("INSERT INTO alembic_version (version_num) VALUES (:revision)"), {"revision": CURRENT_REVISION})
-            elif context.get_current_revision() == "0001_aggregates":
+            elif revision in {"0001_aggregates", "0002_v2_contracts"}:
                 conn.commit()
-                _backup_before_migration(self.path)
+                _backup_before_migration(self.path, CURRENT_REVISION)
                 conn.exec_driver_sql("BEGIN IMMEDIATE")
                 try:
-                    Operations(MigrationContext.configure(conn)).create_index("records_scope_kind", "records", ["scope", "kind"])
+                    op = Operations(MigrationContext.configure(conn))
+                    if revision == "0001_aggregates":
+                        op.create_index("records_scope_kind", "records", ["scope", "kind"])
+                    _create_formal_release_claims(op)
+                    _verify_integrity(conn)
                     conn.execute(text("UPDATE alembic_version SET version_num=:revision"), {"revision": CURRENT_REVISION})
                     conn.commit()
                 except BaseException:
                     conn.rollback()
                     raise
-            elif context.get_current_revision() != CURRENT_REVISION:
+            elif revision != CURRENT_REVISION:
                 raise RuntimeError("Unsupported database migration version")
             conn.commit()
 

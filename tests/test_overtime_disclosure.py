@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from lexaegis.disclosure import (
     GENERAL_SUB_PURPOSE,
     LAWYER_LAW_ARTICLE,
@@ -53,6 +55,46 @@ def test_upgraded_pack_stays_draft_and_valid():
     lawyer = next(item for item in pack["legal_sources"] if item["id"] == "lawyer_law_2026_09_01")
     assert "第41条" in lawyer["articles"]
     assert lawyer["historical_mapping"]["2017_article_38"] == "2026-09-01第41条"
+    assert len(pack["legal_sources"]) >= 140
+    assert len(pack["manual_review_conditions"]) == 16
+    assert len(pack["sensitive_object_rules"]) == 40
+    assert len(pack["not_hard_ban_categories"]) == 10
+    assert len(pack["reply_templates"]) == 4
+    assert len(pack["conflict_checklist"]) == 6
+    assert all(item["granularity"] in {"article", "instrument_scope"} for item in pack["legal_sources"])
+    assert any(item["id"] == "pi_01" and item["object_type"] == "姓名" for item in pack["sensitive_object_rules"])
+
+
+def test_sensitive_object_citations_follow_mapping_table():
+    pack = labor_pack()
+    sources = {item["id"]: item for item in pack["legal_sources"]}
+    rules = pack["sensitive_object_rules"]
+    cited = [source_id for item in rules for source_id in item["legal_source_ids"]]
+    assert cited
+    assert set(cited) != {"spc_labor_interp_1"}
+    assert not all(source_id == "spc_labor_interp_1" for source_id in cited)
+    name = next(item for item in rules if item["object_type"] == "姓名")
+    assert "spc_labor_interp_1" not in name["legal_source_ids"]
+    assert name["rule_nature"] == "statutory"
+    assert any("个人信息保护法" in sources[source_id]["title"] for source_id in name["legal_source_ids"])
+    minor = next(item for item in rules if "不满14" in item["object_type"])
+    assert any(
+        ("个人信息保护法" in sources[source_id]["title"] and any("31" in article for article in sources[source_id]["articles"]))
+        or ("未成年人保护法" in sources[source_id]["title"] and any("72" in article for article in sources[source_id]["articles"]))
+        for source_id in minor["legal_source_ids"]
+    )
+    assert minor["rule_nature"] == "statutory"
+    carrier = next(item for item in rules if "电子数据原始载体" in item["object_type"])
+    assert carrier["rule_nature"] != "statutory"
+
+
+def test_registry_rejects_interp1_only_object_citations():
+    pack = labor_pack()
+    for item in pack["sensitive_object_rules"]:
+        item["legal_source_ids"] = ["spc_labor_interp_1"]
+        item["unresolved_citations"] = []
+    with pytest.raises(ValueError, match="劳动争议解释（一）"):
+        validate_pack(pack)
 
 
 def test_overtime_date_keeps_calendar_day_when_day_nature_unknown():

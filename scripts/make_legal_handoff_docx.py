@@ -26,7 +26,7 @@ def add_footer(section):
     footer.is_linked_to_previous = False
     p = footer.paragraphs[0]
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = p.add_run(f"{DOC_ID}  ·  0.9.0rc0  ·  试点后法学交接，非法学结论、非外发开通  ·  第 ")
+    run = p.add_run(f"{DOC_ID}  ·  V1.0  ·  试点后法学交接，非法学结论、非外发开通  ·  第 ")
     cs.set_run_font(run, name="微软雅黑", size=8, color=MUTED)
     fld1 = OxmlElement("w:fldChar")
     fld1.set(qn("w:fldCharType"), "begin")
@@ -73,7 +73,7 @@ def build():
         [
             ["材料编号", DOC_ID],
             ["日期", "2026-09-12"],
-            ["产品版本", "0.9.0rc0（待发布，非正式发行）"],
+            ["产品版本", "V1.0（1.0.0，非正式发行）"],
             ["对应先发材料", "LEX-CS-EVID-2026-09-10-01；LEX-LG-REQ-2026-09-10-01（其中空白栏仍待填）"],
             ["试跑目录", "本机 gitignore：.data/real_cases/runs/pilot-2026-09/（真案正文不入库、不随本文附送）"],
             ["传递路径", "计算机侧 → A → 法学侧。签署回传后再谈层 B 发送"],

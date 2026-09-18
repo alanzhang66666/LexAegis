@@ -208,7 +208,7 @@ def add_footer(section):
     footer.is_linked_to_previous = False
     p = footer.paragraphs[0]
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = p.add_run("LEX-CS-EVID-2026-09-10-01  ·  0.9.0rc0  ·  计算机侧事实材料，非法学结论  ·  第 ")
+    run = p.add_run("LEX-CS-EVID-2026-09-10-01  ·  V1.0  ·  计算机侧事实材料，非法学结论  ·  第 ")
     set_run_font(run, name="微软雅黑", size=8, color=MUTED)
     fld1 = OxmlElement("w:fldChar")
     fld1.set(qn("w:fldCharType"), "begin")
@@ -254,7 +254,7 @@ def build():
         ["项", "内容"],
         [
             ["材料编号", "LEX-CS-EVID-2026-09-10-01"],
-            ["产品版本", "0.9.0rc0（待发布，非正式发行）"],
+            ["产品版本", "V1.0（1.0.0，非正式发行）"],
             ["日期", "2026-09-10"],
             ["传递路径", "计算机侧 → A → 对应法学成员"],
             ["代码依据", "仓库现行实现与文档：ARCHITECTURE.md、MODELS.md、VALIDATION.md、DEPLOY.md、lexaegis/"],
@@ -920,7 +920,7 @@ def build():
         doc,
         ["项目", "系统是否采集", "说明"],
         [
-            ["产品版本", "部分", "代码 __version__=0.9.0rc0；运行记录未自动贴到每条摘要"],
+            ["产品版本", "部分", "代码 __version__=1.0.0；运行记录未自动贴到每条摘要"],
             ["任务定义版本", "是", "task_definition_version，当前事实摘要 2.0"],
             ["提示词", "是", "全文见样例 A；依赖里有 prompt_hash"],
             ["案由包与哈希", "是", "pack_id、pack_hash"],

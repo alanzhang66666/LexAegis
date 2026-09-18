@@ -1,8 +1,8 @@
 # 案隐盾本机现状与完成清单
 
-盘点日期：**2026-09-12**（覆盖 09-11 细表）。对象是本机仓库 `E:\LexAegis`，不是远端 CI，也不是正式发行结论。
+盘点日期：**2026-09-14**（文首为现役；其下 09-12 / 09-11 细表只追溯，过期句以文首为准）。对象是本机仓库 `E:\LexAegis`，不是远端 CI，也不是正式发行结论。
 
-版本号：**0.9.0 待发布（`0.9.0rc0`）**。已推送 `main` 停在 `60cdc73`；工作树有未提交改动。本号不是正式发行版。**正式案件外发保持阻断。**
+版本号：**V1.0**（`1.0.0`）。已推送 `main` 停在 `5de4113`；工作树有未提交 D 路径、交付包与改号。非正式发行。**正式案件外发保持阻断。**
 
 读法：`[x]` 表示本机或仓库里已经有对应产物；`[ ]` 表示尚未完成、未验收或不得主张完成。五类事实分开写：代码、本机资产、运行证据、法学发布、攻击结论。不要把某一栏的勾选合成「已经安全」或「可以对外发」。
 
@@ -14,13 +14,15 @@
 
 | 项 | 现在 |
 | --- | --- |
-| 10 案 | 层 A 评估完成。**0 案真实发送** |
-| 隔离 | Compose `check-isolation` 五项为真，写入隔离卷。探测 ≠ 防火墙/供应链审计 |
+| 10 案 | 层 A 评估完成。**0 案真实发送**。D 走一遍 = evaluate，不是 HTTP |
+| 隔离 | Compose 五项探测可在宿主机为真。探测 ≠ 本请求收据，native 不能自证隔离 |
 | 攻击 | 隔离栈已实跑工程基线。阳性对照 `identity=succeeded`。空辅助不是四绿。合成正式案**不是**四类 `resisted` |
-| 包 | 仓库 `2.0.0-draft.2` 仍 draft，`dispatch_allowed=false` |
+| 包 | 仓库 `2.0.0-draft.3` 仍 draft，`dispatch_allowed=false` |
 | 法学 | 规则正文已定稿并归入 `docs/legal/`。未签署、未 `reviewed`、未发送 |
+| 测试 | 2026-09-14 pytest **283 过 / 3 跳过**。e2e 未重跑 |
+| LA-001 交付包 | `.data/outbound_packets/LA001_D_外发交付包_20260914/`。`gate_status` 十门均非 `pass`。不要提交 zip |
 
-下面从「二、本机快照」起仍是 09-11 细表。其中「Docker 未开 / 攻击未跑 / 指南未冻 / 后 7 案未做」已经过期，以本节为准。
+下面从「二、本机快照」起仍是 09-11/09-12 细表。其中「Docker 未开 / 攻击未跑 / 指南未冻 / 后 7 案未做 / 包 draft.1 / HEAD 60cdc73」已经过期，以本节为准。
 
 ---
 
@@ -51,7 +53,7 @@
 | 本机真案整理 | `.data/real_cases/`：LA-001–005、SMP-001–005，状态均为 `sourced`，`dispatch_allowed=false` |
 | 试点跑前准备 | `.data/real_cases/runs/pilot-2026-09/`（gitignore）。准备已完成；CAL-1/2/3 已做 Path A/B 与云端评估。Path A 抽取三案均失败（JSON 截断）。Path B 评估均为 blocked / 批准 409。未发送 |
 | 进料副本 | `data/真实案件/` 被 gitignore，不要拷回主库或提交 |
-| 旧 wheel | `.artifacts/wheel/lexaegis-0.2.0-py3-none-any.whl`（改号后未重打 0.9.0rc0） |
+| 旧 wheel | `.artifacts/wheel/lexaegis-0.2.0-py3-none-any.whl`（归档旧号，未重打 `lexaegis-1.0.0`） |
 
 `.env` 只确认「已设置」，本文不写密钥、口令或具体云端工作空间主机名。
 
@@ -59,7 +61,7 @@
 
 ## 三、代码层：已完成（已推送 `60cdc73`）
 
-下列已在 `origin/main` 的 `0.9.0rc0` 中，属于工程落地，不是法学或攻击验收。
+下列已在代码里（工程落地，不是法学或攻击验收）。`origin/main` 在改号前提交的仍可能显示旧号。
 
 ### 3.1 产品骨架与工作台
 
@@ -172,7 +174,7 @@
 - [ ] 五视口 Playwright 本轮未跑
 - [ ] `pnpm walk:ui` 未进 CI，本轮也未重跑
 - [ ] 远端 GitHub Actions：历史记录为 `startup_failure` / 本轮不跑，**不能写成已通过**
-- [ ] 0.9.0rc0 wheel 未重打
+- [ ] V1.0（`1.0.0`）wheel 未重打
 - [ ] OCR：`.env` 声称 paddle 就绪，venv 无库 → doctor 构造探测预期失败或不可用
 - [ ] RapidOCR + ONNX Runtime CUDA：未安装
 - [ ] whisper.cpp + FFmpeg + `large-v3-turbo`：未安装
@@ -231,7 +233,7 @@
 - [ ] `lexaegis.tasks` entry point **未**在 `pyproject.toml` 声明，仓库无任务插件
 - [ ] `App.tsx` 仍未拆文件
 - [ ] `semi_labor_v1` 标注完成后才 `promote-semi`；未标注完整材料不进主库
-- [ ] 重打并核验 `lexaegis-0.9.0rc0` wheel
+- [ ] 重打并核验 `lexaegis-1.0.0` wheel
 - [ ] 取得 GitHub Actions 三平台 / 五视口 / 双架构的真实远端结果（现在不能填绿）
 - [ ] 清理或明确放弃 `models/.cache` 里未完成的 Qwen3-8B，避免当成第二套生产边侧
 
@@ -258,7 +260,7 @@
 
 ## 八、不要写成已完成的句子
 
-- 「0.9.0 已发布」——现为 `0.9.0rc0` 待发布
+- 「V1.0 已正式发行」——现为非正式发行；正式外发保持阻断
 - 「正式外发已开通」——`formal_dispatch=blocked`
 - 「四类攻击已通过」——隔离栈已实跑工程基线，不是法学 `resisted`
 - 「已经匿名化」——边侧保留身份映射，不是匿名化

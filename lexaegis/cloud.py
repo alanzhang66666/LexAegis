@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from .d_path import D_PATH_HOST, d_path_active, d_path_flag
 from .util import digest, now, uid
 
 DEFAULT_CLOUD_HOSTS = "api.deepseek.com,dashscope.aliyuncs.com,dashscope-intl.aliyuncs.com,api.openai.com"
@@ -58,6 +59,12 @@ def standby_host():
 
 def approved_dual_slot():
     """Default host catalog only. Do not use this to invent an unreviewed standby."""
+    if d_path_active():
+        return {
+            "primary": {"host": PRIMARY_HOST, "target": PRIMARY_TARGET, "model": PRIMARY_MODEL},
+            "thinking": "disabled",
+            "failover": "local_undisclosed_only",
+        }
     host = standby_host()
     return {
         "primary": {"host": PRIMARY_HOST, "target": PRIMARY_TARGET, "model": PRIMARY_MODEL},
@@ -96,7 +103,11 @@ def build_dispatch_slot(url, model, *, provider_id=None, role="primary"):
 
 
 def allowed_cloud_hosts():
-    return {item.strip() for item in os.getenv("LEX_CLOUD_ALLOWED_HOSTS", DEFAULT_CLOUD_HOSTS).split(",") if item.strip()}
+    default = D_PATH_HOST if d_path_flag() else DEFAULT_CLOUD_HOSTS
+    hosts = {item.strip().lower() for item in os.getenv("LEX_CLOUD_ALLOWED_HOSTS", default).split(",") if item.strip()}
+    if d_path_flag():
+        hosts = hosts & {D_PATH_HOST} or {D_PATH_HOST}
+    return hosts
 
 
 def cloud_endpoint_allowed(target):
@@ -393,6 +404,15 @@ class DualSlotProvider:
         primary.setdefault("model", (body or {}).get("model") or PRIMARY_MODEL)
         raw_standby = slots.get("standby") if isinstance(slots.get("standby"), dict) else None
         standby = dict(raw_standby) if raw_standby and raw_standby.get("target") else None
+        if d_path_active():
+            standby = None
+        if _deepseek_pointed_at_bailian(primary):
+            return DispatchOutcome(
+                "failed", error="DeepSeek 密钥不得指向百炼", selected_slot="primary",
+                disclosure_state="undisclosed", generation_state="not_started",
+                transmission_state="not_left_local", attempts=[],
+                authorized_recipients=[_recipient(primary, "primary")],
+            )
         authorized = [_recipient(primary, "primary")]
         if standby:
             authorized.append(_recipient(standby, "standby"))
@@ -470,6 +490,15 @@ class DualSlotProvider:
                 generation_state="not_started",
                 transmission_state="response_received" if left else "not_left_local",
             )
+
+
+def _deepseek_pointed_at_bailian(slot):
+    host = (slot.get("host") or urlparse(slot.get("target") or "").hostname or "").lower()
+    model = (slot.get("model") or "").lower()
+    target = (slot.get("target") or "").lower()
+    bailian = host in STANDBY_HOSTS or host.endswith(MAAS_HOST_SUFFIX) or "dashscope" in host
+    deepseek = "deepseek" in model or "deepseek" in host or "deepseek" in target
+    return bailian and deepseek
 
 
 def _elapsed_ms(started_at):

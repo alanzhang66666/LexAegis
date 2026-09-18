@@ -4,9 +4,22 @@ import re
 from .contracts import ConfidentialityRecord, ProcessingBasis
 from .policy import registered_name_residuals, transform
 
+from .d_path import (
+    INJURY_OMIT_MARKERS,
+    INJURY_SUB_PURPOSE,
+    LIMITATION_MARKERS,
+    RELATION_SUB_PURPOSE,
+    W_OFF_WIRE_FIELDS,
+    WAGE_COMP_SUB_PURPOSE,
+    year_inverted,
+)
+
 GUIDE_VERSION = "G-2026-09-12-v1.0"
 GENERAL_SUB_PURPOSE = "劳动争议文书事实保真整理"
 OVERTIME_SUB_PURPOSE = "核对加班"
+CORE_FACT_SUMMARY_PURPOSES = frozenset({
+    GENERAL_SUB_PURPOSE, RELATION_SUB_PURPOSE, WAGE_COMP_SUB_PURPOSE, INJURY_SUB_PURPOSE,
+})
 
 OVERTIME_FIELDS = frozenset({
     "claim_stance", "day_nature", "overtime_hours", "wage_base", "evidence_holder",
@@ -606,7 +619,11 @@ def build_disclosure_decision(fact, pack, task_type, mappings, fallback, sub_pur
             processing_basis=build_processing_basis(fact, None, None, pack, []),
             confidentiality=build_confidentiality(fact, pack),
         )
-        return apply_sensitivity_overlay(apply_material_restrictions(decision, fact), fact, mappings)
+        return apply_sub_purpose_limits(
+            apply_sensitivity_overlay(apply_material_restrictions(decision, fact), fact, mappings),
+            fact,
+            sub_purpose,
+        )
     rule = resolved["rule"]
     unknown = resolved["unknown_conditions"]
     candidates = generate_candidates(fact, mappings, rule, pack, all_facts)
@@ -670,7 +687,47 @@ def build_disclosure_decision(fact, pack, task_type, mappings, fallback, sub_pur
         "processing_basis": build_processing_basis(fact, rule, selected, pack, unknown),
         "confidentiality": build_confidentiality(fact, pack),
     }
-    return apply_sensitivity_overlay(apply_material_restrictions(decision, fact), fact, mappings)
+    limited = apply_sub_purpose_limits(
+        apply_sensitivity_overlay(apply_material_restrictions(decision, fact), fact, mappings),
+        fact,
+        sub_purpose,
+    )
+    return limited
+
+
+def apply_sub_purpose_limits(decision, fact, sub_purpose):
+    purpose = sub_purpose or decision.get("sub_purpose")
+    value = str(fact.get("value") or "")
+    field = fact.get("field")
+    reasons = list(decision.get("block_reasons") or [])
+    if purpose == WAGE_COMP_SUB_PURPOSE and field in W_OFF_WIRE_FIELDS:
+        reasons.append("W 首版不算金额，金额不上云")
+        decision.update(
+            transform="delete", output="", necessity="unnecessary", status="restricted",
+            reason="W 首版不算金额", block_reasons=list(dict.fromkeys(reasons)),
+        )
+        return decision
+    if purpose == WAGE_COMP_SUB_PURPOSE and any(marker in value for marker in LIMITATION_MARKERS):
+        reasons.append("W 首版期限判断不上云，留在本地")
+        decision.update(
+            transform="delete", output="", status="restricted",
+            reason="W 首版期限判断不上云", block_reasons=list(dict.fromkeys(reasons)),
+        )
+        return decision
+    if purpose == WAGE_COMP_SUB_PURPOSE and "待岗" in value and (field == "date" or year_inverted(value)):
+        reasons.append("待岗年份冲突只留本地，不进入 W 事实卡")
+        decision.update(
+            transform="delete", output="", status="restricted",
+            reason="待岗年份冲突只留本地", block_reasons=list(dict.fromkeys(reasons)),
+        )
+        return decision
+    if purpose == INJURY_SUB_PURPOSE and any(marker in value for marker in INJURY_OMIT_MARKERS):
+        reasons.append("工伤病历或精细诊断默认不上云")
+        decision.update(
+            transform="delete", output="", forbidden=True, status="restricted",
+            reason="工伤病历或精细诊断默认不上云", block_reasons=list(dict.fromkeys(reasons)),
+        )
+    return decision
 
 
 def apply_material_restrictions(decision, fact):
@@ -735,4 +792,4 @@ def apply_decision_choice(decision, fact, pack, mappings, method, necessity, cus
         processing_basis=build_processing_basis(fact, rule, selected, pack, decision.get("unknown_conditions") or []),
         confidentiality=decision.get("confidentiality") or build_confidentiality(fact, pack),
     )
-    return apply_sensitivity_overlay(decision, fact, mappings)
+    return apply_sub_purpose_limits(apply_sensitivity_overlay(decision, fact, mappings), fact, decision.get("sub_purpose"))

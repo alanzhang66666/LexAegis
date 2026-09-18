@@ -87,6 +87,32 @@ def main():
     commands = parser.add_subparsers(dest="command", required=True)
     p = commands.add_parser("import-pack")
     p.add_argument("file", type=Path)
+    p = commands.add_parser("runtime-pack", help="管理独立运行库pack生命周期")
+    runtime_pack_commands = p.add_subparsers(dest="runtime_pack_command", required=True)
+    p = runtime_pack_commands.add_parser(
+        "create-draft",
+        help="从仓库labor V2草稿和导入报告派生内容寻址的运行库draft",
+    )
+    p.add_argument(
+        "--source",
+        type=Path,
+        default=Path(__file__).resolve().parent.parent / "packs" / "labor_v2_draft.json",
+    )
+    p.add_argument("--import-report", type=Path, required=True)
+    p = commands.add_parser("release", help="只读校验发布候选来源，不安装policy、不发送")
+    release_commands = p.add_subparsers(dest="release_command", required=True)
+    p = release_commands.add_parser(
+        "verify-candidate",
+        help="只读比对工作树与发布制品，输出pending/verified和漂移字段；不修改任何文件",
+    )
+    p.add_argument("--repository", type=Path, default=None, help="默认当前仓库根目录")
+    p.add_argument("--wheel", type=Path, help="候选 wheel；缺省即视为未构建")
+    p.add_argument("--runtime-pack", type=Path, help="独立运行库pack文件；缺省即视为未评审")
+    p.add_argument("--frontend-dist", type=Path, help="默认 frontend/dist")
+    p.add_argument("--image", action="append", default=[], metavar="NAME=sha256:...")
+    p.add_argument("--migration-revision", help="默认使用本构建声明的存储修订号")
+    p.add_argument("--validation-report", type=Path, help="目标验证结果JSON；缺省即视为未验证")
+    p.add_argument("--reference", type=Path, help="已冻结build manifest；用于报告漂移字段")
     p = commands.add_parser("backup")
     p.add_argument("destination", type=Path)
     p.add_argument("--offline-confirm", action="store_true", required=True, help="Confirm API, worker and gateway are stopped")
@@ -158,6 +184,49 @@ def main():
         with store.transaction() as repo:
             pack = import_pack(repo, json.loads(args.file.read_text(encoding="utf-8")))
         print("Imported:", pack["id"])
+    elif args.command == "runtime-pack":
+        from .runtime_pack import create_runtime_pack_draft
+        store = Store(app_dir()/"app.sqlite")
+        with store.transaction() as repo:
+            runtime_pack = create_runtime_pack_draft(repo, args.source, args.import_report)
+        print(json.dumps({
+            "id": runtime_pack["id"],
+            "runtime_pack_hash": runtime_pack["runtime_pack_hash"],
+            "source_pack_hash": runtime_pack["source_pack_hash"],
+            "import_report_hash": runtime_pack["import_report_hash"],
+            "status": runtime_pack["status"],
+            "dispatch_allowed": runtime_pack["dispatch_allowed"],
+        }, ensure_ascii=False, indent=2))
+    elif args.command == "release":
+        # Read-only: no store is opened, no policy is installed, nothing is sent.
+        from .release_build import (
+            default_release_candidate_inputs,
+            load_reference_manifest,
+            load_validation_results,
+            parse_image_digest_arguments,
+            verify_release_candidate,
+        )
+        repository = args.repository or Path(__file__).resolve().parent.parent
+        results, validation_report_status = load_validation_results(args.validation_report)
+        reference, reference_readable = load_reference_manifest(args.reference)
+        report = verify_release_candidate(
+            repository,
+            default_release_candidate_inputs(
+                wheel_path=args.wheel,
+                runtime_pack_path=args.runtime_pack,
+                container_image_digests=parse_image_digest_arguments(args.image),
+                migration_revision=args.migration_revision,
+                frontend_dist_path=args.frontend_dist,
+            ),
+            results,
+            reference=reference,
+            reference_readable=reference_readable,
+            validation_report_status=validation_report_status,
+        )
+        print(json.dumps(report.public(), ensure_ascii=False, indent=2))
+        if not report.build_baseline_verified:
+            print("未验收：发布候选未形成可验证基线，正式外发保持 blocked")
+        raise SystemExit(0 if report.build_baseline_verified else 1)
     elif args.command == "backup":
         backup(app_dir(), Path(os.getenv("LEX_GATEWAY_DIR", ".data/gateway")), args.destination)
         print("Backup created:", args.destination)

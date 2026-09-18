@@ -1,6 +1,6 @@
 # 评测标注规范
 
-本目录只收合成或结构抽象后的半合成记录。标注用于回归与对照，**不能**当作正式外发依据。`dispatch_allowed` 必须始终为 `false`。
+本目录只收合成或结构抽象后的半合成记录。标注用于回归与对照，**不能**当作正式外发依据。`dispatch_allowed` 必须始终为 `false`。指南与工作簿在 [../legal/templates/](../legal/templates/README.md)。
 
 ## 准入
 

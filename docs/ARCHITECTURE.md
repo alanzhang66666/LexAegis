@@ -1,8 +1,8 @@
 # 架构与接口约定
 
-LexAegis 0.9.0 待发布（`0.9.0rc0`）使用模块化单体和独立外发网关。所有敏感原文留在边侧；云端仅负责经过批准的假名化事实摘要生成。劳动争议 V2 包仍为 `draft`：没有经审核服务商、四类真实攻击 `resisted`、隔离验收与具名审批时，正式外发保持失败关闭。这不是缺省“安全”。当前四类攻击执行器是工程基线，不是正式攻击结论，也不能作为法学背书。本号不是正式发行版。
+LexAegis V1.0（`1.0.0`）使用模块化单体和独立外发网关。所有敏感原文留在边侧；云端仅负责经过批准的假名化事实摘要生成。劳动争议 V2 包仍为 `draft`：没有经审核服务商、四类真实攻击 `resisted`、隔离验收与具名审批时，正式外发保持失败关闭。这不是缺省“安全”。当前四类攻击执行器是工程基线，不是正式攻击结论，也不能作为法学背书。非正式发行。
 
-## 0.9 待发布范围
+## V1.0 范围
 
 - V2 契约：`DomainPackV2`、`TaskDefinitionV2`、`DocumentIRV2`、稳定 `MappingEntry`、`ClaimArtifactV2`、服务商、审批、攻击协议。
 - v1 包只作为 draft/demo 读取；V2 包按生命周期冻结哈希，同版本不能覆盖。
@@ -28,6 +28,7 @@ LexAegis 0.9.0 待发布（`0.9.0rc0`）使用模块化单体和独立外发网�
 | `lexaegis/disclosure.py` | 加班核对的条件规则、有界披露候选与分别判定（待审草稿） |
 | `lexaegis/providers.py` | 边侧 `EdgeClient`；云端调用由网关 `DualSlotProvider` 流式装配 |
 | `lexaegis/cloud.py` | DeepSeek 主 / 百炼备双槽、网关内流式拼 JSON |
+| `lexaegis/d_path.py` | D 路径试点：单主槽、层 B 关闭名单、准标识与组合阻断。evaluate 不是发送 |
 | `lexaegis/gateway.py` | 签名核验、目标白名单、独立请求账本与实际调用 |
 | `lexaegis/worker.py` | 单进程队列、解析、提取、发送与恢复 |
 | `lexaegis/detection.py` | 坐标化 PII、敏感性与冻结权重风险信号 |

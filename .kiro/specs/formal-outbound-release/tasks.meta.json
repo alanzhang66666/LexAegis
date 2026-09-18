@@ -1,0 +1,677 @@
+{
+  "pbtResults": {},
+  "executionHistory": {
+    "1.1 在 `lexaegis/contracts.py` 增加 `LegalSourceRecord`、`CitationMapping`、`EvidenceArtifact`、`GateEvidenceReceipt`、`ReleaseBuildManifest`、`FormalReleasePolicy`、`FrozenFormalRequest`、`GateDecision`、`IsolationReceipt`、`OneTimeDispatchGrant` 和 `FormalReleaseState` 契约": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711455054
+      },
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711487595
+      },
+      {
+        "executionId": "31cb7abf-f634-402b-a959-6305d19df5a2",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789716575879
+      }
+    ],
+    "1.2 添加 additive 存储迁移与唯一索引": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711455124
+      },
+      {
+        "executionId": "31cb7abf-f634-402b-a959-6305d19df5a2",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789716591979
+      },
+      {
+        "executionId": "31cb7abf-f634-402b-a959-6305d19df5a2",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789716969287
+      }
+    ],
+    "1.3 编写契约和迁移回归测试": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711455175
+      },
+      {
+        "executionId": "31cb7abf-f634-402b-a959-6305d19df5a2",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789716984065
+      }
+    ],
+    "2.1 扩展 `scripts/import_legal_assets.py` 或建立等价服务，读取现有 140 行合并目录、规则正文、法计交接模板、审批设计稿、劳动争议草稿包和模板": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711455231
+      },
+      {
+        "executionId": "461514cf-9aba-4ad8-ab0d-3bd9c14342fb",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789717271053
+      },
+      {
+        "executionId": "461514cf-9aba-4ad8-ab0d-3bd9c14342fb",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789718172798
+      }
+    ],
+    "2.2 实现确定性去重与冲突分组": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711455272
+      },
+      {
+        "executionId": "461514cf-9aba-4ad8-ab0d-3bd9c14342fb",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789718311049
+      },
+      {
+        "executionId": "461514cf-9aba-4ad8-ab0d-3bd9c14342fb",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789718890875
+      }
+    ],
+    "2.3 实现律师法第 38/41 条显式时态映射": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711455317
+      },
+      {
+        "executionId": "705568ec-3595-4f73-89a5-af095beb2f65",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789719536603
+      },
+      {
+        "executionId": "8e3a2c44-743e-48e0-b48b-c62ea0deea80",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789728215904
+      }
+    ],
+    "2.4 加严法源引用校验": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711455364
+      }
+    ],
+    "3.1 实现从 `labor_v2_draft` 哈希派生运行库 draft 的命令/服务": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711455431
+      },
+      {
+        "executionId": "461514cf-9aba-4ad8-ab0d-3bd9c14342fb",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789717278254
+      },
+      {
+        "executionId": "461514cf-9aba-4ad8-ab0d-3bd9c14342fb",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789718217009
+      }
+    ],
+    "3.2 加严运行库 review/publish 验证": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711455473
+      },
+      {
+        "executionId": "461514cf-9aba-4ad8-ab0d-3bd9c14342fb",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789718322104
+      },
+      {
+        "executionId": "705568ec-3595-4f73-89a5-af095beb2f65",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789719505856
+      }
+    ],
+    "3.3 实现 retire/change 的依赖失效传播": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711455521
+      },
+      {
+        "executionId": "705568ec-3595-4f73-89a5-af095beb2f65",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789719545398
+      },
+      {
+        "executionId": "8e3a2c44-743e-48e0-b48b-c62ea0deea80",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789728217118
+      }
+    ],
+    "3.4 扩展 pack integrity 和 overtime disclosure 回归测试": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711455562
+      }
+    ],
+    "4.1 建立 `ReleaseBuildVerifier`": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711455614
+      },
+      {
+        "executionId": "461514cf-9aba-4ad8-ab0d-3bd9c14342fb",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789717285905
+      },
+      {
+        "executionId": "461514cf-9aba-4ad8-ab0d-3bd9c14342fb",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789718223722
+      }
+    ],
+    "4.2 在 API、worker 和 gateway 暴露不含秘密的 runtime identity hash": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711455664
+      },
+      {
+        "executionId": "461514cf-9aba-4ad8-ab0d-3bd9c14342fb",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789718331637
+      },
+      {
+        "executionId": "705568ec-3595-4f73-89a5-af095beb2f65",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789719513595
+      }
+    ],
+    "4.3 增加工作树/制品漂移测试和发布候选验证命令": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711455749
+      },
+      {
+        "executionId": "705568ec-3595-4f73-89a5-af095beb2f65",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789719552974
+      },
+      {
+        "executionId": "8e3a2c44-743e-48e0-b48b-c62ea0deea80",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789728898774
+      }
+    ],
+    "5.1 实现内容寻址 Evidence Store": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711455809
+      },
+      {
+        "executionId": "461514cf-9aba-4ad8-ab0d-3bd9c14342fb",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789717293843
+      },
+      {
+        "executionId": "461514cf-9aba-4ad8-ab0d-3bd9c14342fb",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789718230213
+      }
+    ],
+    "5.2 实现既有法计模板到 `GateEvidenceReceipt` 的结构化映射": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711455859
+      },
+      {
+        "executionId": "461514cf-9aba-4ad8-ab0d-3bd9c14342fb",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789718341613
+      },
+      {
+        "executionId": "705568ec-3595-4f73-89a5-af095beb2f65",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789719521125
+      }
+    ],
+    "5.3 实现具名角色校验和证据撤销": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711455913
+      },
+      {
+        "executionId": "705568ec-3595-4f73-89a5-af095beb2f65",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789719562210
+      }
+    ],
+    "5.4 增加恶意/错误证据输入测试": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711455961
+      }
+    ],
+    "6.1 在 `lexaegis/outbound_gate.py` 实现 `FormalGateContext` 和完整 `GateDecision`": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711456013
+      }
+    ],
+    "6.2 定义 evaluate/approve 与 enqueue/send/gateway 阶段语义": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711456058
+      }
+    ],
+    "6.3 将公开 `governance.validate_formal_gate` 改为完整上下文 API": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711456112
+      }
+    ],
+    "6.4 更新 `policy.assess` 以消费完整 evaluator，同时保持现有 blocker 条件": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711456164
+      }
+    ],
+    "6.5 扩展 blocker 等价与调用图测试": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711456206
+      }
+    ],
+    "7.1 扩展 RequestFreezer 和 ApprovedRequest 依赖": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711456251
+      }
+    ],
+    "7.2 保持 wire v2 最小披露契约": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711456295
+      }
+    ],
+    "7.3 强制主槽唯一且备用关闭": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711456349
+      }
+    ],
+    "7.4 实现 dependency diff 与 G7-G10/grant 失效传播": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711456424
+      }
+    ],
+    "8.1 实现 request/build/environment challenge": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711456470
+      }
+    ],
+    "8.2 扩展 `check-isolation` 产出绑定挑战的五项原名结果": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711456517
+      }
+    ],
+    "8.3 接入法 10 具名确认": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711456573
+      }
+    ],
+    "8.4 移除正式 gate 对全局 `isolation_verified` 的授权语义": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711456629
+      }
+    ],
+    "8.5 编写 G9 集成和负向测试": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711456677
+      }
+    ],
+    "9.1 实现 `FormalReleasePolicy` 安装、状态、撤销和消费": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711456724
+      }
+    ],
+    "9.2 保持无上下文 `product_dispatch_state()` 的保守兼容行为": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711456772
+      }
+    ],
+    "9.3 在 API approve/enqueue、worker send、gateway dispatch 全部执行 G-product": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711456816
+      }
+    ],
+    "9.4 实现 claim 后自动 consumed/blocked": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711456866
+      }
+    ],
+    "9.5 编写 scope、过期、撤销、并发消费和无 policy 测试": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711456915
+      }
+    ],
+    "10.1 把 G1 来源人审、G2 本次授权/组织授权、G3 服务商/PIPIA、G5 规则、G7/G8/G9 法学确认接入完整 evaluator": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711456966
+      }
+    ],
+    "10.2 保持 `ManualApprovalRecord` 只作为法学复核记录": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711457022
+      }
+    ],
+    "10.3 实现事务性 `approve_once`": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711457108
+      }
+    ],
+    "10.4 加严 `authorize_dispatch` 的 approve/enqueue/send 重验": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711457162
+      }
+    ],
+    "10.5 编写人工复核非批准、并发批准、过期、撤销和 stale hash 测试": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711457213
+      }
+    ],
+    "11.1 在应用库中原子写 dispatch intent、outbox、ledger version 和 grant reserved": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711457266
+      }
+    ],
+    "11.2 在网关库中原子 claim request ID、grant nonce 和 product policy slot，并先写 sending 再调用 provider": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711457320
+      }
+    ],
+    "11.3 网关独立重验 HMAC、hash、grant、evidence/build、target/model、wire 和完整 gate snapshot": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711457374
+      }
+    ],
+    "11.4 实现 complete/unknown/failed-before-disclosure 的严格状态": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711457421
+      }
+    ],
+    "11.5 保持 reconcile 只读网关账本": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711457466
+      }
+    ],
+    "12.1 建立证据、pack、provider、build、policy 到请求/grant/intent 的反向依赖索引": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711457511
+      }
+    ],
+    "12.2 实现 claim 前同步撤销和 intent 取消": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711457559
+      }
+    ],
+    "12.3 实现 claim 后历史保护和 cancellation-requested/unknown 语义": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711457611
+      }
+    ],
+    "12.4 编写撤销竞态测试": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711457671
+      }
+    ],
+    "13.1 扩展 append-only audit event 和前序 hash": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711457724
+      }
+    ],
+    "13.2 实现按 request hash 导出证据 manifest": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711457780
+      }
+    ],
+    "13.3 保留停用用户的稳定历史身份并细分状态": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711457831
+      }
+    ],
+    "13.4 编写日志泄漏和审计链篡改测试": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711457881
+      }
+    ],
+    "14.1 增加 asset/evidence/gate-snapshot/isolation-receipt/release-policy/approve-once/revoke/reconcile API": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711457930
+      }
+    ],
+    "14.2 修改前先读取 `.cursor/skills/lexaegis-workbench-ui/SKILL.md`": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711457979
+      }
+    ],
+    "14.3 更新 RiskWorkspace 和 ApprovalWorkspace": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711458027
+      }
+    ],
+    "14.4 防止界面误述": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711458106
+      }
+    ],
+    "14.5 保持 demo/local 路径兼容并增加 UI/e2e 测试": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711458152
+      }
+    ],
+    "15.1 增加逐门负向集成矩阵": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711458200
+      }
+    ],
+    "15.2 增加九案层 B 与 LA-001 单 scope 测试": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711458250
+      }
+    ],
+    "15.3 增加 isolated staging 假 provider 全流程": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711458295
+      }
+    ],
+    "15.4 运行目标 Python 测试、类型检查、前端 build、关键 e2e、wheel/迁移/备份恢复和镜像摘要验证": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711458336
+      }
+    ],
+    "15.5 生成 verified release build manifest": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711458383
+      }
+    ],
+    "16.1 上线 Phase 0：仅 schema/evaluator/evidence/build 能力，policy 不安装": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711458428
+      }
+    ],
+    "16.2 上线 Phase 1：现有资产只读导入和 shadow diff": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711458482
+      }
+    ],
+    "16.3 执行 Phase 2：隔离 staging 合成演练": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711458546
+      }
+    ],
+    "16.4 准备 Phase 3：仅在真实既有模板收据和 verified build 齐备时安装 LA-001 armed-once policy": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711458613
+      }
+    ],
+    "16.5 编写并演练回滚": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711458696
+      }
+    ],
+    "16.6 编写 Phase 4 首次单次执行清单": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711458767
+      }
+    ],
+    "16.7 执行后 Phase 5 自动回闭并复盘": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711458833
+      }
+    ],
+    "17.1 进行授权路径调用图审查": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711458891
+      }
+    ],
+    "17.2 进行数据泄漏审查": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711458958
+      }
+    ],
+    "17.3 进行语义回归审查": [
+      {
+        "executionId": "d78678a4-459a-4f41-a99c-3f00d3727840",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789711459005
+      }
+    ],
+    "4. 实现构建与部署来源清单": [
+      {
+        "executionId": "8e3a2c44-743e-48e0-b48b-c62ea0deea80",
+        "chatSessionId": "sess_b5c28784-df5d-4bcc-9760-d996b45f4ff3",
+        "timestamp": 1789728898874
+      }
+    ]
+  }
+}

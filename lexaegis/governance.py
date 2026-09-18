@@ -102,19 +102,8 @@ def frozen_protocol_runs(repo, task_id: str, attack_input_hash: str, pack: dict)
 
 
 def validate_formal_gate(pack: dict, provider_results: list[dict], attacks: list[dict], isolation_verified: bool) -> list[str]:
-    blockers = []
-    if (pack.get("schema_version") != 2 or pack.get("status") != "published"
-            or not pack.get("content_hash") or pack.get("content_hash") != pack_content_hash(pack)):
-        blockers.append("适用规则尚未正式发布")
-        blockers.append("适用的 V2 法学规则包尚未冻结并正式发布")
-    if any(check["status"] != "pass" for check in provider_results):
-        blockers.append("服务商处理条件或影响评估不完整")
-    outcomes = {attack.get("kind"): attack.get("outcome") for attack in attacks}
-    if any(outcomes.get(kind) != "resisted" for kind in REQUIRED_ATTACKS):
-        blockers.append("四类冻结攻击未全部达到 resisted")
-    if not isolation_verified:
-        blockers.append("隔离部署自检未通过")
-    return blockers
+    from .outbound_gate import validate_formal_gate as formal_gate_messages
+    return formal_gate_messages(pack, provider_results, attacks, isolation_verified)
 
 
 def publish_pack_record(pack: dict, actor: str) -> dict:

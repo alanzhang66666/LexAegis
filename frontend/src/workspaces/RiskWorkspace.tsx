@@ -1,17 +1,20 @@
 import { Fragment, useState } from "react";
 import { AlertTriangle, ArrowRight, Check, Play, ShieldCheck } from "lucide-react";
 import { Empty, IssueList, Tag } from "../components/ui";
+import { ApprovalWorkspace, dispositionCopy } from "./ApprovalWorkspace";
 
 type Obj = Record<string, any>;
 
-export function RiskWorkspace({ task, busy, label, attackLabels, onAction, onApprove, onResult, onRunAttacks }:{
-  task: Obj; busy: boolean; label:(key:string)=>string; attackLabels:Record<string,string>;
+export function RiskWorkspace({ task, pack, busy, label, attackLabels, onAction, onApprove, onResult, onRunAttacks, onLegalReview }:{
+  task: Obj; pack?: Obj; busy: boolean; label:(key:string)=>string; attackLabels:Record<string,string>;
   onAction:(action:string)=>void; onApprove:()=>void; onResult:()=>void; onRunAttacks:(auxiliary:Obj)=>void;
+  onLegalReview:(body:Obj)=>void;
 }) {
   const [auxiliary, setAuxiliary] = useState("{}");
   const [inputError, setInputError] = useState("");
   if (!task.risk) return <Empty title="检验当前披露方案" detail="冻结请求后，查看完整发送内容与阻断原因。" />;
   const formal = task.request?.mode === "formal";
+  const summary = dispositionCopy(task.risk);
   const runAttacks = () => {
     try {
       const value = JSON.parse(auxiliary);
@@ -23,9 +26,9 @@ export function RiskWorkspace({ task, busy, label, attackLabels, onAction, onApp
     }
   };
   return <>
-    <div className={"risk-banner " + (task.risk.blockers.length ? "blocked" : "ready")}>
-      <ShieldCheck size={28}/><div><h2>{task.risk.blockers.length ? "当前请求已阻断" : "当前门禁允许进入审批"}</h2>
-      <p>完整风险检验：{task.risk.completion === "complete" ? "已完成" : "未完成"} · 不代表已证明安全</p></div>
+    <div className={"risk-banner " + (summary.blocked ? "blocked" : "ready")}>
+      <ShieldCheck size={28}/><div><h2>{summary.legal}</h2>
+      <p>{summary.ready} · 完整风险检验：{task.risk.completion === "complete" ? "已完成" : "未完成"} · 不代表已证明安全，也不授予发送权</p></div>
     </div>
     <IssueList issues={task.risk.blockers}/>
     <h4 className="subheading">四类攻击运行</h4>
@@ -47,17 +50,7 @@ export function RiskWorkspace({ task, busy, label, attackLabels, onAction, onApp
     <details className="request-detail" open>
       <summary>完整请求快照 <Tag>v{task.version}</Tag></summary>
       <div className="request-target"><b>目标</b>{task.request.target}<b>模型</b>{task.request.body.model}</div>
-      <p className="small-note">{task.request.dependencies?.standby_note || "未审核备用不会纳入批准目标。仅确认请求未离开本地才允许切备。"}</p>
-      {(task.authorized_recipients || task.request.dependencies?.authorized_recipients || []).length > 0 && (
-        <dl className="metadata">
-          {(task.authorized_recipients || task.request.dependencies?.authorized_recipients || []).map((item: Obj, index: number) => (
-            <Fragment key={item.slot || index}>
-              <dt>授权 {item.slot || "接收方"}</dt>
-              <dd>{item.model || "模型未提供"} · {item.target || "目标未提供"}</dd>
-            </Fragment>
-          ))}
-        </dl>
-      )}
+      <RequestPreviewMeta task={task}/>
       {(task.attempts || []).length > 0 && (
         <dl className="metadata">
           {task.attempts.map((attempt: Obj, index: number) => (
@@ -82,5 +75,48 @@ export function RiskWorkspace({ task, busy, label, attackLabels, onAction, onApp
     </div>
     {task.status === "complete" && <button className="primary" onClick={onResult}>查看摘要与回链 <ArrowRight size={16}/></button>}
     {task.error && <div className="inline-warning"><AlertTriangle size={14}/>{task.error}</div>}
+    <ApprovalWorkspace task={task} pack={pack} busy={busy} onSubmit={onLegalReview}/>
+  </>;
+}
+
+function materialVersionLabel(versions: Obj | undefined) {
+  const entries = Object.entries(versions || {});
+  if (!entries.length) return "无材料版本";
+  return entries.map(([id, version]) => `${id} v${version}`).join(" · ");
+}
+
+function RequestPreviewMeta({ task }: { task: Obj }) {
+  const deps = task.request?.dependencies || {};
+  const recipients = task.authorized_recipients || deps.authorized_recipients || [];
+  const hasStandby = recipients.some((item: Obj) => item.slot === "standby" || item.role === "standby");
+  const primary = recipients.filter((item: Obj) => item.slot === "primary" || item.role === "primary" || (!item.slot && !item.role));
+  const shown = hasStandby ? recipients : (primary.length ? primary : recipients);
+  const standbyNote = deps.standby_note || (hasStandby
+    ? "未审核备用不会纳入批准目标。仅确认请求未离开本地才允许切备。"
+    : "备用槽已关闭。境内与国际百炼均不纳入本次批准目标。");
+  return <>
+    <p className="small-note">{standbyNote}</p>
+    <dl className="metadata">
+      <dt>系统提示词哈希</dt>
+      <dd className="tabular">{deps.prompt_hash || "未绑定"}</dd>
+      <dt>案由包</dt>
+      <dd>{deps.pack || task.pack_id || "未绑定"} · {deps.pack_hash || "哈希未绑定"}</dd>
+      <dt>设置版本</dt>
+      <dd className="tabular">{deps.settings_version ?? task.settings_version ?? "未绑定"}</dd>
+      <dt>材料版本</dt>
+      <dd>{materialVersionLabel(deps.material_versions)}</dd>
+      <dt>授权接收方</dt>
+      <dd>{hasStandby ? "主槽与已审核备槽" : "仅主槽；备槽关闭"}</dd>
+    </dl>
+    {shown.length > 0 && (
+      <dl className="metadata">
+        {shown.map((item: Obj, index: number) => (
+          <Fragment key={item.slot || item.role || index}>
+            <dt>授权 {item.slot || item.role || "主槽"}</dt>
+            <dd>{item.model || "模型未提供"} · {item.target || "目标未提供"}</dd>
+          </Fragment>
+        ))}
+      </dl>
+    )}
   </>;
 }

@@ -269,31 +269,50 @@ svg {
 }
 .brand {
   display: flex;
-  gap: 10px;
   align-items: center;
-  color: #edf4ea;
-  padding: 0 9px;
-  font-size: 22px;
-  font-weight: 600;
-  letter-spacing: -0.7px;
+  gap: 10px;
+  padding: 0 4px;
 }
-.brand svg {
-  color: #c0d2ac;
-}
-.brand small {
+.brand img,
+.login-lockup img,
+.footer-brand img {
   display: block;
-  color: #a7bcae;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+.brand img {
+  width: 28px;
+  height: 28px;
+}
+.brand-wordmark {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  line-height: 1.2;
+}
+.brand-wordmark strong {
+  font-family: var(--font-display);
+  font-size: var(--font-size-15);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: 0.04em;
+}
+.brand-wordmark span {
   font-size: var(--font-size-12);
-  font-weight: var(--font-weight-regular);
-  letter-spacing: 0.02em;
-  margin-top: 5px;
+  letter-spacing: 0.04em;
+}
+.brand .brand-wordmark strong {
+  color: inherit;
+}
+.brand .brand-wordmark span {
+  color: #819f8f;
 }
 .workspace-label {
   font-size: var(--font-size-12);
   letter-spacing: 0.02em;
   display: flex;
   justify-content: space-between;
-  margin: 39px 11px 16px;
+  margin: 24px 11px 16px;
   color: #819f8f;
 }
 .workspace-label span {
@@ -770,6 +789,15 @@ nav button:not(.active):hover {
   font-size: 12px;
   letter-spacing: 1.3px;
   white-space: nowrap;
+}
+.footer-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.footer-brand img {
+  width: 18px;
+  height: 18px;
 }
 .empty {
   padding: 48px 20px;
@@ -1326,6 +1354,62 @@ nav button:not(.active):hover {
   color: #648443;
   border: 1px solid #dbe6cb;
 }
+.legal-review {
+  margin: 12px 16px 20px;
+  padding-top: 8px;
+}
+.legal-review .review-blocks details {
+  margin: 8px 0;
+  padding: 10px 0;
+  border-top: 1px solid var(--border, #e4e7dc);
+}
+.legal-review .review-blocks p,
+.legal-review .review-blocks small,
+.legal-review .review-blocks li {
+  font-size: 13px;
+  line-height: 1.7;
+}
+.legal-review fieldset {
+  border: 0;
+  padding: 0;
+  margin: 10px 0;
+  display: grid;
+  gap: 6px;
+}
+.legal-review .stack-label,
+.legal-review .confirm-line {
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+  margin: 10px 0;
+}
+.legal-review textarea,
+.legal-review select[multiple],
+.legal-review input[aria-label="检索法源"] {
+  width: 100%;
+}
+.legal-review .conflict-checklist {
+  padding-left: 18px;
+  font-size: 13px;
+  line-height: 1.7;
+}
+.legal-review .reply-template {
+  margin-top: 8px;
+}
+.legal-review .check-grid {
+  display: grid;
+  gap: 6px;
+  max-height: 220px;
+  overflow: auto;
+  font-size: 13px;
+}
+.gate-kind-group h5 {
+  font-size: 13px;
+  margin: 8px 0 4px;
+}
+.risk-notices {
+  padding-left: 18px;
+}
 .blocker {
   display: flex;
   align-items: flex-start;
@@ -1497,6 +1581,26 @@ pre {
   line-height: 1.8;
   color: #8c9980;
   margin-top: 13px;
+}
+.settings-dispatch {
+  margin-bottom: 24px;
+  padding: 20px 22px;
+  background: var(--surface-muted);
+  border-radius: var(--radius-control);
+}
+.settings-dispatch .metadata {
+  margin: 0;
+}
+.settings-dispatch .metadata dd {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.settings-dispatch p {
+  font-size: 12px;
+  line-height: 1.8;
+  color: #7d9365;
+  margin-top: 14px;
 }
 .settings-form {
   background: var(--surface-paper);
@@ -1678,7 +1782,7 @@ pre {
   align-items: center;
   justify-content: center;
   background: var(--surface-canvas);
-  padding: 100px 24px;
+  padding: 56px 24px;
 }
 .login-appearance {
   position: absolute;
@@ -1694,25 +1798,20 @@ pre {
   padding: 6px 8px;
   font-size: 12px;
 }
-.login-brand {
-  position: absolute;
-  top: 37px;
-  left: 45px;
+.login-lockup {
   display: flex;
   align-items: center;
-  gap: 12px;
-  color: var(--color-brand);
+  gap: 10px;
+  margin-bottom: 28px;
 }
-.login-brand b {
-  font-size: 25px;
-  letter-spacing: -0.9px;
+.login-lockup img {
+  width: 32px;
+  height: 32px;
 }
-.login-brand span {
-  display: block;
-  font-size: 12px;
-  font-weight: 400;
-  letter-spacing: 3px;
-  margin-top: 3px;
+.login-lockup .brand-wordmark strong {
+  color: var(--color-ink);
+}
+.login-lockup .brand-wordmark span {
   color: var(--color-muted);
 }
 .login-card {
@@ -1781,11 +1880,9 @@ pre {
     padding-left: 12px;
     padding-right: 12px;
   }
-  .brand {
-    font-size: 20px;
-  }
-  .brand small {
-    font-size: 12px;
+  .brand img {
+    width: 26px;
+    height: 26px;
   }
   .app-shell > main {
     margin-left: 195px;
@@ -1839,6 +1936,10 @@ pre {
   .brand {
     padding: 0;
     justify-content: center;
+  }
+  .brand img {
+    width: 28px;
+    height: 28px;
   }
   .brand > div,
   .workspace-label,
@@ -2024,10 +2125,6 @@ pre {
     padding: 20px;
     gap: 15px;
   }
-  .login-brand {
-    left: 25px;
-    top: 28px;
-  }
   .login-appearance {
     right: 25px;
     top: 28px;
@@ -2128,6 +2225,7 @@ pre {
 :root[data-theme="dark"] .data-table-row.head,
 :root[data-theme="dark"] .boundary-card,
 :root[data-theme="dark"] .settings-note,
+:root[data-theme="dark"] .settings-dispatch,
 :root[data-theme="dark"] .system-panel pre { background: var(--surface-muted); border-color: var(--line); color: var(--color-ink); }
 :root[data-theme="dark"] .tag { background: var(--surface-muted); color: var(--color-muted); }
 :root[data-theme="dark"] .metric strong,

@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 import httpx
 
 from .launcher import frontend_location
+from .outbound_gate import product_dispatch_state
 from .util import app_dir
 
 NATIVE_REDTEAM_URL = "http://127.0.0.1:8767"
@@ -202,7 +203,12 @@ def legal_capability(published: list[dict] | None = None) -> dict:
     """Published isolation packs are not a product legal endorsement."""
     packs = list(published or [])
     allowed = sum(1 for pack in packs if pack.get("dispatch_allowed"))
-    closer = "仓库劳动包仍为待审草稿。隔离库 publish 不等于法学验收，产品 formal_dispatch 保持阻断。"
+    state = product_dispatch_state()
+    label = "阻断" if state == "blocked" else state
+    closer = (
+        "仓库劳动包仍为待审草稿。隔离库 publish 不等于法学验收，"
+        f"产品 formal_dispatch 保持{label}。"
+    )
     if not packs:
         return {"status": "unconfigured", "detail": f"尚无已发布 V2 案由包。{closer}"}
     extra = f"，其中 {allowed} 个 dispatch_allowed=true" if allowed else "，均未打开产品外发"

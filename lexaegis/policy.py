@@ -2,12 +2,11 @@ import json
 import os
 import re
 from .detection import DEFAULT_PATTERNS, bind_source_spans, detect_text, risk_signals, sensitivity_signals
+from .outbound_gate import G0, attach_disposition, collect_outbound_blockers, forbidden_term_blocker, prohibition_hits, _hit as gate_hit
 from .util import digest
 
 DEFAULT_DISCLOSURE_BUDGET_CHARS = 50000
 DEFAULT_DISCLOSURE_BUDGET_ENTRIES = 20
-_DEMO_COMBINATION_TERMS = frozenset({"唯一", "公开获奖"})
-_DEMO_COMBINATION_BLOCKER = "组合线索风险：唯一岗位或公开事件仍保留"
 
 ATTACKS = ["identity", "candidate_set", "sensitive_inference", "cross_round"]
 PATTERNS = {item["category"]: item["pattern"] for item in DEFAULT_PATTERNS}
@@ -161,9 +160,7 @@ def resolve_disclosure_budget(chars=None, entries=None):
 
 
 def _combination_blocker(matched):
-    if set(matched) <= _DEMO_COMBINATION_TERMS:
-        return _DEMO_COMBINATION_BLOCKER
-    return "组合线索风险：" + "、".join(matched) + "仍保留"
+    return forbidden_term_blocker(matched)
 
 
 def ledger_usage(ledger):
@@ -178,8 +175,8 @@ def ledger_usage(ledger):
     return count, chars
 
 
-def assess(case, pack, facts, decisions, docs, ledger, transport, provider_results=None, attacks=None, isolation_verified=False, budget_chars=None, budget_entries=None):
-    findings, blockers = [], []
+def assess(case, pack, facts, decisions, docs, ledger, transport, provider_results=None, attacks=None, isolation_verified=False, budget_chars=None, budget_entries=None, frozen_request=None):
+    findings, gates = [], []
     emitted = "\n".join(d["output"] for d in decisions if d["output"])
     fact_by_id = {fact["id"]: fact for fact in facts}
     detector_inputs = [(fact_by_id.get(decision["fact_id"], {}).get("source_ids", []),
@@ -192,56 +189,68 @@ def assess(case, pack, facts, decisions, docs, ledger, transport, provider_resul
     ]
     detected = list(dict.fromkeys(finding["category"] for finding in detected_findings))
     if detected:
-        blockers.append("仍包含直接标识：" + "、".join(detected))
+        gates.append(gate_hit(G0, "仍包含直接标识：" + "、".join(detected)))
     registered = [name for entry in case.get("mapping_entries", []) for name in _mapping_names(entry) if name and len(name) >= 2]
     for original in registered or [name for name in (case.get("mapping") or {}) if name and len(str(name)) >= 2]:
         if original and original in emitted:
-            blockers.append("仍包含未替换的登记主体")
+            gates.append(gate_hit(G0, "仍包含未替换的登记主体"))
             break
     if any(d.get("forbidden") and d["output"] for d in decisions):
-        blockers.append("命中规则硬性禁止项")
+        gates.append(gate_hit(G0, "命中规则硬性禁止项"))
     if any(d["necessity"] == "uncertain" or d["status"] in {"review", "restricted"} for d in decisions):
-        blockers.append("存在尚未解决的字段复核事项或已被规则限制的字段")
+        gates.append(gate_hit(G0, "存在尚未解决的字段复核事项或已被规则限制的字段"))
     required = [item for item in decisions if item.get("necessity") == "required"]
     if required and not any(item.get("output") for item in required):
-        blockers.append("必要内容被删光，不能按零泄露计成功")
+        gates.append(gate_hit(G0, "必要内容被删光，不能按零泄露计成功"))
     if not any(d["output"] for d in decisions):
-        blockers.append("没有可发送的事实")
+        gates.append(gate_hit(G0, "没有可发送的事实"))
     if any(not f["confirmed"] or f.get("stale") for f in facts):
-        blockers.append("事实尚未确认或来源版本已更新")
+        gates.append(gate_hit(G0, "事实尚未确认或来源版本已更新"))
     if any(d.get("status") != "ready" or not isinstance(d.get("ir"), dict) or (d.get("ir") or {}).get("needs_review") for d in docs):
-        blockers.append("材料解析、OCR 或转写复核未完成")
+        gates.append(gate_hit(G0, "材料解析、OCR 或转写复核未完成"))
+    demo = case["mode"] == "demo"
     terms = [term for term in (pack or {}).get("forbidden_terms") or [] if term]
     matched = [term for term in terms if term in emitted]
-    if matched:
-        blockers.append(_combination_blocker(matched))
+    if matched and (demo or transport == "local"):
+        gates.append(gate_hit(G0, _combination_blocker(matched)))
     limit_chars, limit_entries = resolve_disclosure_budget(budget_chars, budget_entries)
     used_entries, used_chars = ledger_usage(ledger)
     if used_chars + len(emitted) > limit_chars or used_entries >= limit_entries:
-        blockers.append("跨轮外发已超过工程预算（字符或条数）")
+        gates.append(gate_hit(G0, "跨轮外发已超过工程预算（字符或条数）"))
     if ledger:
         findings.append(f"已纳入 {len(ledger)} 条已发送或结果不明的历史披露；须按冻结协议重新运行跨轮攻击。")
-    demo = case["mode"] == "demo"
     if case.get("scenario") == "stop":
-        blockers.append("合成示例关键证据不完整，主动停止")
+        gates.append(gate_hit(G0, "合成示例关键证据不完整，主动停止"))
+    gates.extend(prohibition_hits(case, pack))
     if not demo and transport != "local":
-        from .governance import validate_formal_gate
-        blockers.extend(validate_formal_gate(pack, provider_results or [], attacks or [], isolation_verified))
-        if set(pack.get("risk_weights", {})) != {"entity", "density", "context", "combination", "cross_round"}:
-            blockers.append("五类风险信号权重尚未冻结")
+        prompt = ""
+        recipient = None
+        if isinstance(frozen_request, dict):
+            prompt = frozen_request.get("prompt") or ""
+            recipient = frozen_request.get("recipient")
+            if not emitted:
+                emitted = "\n".join(
+                    str(item.get("text") or "") for item in (frozen_request.get("facts") or []) if isinstance(item, dict)
+                )
+        gates.extend(collect_outbound_blockers(
+            case, pack, emitted=emitted, ledger=ledger, provider_results=provider_results or [],
+            attacks=attacks, isolation_verified=isolation_verified, prompt=prompt, recipient=recipient,
+        ))
     if transport == "mock" and not demo:
-        blockers.append("正式案件不能使用模拟调用")
+        gates.append(gate_hit(G0, "正式案件不能使用模拟调用"))
     attacks = attacks or [{"kind": name, "capability": "available", "outcome": "not_run"} for name in ATTACKS]
     signals = risk_signals([(source_ids[0] if source_ids else None, text) for source_ids, text in detector_inputs],
                            pack, len(ledger), findings=detected_findings)
     findings.append("确定性检测不是完整再识别测试；未执行的攻击不计为通过。")
     if demo:
         findings.append("仅允许固定合成数据演示；完整风险检验仍未完成。")
+    blockers = list(dict.fromkeys(hit["message"] for hit in gates))
     completion = "complete" if not blockers and all(a.get("outcome") == "resisted" for a in attacks) else "incomplete"
-    return {"completion": completion, "findings": findings, "blockers": list(dict.fromkeys(blockers)), "attacks": attacks,
+    risk = {"completion": completion, "findings": findings, "blockers": blockers, "gates": gates, "attacks": attacks,
             "detection_findings": detected_findings, "sensitivity_signals": sensitivity_signals(detected_findings),
             "risk_signals": signals, "compliance_checks": provider_results or [], "ledger_version": case["ledger_version"],
             "approval_allowed": not blockers, "demo_exception": demo}
+    return attach_disposition(risk)
 
 
 def check_claims(raw, task, facts):

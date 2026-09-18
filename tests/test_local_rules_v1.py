@@ -23,7 +23,7 @@ def labor_pack():
 
 def test_pack_stays_unpublished_after_v1_spec():
     pack = labor_pack()
-    assert pack["version"] == "2.0.0-draft.2"
+    assert pack["version"] == "2.0.0-draft.3"
     assert pack["dispatch_allowed"] is False
     assert any(item["id"] == "local_entity" for item in pack["disclosure_rules"])
     assert GUIDE_VERSION in str(pack["references"])

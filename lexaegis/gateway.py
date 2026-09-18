@@ -7,6 +7,7 @@ from fastapi import FastAPI, HTTPException, Header
 from pydantic import BaseModel
 from .cloud import DualSlotProvider, cloud_endpoint_allowed, wire_contract_error
 from .contracts import ApprovedRequest
+from .runtime_identity import runtime_identity
 from .storage import Store
 from .util import digest, now, restrict_mode, sign
 
@@ -17,7 +18,7 @@ class Envelope(BaseModel):
     signature: str
 
 
-def create_gateway(data_dir=None, secret=None, provider=None):
+def create_gateway(data_dir=None, secret=None, provider=None, build_manifest=None):
     root = Path(data_dir or os.getenv("LEX_GATEWAY_DIR", ".data/gateway"))
     root.mkdir(parents=True, exist_ok=True)
     restrict_mode(root, 0o700)
@@ -26,6 +27,7 @@ def create_gateway(data_dir=None, secret=None, provider=None):
     provider = provider or DualSlotProvider.from_env()
     app = FastAPI(title="LexAegis Egress Gateway", docs_url=None, redoc_url=None)
     app.state.store = store
+    app.state.runtime_identity = runtime_identity("gateway", build_manifest)
 
     def auth(value, signature):
         if not secret or not hmac.compare_digest(sign(value, secret), signature):
@@ -45,8 +47,13 @@ def create_gateway(data_dir=None, secret=None, provider=None):
             detail = "云端密钥已配置；备用槽未配置，仅走主槽"
         else:
             detail = "云端密钥未配置"
-        return {"status": "available" if primary else "unconfigured", "primary": "available" if primary else "unconfigured",
-                "standby": "available" if standby else "unconfigured", "detail": detail}
+        return {
+            "status": "available" if primary else "unconfigured",
+            "primary": "available" if primary else "unconfigured",
+            "standby": "available" if standby else "unconfigured",
+            "detail": detail,
+            "runtime_identity": app.state.runtime_identity.public(),
+        }
 
     @app.get("/requests/{request_id}")
     def status(request_id: str, x_gateway_signature: str = Header(default="")):

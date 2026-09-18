@@ -9,12 +9,22 @@ from .governance import protocol_content_hash
 from .gpu_runtime import gpu_stage, maybe_idle_unload, parse_in_aux_process, parse_uses_gpu
 from .parsing import parse
 from .providers import EdgeClient, ExtractTruncatedError, merge_extract_facts
+from .runtime_identity import runtime_identity, write_runtime_identity
 from .storage import Store
 from .task_engine import validate_cloud_result
 from .util import app_dir, audit, digest, exclusive_lock, now, sign, uid
 
 EXTRACT_CHUNK_CHARS = 14000
 EXTRACT_CHUNK_BLOCKS = 8
+WORKER_RUNTIME_IDENTITY_FILE = "worker-runtime-identity.json"
+
+
+def expose_runtime_identity(root, build_manifest=None):
+    """Expose only the worker's public build identity on the shared app volume."""
+
+    identity = runtime_identity("worker", build_manifest)
+    write_runtime_identity(Path(root) / WORKER_RUNTIME_IDENTITY_FILE, identity)
+    return identity.public()
 
 
 def chunk_extract_blocks(blocks, max_chars=EXTRACT_CHUNK_CHARS, max_blocks=EXTRACT_CHUNK_BLOCKS):
@@ -261,7 +271,7 @@ def process_one(store, root, gateway_client=None, redteam_client=None):
                     audit(repo, task["case_id"], "redteam.protocol.completed",
                           task_id=task["id"], protocol_id=run["protocol_id"],
                           outcome=run["outcome"], result_hash=run["result_hash"])
-                current["redteam_status"] = ("complete" if all(run["outcome"] in ("resisted", "succeeded") for run in runs)
+                current["redteam_status"] = ("complete" if all(run["outcome"] == "resisted" for run in runs)
                                                 else "incomplete")
                 repo.put("task", current, task["case_id"])
         elif job["kind"] in ("send", "reconcile"):
@@ -323,6 +333,7 @@ def process_one(store, root, gateway_client=None, redteam_client=None):
 def run():
     root = app_dir()
     root.mkdir(parents=True, exist_ok=True)
+    expose_runtime_identity(root)
     with exclusive_lock(root / "worker.lock", error=SystemExit("已有一个工作进程在运行")):
         store = Store(root / "app.sqlite")
         service.initialize(store)

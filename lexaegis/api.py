@@ -23,7 +23,9 @@ from .transcribe import whisper_capability
 from .providers import EdgeClient
 from .contracts import ProviderProfile, RiskProtocol
 from .governance import protocol_content_hash, publish_pack_record
+from .outbound_gate import product_dispatch_state
 from .registry import TASKS, import_pack, run_pack_regressions, task_definitions, validate_pack
+from .runtime_identity import runtime_identity
 from .storage import Store
 from .util import app_dir, audit, digest, now, restrict_mode, sign, uid
 
@@ -125,6 +127,27 @@ class ApprovalInput(Input):
     actor_role: Literal["approver"] = "approver"
 
 
+class LegalReviewInput(Input):
+    request_hash: str
+    material_version: int | None = None
+    conclusion: Literal[
+        "allow_processing", "allow_after_minimization",
+        "needs_further_verification", "prohibit_external_processing",
+    ]
+    reason: str = Field(min_length=1, max_length=4000)
+    reviewed_condition_ids: list[str] = Field(min_length=1)
+    legal_source_ids: list[str] = Field(min_length=1)
+    prohibition_findings: list[dict] = Field(default_factory=list)
+    minimization_actions: list[str] = Field(default_factory=list)
+    acknowledged_risk_notices: bool
+    scope_note: str = Field(min_length=1, max_length=2000)
+    fact_premise: str = Field(min_length=1, max_length=2000)
+    authority_judgment: str = Field(min_length=1, max_length=2000)
+    external_processing_note: str = Field(min_length=1, max_length=2000)
+    minimization_note: str = Field(min_length=1, max_length=2000)
+    final_basis: str = Field(min_length=1, max_length=2000)
+
+
 class NamedConfirmation(Input):
     actor: str = Field(min_length=1, max_length=120)
     actor_role: Literal["legal_reviewer", "approver"]
@@ -214,7 +237,7 @@ def assert_docx_payload(data: bytes) -> None:
         raise HTTPException(400, "文件不是有效的 Word DOCX")
 
 
-def create_app(data_dir=None, password=None):
+def create_app(data_dir=None, password=None, build_manifest=None):
     explicit_password = password is not None
     root = Path(data_dir or app_dir()).resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -239,6 +262,7 @@ def create_app(data_dir=None, password=None):
     app = FastAPI(title="LexAegis", docs_url=None, redoc_url=None)
     app.state.store = store
     app.state.root = root
+    app.state.runtime_identity = runtime_identity("api", build_manifest)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "testserver", "api"])
 
     @app.middleware("http")
@@ -297,7 +321,11 @@ def create_app(data_dir=None, password=None):
 
     @app.get("/api/v1/health")
     def health():
-        return {"status": "ok", "version": __version__}
+        return {
+            "status": "ok",
+            "version": __version__,
+            "runtime_identity": app.state.runtime_identity.public(),
+        }
 
     @app.post("/api/v1/login")
     def login(body: LoginInput, request: Request, response: Response):
@@ -437,7 +465,7 @@ def create_app(data_dir=None, password=None):
                     "detail": f"{edge_detail}；{isolation_detail}；{host_detail}；真实云端外发仍未验收；正式案件仍未验收；未取得证据的能力保持未验证",
                     "edge_runtime": edge.get("status"),
                     "cloud_outbound": "not_verified",
-                    "formal_dispatch": "blocked",
+                    "formal_dispatch": product_dispatch_state(),
                     "host_publish": host_publish.get("status"),
                 },
                 "edge": edge, "cloud": cloud,
@@ -861,6 +889,12 @@ def create_app(data_dir=None, password=None):
         identity = require_role(request, "approver")
         with store.transaction() as repo:
             return service.approve_task(repo, task_id, body.request_hash, identity["actor"], "approver")
+
+    @app.post("/api/v1/tasks/{task_id}/legal-review")
+    def legal_review(task_id: str, body: LegalReviewInput, request: Request):
+        identity = require_role(request, "legal_reviewer", "approver")
+        with store.transaction() as repo:
+            return service.record_legal_review(repo, task_id, body.model_dump(), identity["actor"])
 
     @app.post("/api/v1/tasks/{task_id}/send")
     def send(task_id: str, request: Request):

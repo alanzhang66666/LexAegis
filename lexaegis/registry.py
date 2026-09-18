@@ -92,6 +92,34 @@ def _validate_disclosure_overlay(pack):
         raise ValueError("披露规则标识不可重复")
     if any(item.citation_status == "published" for item in pack.legal_sources) and pack.legal_status != "reviewed":
         raise ValueError("未完成法学审核的案由包不能把法源标成已发布")
+    sources_by_id = {item.id: item for item in pack.legal_sources}
+    for rule in pack.disclosure_rules:
+        if not rule.legal_source_ids:
+            continue
+        if not any(
+            sources_by_id[source_id].rule_nature == "statutory"
+            and sources_by_id[source_id].granularity == "article"
+            for source_id in rule.legal_source_ids
+            if source_id in sources_by_id
+        ):
+            raise ValueError("披露规则必须引用至少一条条款级法律规范，国标或整部指向不能单独作为依据")
+    review_ids = {item.id for item in pack.manual_review_conditions}
+    if len(review_ids) != len(pack.manual_review_conditions):
+        raise ValueError("人工复核情形标识不可重复")
+    object_ids = [item.id for item in pack.sensitive_object_rules]
+    if len(set(object_ids)) != len(object_ids):
+        raise ValueError("敏感客体规则标识不可重复")
+    for item in pack.sensitive_object_rules:
+        if any(source_id not in sources for source_id in item.legal_source_ids):
+            raise ValueError("敏感客体规则引用了未定义法源")
+        if any(condition_id not in review_ids for condition_id in item.review_condition_ids):
+            raise ValueError("敏感客体规则引用了未定义复核情形")
+    for item in pack.manual_review_conditions:
+        if any(source_id not in sources for source_id in item.legal_source_ids):
+            raise ValueError("人工复核情形引用了未定义法源")
+    object_citations = [source_id for item in pack.sensitive_object_rules for source_id in item.legal_source_ids]
+    if object_citations and set(object_citations) <= {"spc_labor_interp_1"}:
+        raise ValueError("敏感客体规则不能全部回退到劳动争议解释（一）")
 
 
 def _validate_pattern(spec):

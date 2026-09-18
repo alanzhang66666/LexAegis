@@ -22,6 +22,9 @@ const UNKNOWN_CONDITION: Record<string, string> = {
   claim_stance_known: "主张或否认未填写",
   evidence_holder_known: "证据持有人未填写",
   sub_purpose_overtime: "子目的不是核对加班",
+  sub_purpose_relation: "子目的不是劳动关系经过与争议状态",
+  sub_purpose_wage: "子目的不是欠薪、解除与经济补偿经过",
+  sub_purpose_injury: "子目的不是工伤待遇争议经过",
 };
 
 function modelSuggestion(decision: Obj, facts: Obj[] | undefined) {
