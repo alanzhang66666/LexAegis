@@ -18,6 +18,7 @@
 | 前端与 wheel | `pnpm build` 通过，1590 个模块。重建 `lexaegis-1.0.0-py3-none-any.whl`（536635 字节，SHA-256 `9528eaa18dee6f3747e4bf11b16a36764d2e3cda45df35fc8367d98ca841ee4f`）。归档与当前前端、规则及许可证逐文件比对通过；安装到独立目录后 API 导入及内置资产检查通过。修复重复打包保留旧资源的问题，旧归档确被新校验拒绝。此 wheel 尚未绑定正式镜像和获核验发布清单。 |
 | 恢复中断与旧授权 | 同构建恢复会撤销旧批准、排队发送和未消费许可；复制或任一撤权事务中断后，两端标记阻止启动。已消费网关记录及人工复核历史保留。故障注入和独立复审均通过。 |
 | CI 工作流静态检查 | `actionlint -shellcheck= .github/workflows/ci.yml` 通过；已补测试/构建依赖、测试环境分离、PowerShell 语法检查及 Compose 初始化。静态检查不代表远端 CI 已通过。 |
+| 远端 Actions | 仓库按所有者要求改为 PUBLIC 后，对提交 `8ca2c235c99b2c191b51757bd6a77b0b63141078` 手动触发 [运行 35435576189](https://github.com/Hanyuan9766/LexAegis/actions/runs/35435576189)。七个任务均在分配 runner 前失败、无执行步骤；Linux/macOS/Windows 检查注释一致为 `The job was not started because your account is locked due to a billing issue.` 仓库 Actions 已启用且允许所有 actions。须由账户所有者解除账单锁定后重新执行，不能将公开仓库或成功入队写成 CI 通过。此前 push/PR 运行仅返回 `startup_failure`，没有任务日志。 |
 
 本轮浏览器截图保存在被忽略的 `.artifacts/dual-track-acceptance/`，不提交运行数据库或凭据。真实联调、获准真实案件发送、Windows 干净机器安装、固定 Docker 镜像交付及现场升级回滚仍待目标环境验收。规则和法源补充稿保持待复核，未代签法律发布结论。
 
