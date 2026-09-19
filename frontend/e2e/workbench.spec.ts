@@ -29,6 +29,7 @@ test("human veto is visibly paused by a technical reviewer and rejected by legal
     ["flow.operator", "operator-password-123", "case_operator"],
     ["flow.technical", "technical-password-123", "technical_reviewer"],
     ["flow.legal", "legal-review-password-123", "legal_reviewer"],
+    ["flow.approver", "veto-approver-password-123", "approver"],
   ];
   for (const [username, password, role] of accounts) {
     const response = await page.evaluate(async ({ username, password, role }) => {
@@ -87,6 +88,58 @@ test("human veto is visibly paused by a technical reviewer and rejected by legal
   await expect(page.getByRole("button", { name: "审批当前完整请求" })).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath("human-veto-rejected.png"), fullPage: true });
   await saveAcceptanceScreenshot(page, "human-veto-rejected.png");
+  const rejectedTaskId = await page.getByLabel("任务历史").inputValue();
+  await login("flow.approver", "veto-approver-password-123");
+  await page.locator(".case-row").filter({ hasText: caseData.id }).click();
+  await page.getByRole("button", { name: /03 风险与审批/ }).click();
+  await page.getByLabel("任务历史").selectOption(rejectedTaskId);
+  await expect(page.getByRole("heading", { name: /人工复核已否决，本次请求不可继续/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: "审批当前完整请求" })).toHaveCount(0);
+  const approvalStatus = await page.evaluate(async ({ caseId, taskId }) => {
+    const detail = await (await fetch(`/api/v1/cases/${caseId}`)).json();
+    const task = detail.tasks.find((item:any) => item.id === taskId);
+    return (await fetch(`/api/v1/tasks/${taskId}/approve`, { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ request_hash: task.request_hash }) })).status;
+  }, { caseId: caseData.id, taskId: rejectedTaskId });
+  expect(approvalStatus).toBe(409);
+  await saveAcceptanceScreenshot(page, "human-veto-approver-blocked.png");
+});
+
+test("incomplete materials can be actively stopped before legal review without any dispatch", async ({ page }) => {
+  const sends: string[] = [];
+  page.on("request", request => {
+    if (/\/api\/v1\/tasks\/[^/]+\/send$/.test(request.url())) sends.push(request.url());
+  });
+  const created = page.waitForResponse(response => response.url().endsWith("/api/v1/demos") && response.request().method() === "POST");
+  await page.getByRole("button", { name: /在必要时主动停止/ }).click();
+  const caseData = await (await created).json();
+  await page.getByRole("button", { name: "生成披露方案", exact: true }).click();
+  const evaluated = page.waitForResponse(response => /\/api\/v1\/tasks\/[^/]+\/evaluate$/.test(response.url()));
+  await page.getByRole("button", { name: "检验风险并冻结请求" }).click();
+  const task = await (await evaluated).json();
+  expect(task.risk.blockers.length).toBeGreaterThan(0);
+  expect(task.review_status).toBe("pending");
+  await expect(page.getByRole("button", { name: "停止任务", exact: true })).toBeEnabled();
+  const stopped = page.waitForResponse(response => response.url().endsWith(`/tasks/${task.id}/stop`));
+  await page.getByRole("button", { name: "停止任务", exact: true }).click();
+  expect((await stopped).status()).toBe(200);
+  await expect(page.getByRole("heading", { name: /任务已主动停止，本次请求不可继续/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: "重新检验", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "停止任务", exact: true })).toBeDisabled();
+  await page.goto("/");
+  await page.locator(".case-row").filter({ hasText: caseData.id }).click();
+  await page.getByRole("button", { name: /03 风险与审批/ }).click();
+  await page.getByLabel("任务历史").selectOption(task.id);
+  await expect(page.getByRole("heading", { name: /任务已主动停止，本次请求不可继续/ })).toBeVisible();
+  const persisted = await page.evaluate(async ({caseId, taskId}) => {
+    const data = await (await fetch(`/api/v1/cases/${caseId}`)).json();
+    return data.tasks.find((item:any) => item.id === taskId);
+  }, {caseId: caseData.id, taskId: task.id});
+  expect(persisted.status).toBe("stopped");
+  expect(persisted.approval).toBeNull();
+  expect(persisted.request_hash).toBe(task.request_hash);
+  expect(sends).toHaveLength(0);
+  await saveAcceptanceScreenshot(page, "incomplete-materials-stopped.png");
 });
 
 test("technical reviewer can prepare a production rule draft but cannot publish or send", async ({ page }, testInfo) => {

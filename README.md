@@ -188,10 +188,14 @@ flowchart LR
 
 ```bash
 python -m pytest -q
-cd frontend && pnpm build && pnpm exec playwright test
+cd frontend
+pnpm build
+pnpm exec playwright test --project=desktop-1280 --grep-invert five-viewport
+pnpm exec playwright test --config=playwright.runtime-pack.config.ts
+pnpm exec playwright test --grep five-viewport
 ```
 
-本机后端测试以 `python -m pytest -q` 为准（2026-09-14：283 项通过、3 项跳过）。[VALIDATION.md](docs/VALIDATION.md) 另记 2026-09-08/09 的前端构建与 `desktop-1280` Playwright（含 D 路径的工作树本轮未重跑 e2e）。远端 CI 未取得 / 本轮不跑。容器隔离宿主机发布、真实云端 API 仍待目标环境取证。
+本轮结果、命令和证据边界以 [VALIDATION.md](docs/VALIDATION.md) 的 2026-09-19 条目为准；历史条目保留原日期。演示和生产浏览器测试启动独立环境，生产测试不会自动写入正式通过证据。仓库公开后已触发远端 CI，但 GitHub 因账户账单锁定未启动任务。容器隔离、Windows 实机及真实云端 API 仍待目标环境取证。
 
 ---
 

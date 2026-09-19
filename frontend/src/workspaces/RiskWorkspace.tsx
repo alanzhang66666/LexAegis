@@ -26,12 +26,16 @@ export function RiskWorkspace({ task, pack, busy, role, runtimeProfile, dataOrig
     || ["review_blocked", "rejected", "stopped"].includes(task.status);
   const manuallyStopped = ["blocked", "rejected"].includes(reviewStatus)
     || ["review_blocked", "rejected", "stopped"].includes(task.status);
-  const effectiveTitle = reviewStatus === "rejected" || task.status === "rejected"
+  const effectiveTitle = task.status === "stopped"
+    ? "任务已主动停止，本次请求不可继续"
+    : reviewStatus === "rejected" || task.status === "rejected"
     ? "人工复核已否决，本次请求不可继续"
     : reviewStatus === "blocked" || task.status === "review_blocked" || task.status === "stopped"
       ? "本次请求已暂停"
       : reviewBlocked ? "待人工复核，本次请求暂不可继续" : summary.legal;
   const canReevaluate = !manuallyStopped && !["queued","sending","complete","unknown","rejected","stopped"].includes(task.status);
+  const canStop = ["case_operator", "admin"].includes(role || "")
+    && !["sending", "complete", "unknown", "rejected", "stopped", "failed"].includes(task.status);
   const release = task.product_release || {};
   const releaseState = release.state || "blocked";
   const releaseAllowed = task.request?.mode !== "formal" || task.transport !== "cloud"
@@ -60,7 +64,7 @@ export function RiskWorkspace({ task, pack, busy, role, runtimeProfile, dataOrig
       <span>{summary.ready} · 完整风险检验：{task.risk.completion === "complete" ? "已完成" : "未完成"} · 不代表已证明安全</span>
     </div>
     <div className="review-status-strip"><b>人工复核：{({pending:"待人工复核",blocked:"已暂停",rejected:"已否决",cleared:"已完成",not_required:"无需复核"} as Record<string,string>)[reviewStatus] || reviewStatus}</b>
-      <span>{task.review_status === "rejected" || task.status === "rejected" ? "否决仅针对当前请求；请调整后创建关联后继任务。" : task.review_status === "blocked" || task.status === "review_blocked" ? "原初检结果保留供追溯，当前请求已停止。" : reviewBlocked ? "完成具名人工复核后才能继续。" : "人工复核状态已解除；仍需通过其余风险门禁和审批。"}</span>
+      <span>{task.status === "stopped" ? "当前任务已终止，原请求及初检记录保留；如需继续处理，请新建任务。" : task.review_status === "rejected" || task.status === "rejected" ? "否决仅针对当前请求；请调整后创建关联后继任务。" : task.review_status === "blocked" || task.status === "review_blocked" ? "原初检结果保留供追溯，当前请求已停止。" : reviewBlocked ? "完成具名人工复核后才能继续。" : "人工复核状态已解除；仍需通过其余风险门禁和审批。"}</span>
     </div>
     <div className={"product-release-state " + (releaseAllowed ? "ready" : "blocked")}>
       <b>正式放行门：{releaseState === "eligible" ? "符合当前放行范围" : releaseState === "armed_once" ? "一次性许可已就绪" : releaseState === "not_applicable" ? "本任务不适用正式外发" : "未满足，禁止审批或发送"}</b>
@@ -123,7 +127,7 @@ export function RiskWorkspace({ task, pack, busy, role, runtimeProfile, dataOrig
       {task.status === "unknown" && <button className="secondary" onClick={()=>onAction("reconcile")}>查询网关记录（不重发）</button>}
       <button className="secondary" disabled={busy || !canReevaluate}
         onClick={()=>onAction("evaluate")}>重新检验</button>
-      <button className="text-button danger-text" disabled={busy || reviewBlocked || ["queued","sending","complete","unknown"].includes(task.status)}
+      <button className="text-button danger-text" disabled={busy || !canStop}
         onClick={()=>onAction("stop")}>停止任务</button>
       {(task.status === "rejected" || task.status === "review_blocked" || task.review_status === "rejected") &&
         <button className="secondary" disabled={busy} onClick={onSuccessor}>调整后创建关联后继任务</button>}
