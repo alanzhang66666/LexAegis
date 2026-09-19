@@ -1,8 +1,16 @@
 """Only these bundled synthetic facts can enter demo runs. No user uploads."""
 SCENARIOS = {
     "success": {
-        "name": "合成案例 · 工资争议",
-        "facts": [("entity", "林澄"), ("entity", "星桥示例科技有限公司"), ("relation", "林澄与星桥示例科技有限公司建立劳动关系。"), ("event", "林澄主张星桥示例科技有限公司未支付工资。"), ("date", "双方于2025年3月12日签署劳动合同。"), ("amount", "劳动者主张未支付工资12000元。"), ("evidence", "劳动合同与工资表用于支持劳动关系及工资金额。")],
+        "name": "合成案例 · 乔安工资争议",
+        "facts": [
+            ("entity", "乔安"),
+            ("entity", "云岑示例商贸有限公司"),
+            ("relation", "乔安与云岑示例商贸有限公司建立劳动关系。"),
+            ("event", "乔安主张云岑示例商贸有限公司未支付2025年5月工资。"),
+            ("date", "双方于2025年1月8日签署劳动合同。"),
+            ("amount", "劳动者主张未支付工资9800元。"),
+            ("evidence", "劳动合同、2025年5月工资核算表和工资支付记录用于支持劳动关系及工资请求。"),
+        ],
         "note": "所有名称、金额与经过均为合成示例；不对应真实案件。",
     },
     "linkage": {
@@ -67,3 +75,33 @@ def seed_synthetic_protocols(repo):
         if pack.get("status") == "demo":
             pack["risk_protocols"] = [{"id": p["id"], "version": p["version"]} for p in protocols]
             repo.put("pack", pack)
+
+
+# Exact, reviewed recording attachments. This identifies facts, never an approval.
+RECORDING_DOCUMENTS = {
+    "41d51e9339f76a183f347928d3a6a342de0425717ce6b19db63e08d9097d25ba": "linkage",
+    "4e2a3e0a0d5c2068ceb86b75636f0ea241d31cfefd8eb11e44f12c9315c05496": "human_veto",
+    "25600e56fe86830971fe053085a106481319cde67753725d83d3d0537a439976": "success",
+}
+
+
+def _load_local_recording_bundle():
+    """Load a reviewed offline bundle; original case materials stay outside Git."""
+    import hashlib
+    import json
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / 'data/recording_adapted/scenarios.json'
+    if not path.exists():
+        return
+    data = path.read_bytes()
+    if hashlib.sha256(data).hexdigest() != 'cdf14ba5244d4fa9ef23127d97064611cbb45d7e85831fdf0afbd1e1ff15e542':
+        raise ValueError('本地案例事实包校验失败，请恢复已登记版本')
+    bundle = json.loads(data)
+    if set(bundle['scenarios']) & set(SCENARIOS):
+        raise ValueError('本地案例不得覆盖既有案例')
+    SCENARIOS.update(bundle['scenarios'])
+    RECORDING_DOCUMENTS.update(bundle['documents'])
+
+
+_load_local_recording_bundle()

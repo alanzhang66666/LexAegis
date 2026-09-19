@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Download, FileText, Upload } from "lucide-react";
 import { Empty, Tag } from "../components/ui";
 
@@ -14,9 +14,13 @@ export function SourceViewer({ data, currentCase, caseId, busy, activeSource, bl
   onConfirm?: (source: Obj) => void;
   onRetry?: (document: Obj) => void;
 }) {
+  const [fullText, setFullText] = useState(false);
+  useEffect(() => { setFullText(false); }, [activeSource?.id]);
   const [confirming, setConfirming] = useState(false);
   const [confirmError, setConfirmError] = useState("");
   const viewed = (activeSource && blocks.find((block) => block.id === activeSource.id)) || activeSource;
+  const viewedDocument = data.documents.find((item: Obj) => item.id === viewed?.document_id);
+  const documentBlocks: Obj[] = viewedDocument?.ir?.blocks || [];
   const canConfirm = Boolean(
     currentCase.mode === "formal"
     && viewed
@@ -50,19 +54,26 @@ export function SourceViewer({ data, currentCase, caseId, busy, activeSource, bl
       <button onClick={() => onSelect(document.ir?.blocks[0] || null)}>
         <FileText size={15}/><span>{document.name}<small>v{document.version} · {document.status === "ready" ? "已解析" : document.status}</small>
           {document.error && <small className="danger-text">{document.error}</small>}</span>
+      </button>
         {document.extension !== "demo" && <a href={`/api/v1/cases/${caseId}/documents/${document.id}/file`}
           onClick={event => event.stopPropagation()} title="下载原件"><Download size={14}/></a>}
-      </button>{document.status === "failed" && onRetry && <button className="text-button" disabled={busy} onClick={()=>onRetry(document)}>重试解析</button>}
+      {document.status === "failed" && onRetry && <button className="text-button" disabled={busy} onClick={()=>onRetry(document)}>重试解析</button>}
       </div>)}</div>
-    {currentCase.mode === "formal" && <label className="upload"><Upload size={17}/><span>
-      上传 DOCX / PDF / 文本 / 表格 / 图片 / 音视频<small>TXT 按段落切块 · XLSX/CSV 按单元格定位 · PNG/JPEG 可选本地 OCR · 音视频本机转写后复核 · 最大 20 MB</small></span>
-      <input type="file" accept=".docx,.pdf,.txt,.png,.jpg,.jpeg,.xlsx,.csv,.mp3,.m4a,.wav,.mp4" disabled={busy}
+    {<label className="upload"><Upload size={17}/><span>
+      {currentCase.mode === "demo" ? "导入 Word 材料" : "上传 DOCX / PDF / 文本 / 表格 / 图片 / 音视频"}<small>{currentCase.mode === "demo" ? "选择配套 Word 文件，载入对应案件并进入工作区 · 最大 2 MB" : "TXT 按段落切块 · XLSX/CSV 按单元格定位 · PNG/JPEG 可选本地 OCR · 音视频本机转写后复核 · 最大 20 MB"}</small></span>
+      <input type="file" aria-label="上传案件材料" accept={currentCase.mode === "demo" ? ".docx" : ".docx,.pdf,.txt,.png,.jpg,.jpeg,.xlsx,.csv,.mp3,.m4a,.wav,.mp4"} disabled={busy}
         onChange={event => {
           const file = event.target.files?.[0];
           if (file) onUpload(file);
           event.target.value = "";
         }}/></label>}
     {viewed ? <>
+      {viewedDocument?.source_role === "recording_original" && <div className="source-actions">
+        <span>完整材料 · {documentBlocks.length} 个段落及表格单元</span>
+        <button className="text-button" onClick={() => setFullText(!fullText)}>
+          {fullText ? "分段定位" : "阅读全文"}
+        </button>
+      </div>}
       <div className="source-label"><span>{viewed.locator} · v{viewed.document_version}</span>
         {viewed.confidence !== null && viewed.confidence !== undefined &&
           <Tag tone="amber">{viewed.kind === "transcript" ? "转写" : "OCR"} {Math.round(viewed.confidence * 100)}%</Tag>}</div>
@@ -75,15 +86,19 @@ export function SourceViewer({ data, currentCase, caseId, busy, activeSource, bl
           height: (viewed.bbox[3] - viewed.bbox[1]) * 100 + "%",
         }}/>}
       </div>}
-      <div className="source-text">{viewed.text || (viewed.kind === "transcript"
+      {fullText ? <div className="source-text" aria-label="完整材料正文">
+        {documentBlocks.map(block => <div key={block.id}>
+          <small>{block.locator}</small><p>{block.text}</p>
+        </div>)}
+      </div> : <div className="source-text">{viewed.text || (viewed.kind === "transcript"
         ? "未转写文本。请配置本机转写或人工校正。"
-        : "未识别文本。请配置本地 OCR 或查看原图后人工转录。")}</div>
+        : "未识别文本。请配置本地 OCR 或查看原图后人工转录。")}</div>}
       <div className="source-actions">{currentCase.mode === "formal" && <>
         {canConfirm && <button className="text-button" disabled={busy || confirming} onClick={() => confirmBlock(viewed)}>确认本块</button>}
         <button className="text-button" disabled={busy} onClick={() => onCorrect(viewed)}>校正并生成新版本</button>
       </>}{confirmError && <small className="danger-text">{confirmError}</small>}</div>
       <div className="anchor-list">{blocks.map((block, index) =>
-        <button className={viewed.id === block.id ? "selected" : ""} key={block.id} onClick={() => onSelect(block)}>
+        <button className={viewed.id === block.id ? "selected" : ""} key={block.id} onClick={() => { setFullText(false); onSelect(block); }}>
           <span>{String(index + 1).padStart(2, "0")}</span><span>{block.text.slice(0, 35) || block.locator}</span>
         </button>)}</div>
     </> : <Empty title="尚无材料" detail="上传材料后在此查看原文与来源位置。"/>}

@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { PRODUCT_VERSION } from "../release";
+import { useEffect, useState, type FormEvent } from "react";
 import { Download, FlaskConical, Plus, RefreshCw, ServerCog, ShieldAlert, Upload, Users } from "lucide-react";
 import { Button, DataTable, Panel, StatusBadge, Tag } from "../components/ui";
 
@@ -13,7 +14,7 @@ const providerDefault = {
   allowed_domains:"labor",allowed_fields:"entity,relation,event,date,amount,evidence",allowed_transports:["cloud"],status:"draft",
 };
 
-export function ProviderCenter({providers=[],request,refresh,busy}:{providers?:Obj[];request:RequestFn;refresh:()=>Promise<any>;busy:boolean}) {
+export function ProviderCenter({providers=[],request,refresh,busy,runtimeProfile}:{runtimeProfile?:string;providers?:Obj[];request:RequestFn;refresh:()=>Promise<any>;busy:boolean}) {
   const [form,setForm]=useState<Obj|null>(null);
   const [error,setError]=useState("");
   const save=async()=>{
@@ -34,7 +35,7 @@ export function ProviderCenter({providers=[],request,refresh,busy}:{providers?:O
     <div className="section-heading"><div><div className="eyebrow">服务商档案</div><h1>服务商治理</h1>
       <p>处理角色、地区、留存、训练、人工访问、分包与删除机制均由人员登记，不使用 IP 推断。</p></div>
       <Button variant="primary" onClick={()=>setForm({...providerDefault})}><Plus size={15}/>新建档案</Button></div>
-    {!providers.length&&<div className="legal-block"><ShieldAlert/><div><h3>正式外发被阻断</h3><p>尚无经复核的服务商档案。关键字段未知时不会显示为可用。</p></div></div>}
+    {runtimeProfile!=="demo"&&!providers.length&&<div className="legal-block"><ShieldAlert/><div><h3>正式外发被阻断</h3><p>尚无经复核的服务商档案。关键字段未知时不会显示为可用。</p></div></div>}
     <div className="governance-grid">{providers.map(provider=><Panel key={provider.id} title={provider.name}
       actions={<StatusBadge tone={provider.status==="reviewed"?"green":"amber"}>{provider.status} · v{provider.profile_version||1}</StatusBadge>}>
       <dl className="metadata"><dt>处理地区</dt><dd>{provider.processing_regions?.join(" / ")||"未知"}</dd>
@@ -67,7 +68,7 @@ const legalFormLabels: Record<string,string> = {
   fa06_annotation:"法 06 · 双人标注与仲裁",
 };
 
-export function LegalEvidenceCenter({cases=[],request}:{cases?:Obj[];request:RequestFn}) {
+export function LegalEvidenceCenter({cases=[],request,runtimeProfile}:{runtimeProfile?:string;cases?:Obj[];request:RequestFn}) {
   const realCases=cases.filter(item=>item.mode!=="demo");
   const [caseId,setCaseId]=useState(""),[formType,setFormType]=useState("fa01_source");
   const [file,setFile]=useState<File|null>(null),[items,setItems]=useState<Obj[]>([]);
@@ -101,8 +102,8 @@ export function LegalEvidenceCenter({cases=[],request}:{cases?:Obj[];request:Req
   return <div className="content governance-page">
     <div className="section-heading"><div><div className="eyebrow">受控材料</div><h1>法学证据登记</h1>
       <p>上传表格后系统只记录原件与 SHA-256。核验结论在此留痕；门禁通过仍由对应运行回执判断。</p></div></div>
-    <div className="legal-block"><ShieldAlert/><div><h3>默认保持外发阻断</h3>
-      <p>“已收到”或“证据已核齐”不会把服务商改为 reviewed、规则改为 published，也不会批准请求。</p></div></div>
+    {runtimeProfile!=="demo"&&<div className="legal-block"><ShieldAlert/><div><h3>默认保持外发阻断</h3>
+      <p>“已收到”或“证据已核齐”不会把服务商改为 reviewed、规则改为 published，也不会批准请求。</p></div></div>}
     {!realCases.length?<Panel title="暂无正式案件"><p>先在案件工作台建立正式案件，再登记法学表格。</p></Panel>:<>
       <Panel title="上传已填写表格"><div className="governance-form">
         <label>对应案件<select value={caseId} onChange={e=>setCaseId(e.target.value)}>{realCases.map(item=><option key={item.id} value={item.id}>{item.name} · {item.id}</option>)}</select></label>
@@ -132,10 +133,16 @@ const protocolDefault={id:"",kind:"identity",version:"1.0",status:"draft",attack
   auxiliary_data:[],query_budget:3,time_budget_seconds:30,success_criteria:{operator:"gte",metric:"attack_score"},
   threshold:.5,random_seed:23,content_hash:null};
 
-export function BenchmarkCenter({protocols=[],request,refresh}:{protocols?:Obj[];request:RequestFn;refresh:()=>Promise<any>}) {
+export function BenchmarkCenter({protocols=[],request,refresh,runtimeProfile}:{runtimeProfile?:string;protocols?:Obj[];request:RequestFn;refresh:()=>Promise<any>}) {
   const [form,setForm]=useState<Obj|null>(null);
   const frozen=protocols.filter(item=>item.status==="frozen").length;
   const save=async()=>{if(!form)return;await request("/risk-protocols/"+form.id,"PUT",form);setForm(null);await refresh()};
+  if(runtimeProfile === "demo") return <div className="content governance-page">
+    <div className="section-heading"><div><div className="eyebrow">隔离研究</div><h1>隔离研究与风险攻击</h1>
+      <p>网络隔离、独立风险攻击与研究工具将在后续版本提供。</p></div><Tag tone="amber">待开发</Tag></div>
+    <Panel title="隔离研究工作区"><p>当前案件的规则检验、人工复核和审批流程可正常使用。</p></Panel>
+  </div>;
+
   return <div className="content governance-page">
     <div className="section-heading"><div><div className="eyebrow">隔离研究</div><h1>隔离实验与风险协议</h1>
       <p>生产攻击协议与 Ianvs 离线实验分轨运行，均不挂载原文和 mapping。</p></div>
@@ -163,28 +170,32 @@ export function BenchmarkCenter({protocols=[],request,refresh}:{protocols?:Obj[]
 }
 
 export function UserCenter({request}:{request:RequestFn}) {
-  const [usersList,setUsers]=useState<Obj[]>([]),[error,setError]=useState("");
+  const [usersList,setUsers]=useState<Obj[]>([]),[error,setError]=useState(""),[busy,setBusy]=useState(false);
   const [form,setForm]=useState({username:"",display_name:"",role:"case_operator",password:""});
-  const load=()=>request("/users").then(setUsers).catch(e=>setError(e.message));
+  const load=async()=>{try{setUsers(await request("/users"));setError("")}catch(e){setError((e as Error).message)}};
   useEffect(()=>{load()},[]);
-  const create=async()=>{try{setError("");await request("/users","POST",form);setForm({username:"",display_name:"",role:"case_operator",password:""});load()}catch(e){setError((e as Error).message)}};
+  const create=async(event:FormEvent<HTMLFormElement>)=>{event.preventDefault();if(busy)return;setBusy(true);setError("");try{
+    await request("/users","POST",{...form,username:form.username.trim().toLowerCase(),display_name:form.display_name.trim()});
+    setForm({username:"",display_name:"",role:"case_operator",password:""});await load();
+  }catch(e){setError((e as Error).message)}finally{setBusy(false)}};
+  const update=async(username:string,body:Obj)=>{setError("");try{await request("/users/"+username,"PUT",body);await load()}
+    catch(e){setError((e as Error).message)}};
   return <div className="content governance-page"><div className="section-heading"><div><div className="eyebrow">本地账号</div>
     <h1>本地用户与角色</h1><p>账户只保存在当前实例；角色变更与停用在下一请求立即生效。</p></div><Users/></div>
     <DataTable rowKey={row=>row.id} rows={usersList} columns={[{key:"display_name",label:"人员"},{key:"username",label:"用户名"},
       {key:"role",label:"角色",render:row=><select aria-label={`${row.username} 的角色`} value={row.role}
-        onChange={async event=>{try{await request("/users/"+row.username,"PUT",{role:event.target.value});load()}catch(e){setError((e as Error).message)}}}>
+        onChange={event=>update(row.username,{role:event.target.value})}>
         {["admin","case_operator","technical_reviewer","legal_reviewer","approver"].map(value=><option key={value}>{value}</option>)}</select>},
       {key:"status",label:"状态",render:row=><Tag tone={row.status==="active"?"green":"amber"}>{row.status}</Tag>},
-      {key:"action",label:"操作",render:row=><button disabled={row.username==="admin"} onClick={async()=>{try{
-        await request("/users/"+row.username,"PUT",{status:row.status==="active"?"disabled":"active"});load()
-      }catch(e){setError((e as Error).message)}}}>{row.status==="active"?"停用":"启用"}</button>}]}/>
-    <Panel title="创建本地账户"><div className="governance-form">
-      <label>用户名<input value={form.username} onChange={e=>setForm({...form,username:e.target.value})}/></label>
-      <label>显示名称<input value={form.display_name} onChange={e=>setForm({...form,display_name:e.target.value})}/></label>
+      {key:"action",label:"操作",render:row=><button disabled={row.username==="admin"} onClick={()=>update(row.username,{status:row.status==="active"?"disabled":"active"})}>{row.status==="active"?"停用":"启用"}</button>}]}/>
+    {error&&<p className="error" role="alert">{error}</p>}
+    <Panel title="创建本地账户"><form onSubmit={create}><div className="governance-form">
+      <label>用户名<input required minLength={3} maxLength={32} pattern="[A-Za-z][A-Za-z0-9_.-]{2,31}" autoComplete="off" value={form.username} onChange={e=>setForm({...form,username:e.target.value})}/><small>3–32 位，以字母开头；可用字母、数字、点、下划线和连字符。</small></label>
+      <label>显示名称<input required maxLength={80} value={form.display_name} onChange={e=>setForm({...form,display_name:e.target.value})}/></label>
       <label>角色<select value={form.role} onChange={e=>setForm({...form,role:e.target.value})}>
         {["admin","case_operator","technical_reviewer","legal_reviewer","approver"].map(value=><option key={value}>{value}</option>)}</select></label>
-      <label>初始口令<input type="password" minLength={12} value={form.password} onChange={e=>setForm({...form,password:e.target.value})}/></label>
-    </div>{error&&<p className="error">{error}</p>}<Button variant="primary" onClick={create}>创建账户</Button></Panel>
+      <label>初始口令<input type="password" required minLength={12} maxLength={512} autoComplete="new-password" value={form.password} onChange={e=>setForm({...form,password:e.target.value})}/><small>至少 12 个字符。</small></label>
+    </div><Button type="submit" variant="primary" disabled={busy}>{busy?"正在创建…":"创建账户"}</Button></form></Panel>
   </div>;
 }
 
@@ -321,24 +332,35 @@ export function RuntimePackWorkflow({cases,providers=[],runtimeConfig={},request
 
 export function LegalPackCenter({packs=[],tasks=[],cases=[],providers=[],runtimeConfig={},request,runtimeProfile,role}:{packs?:Obj[];tasks?:Obj[];cases?:Obj[];providers?:Obj[];runtimeConfig?:Obj;request:RequestFn;runtimeProfile?:string;role?:string}) {
   const [reports,setReports]=useState<Record<string,Obj>>({});
+  const visiblePacks=runtimeProfile === "demo" ? packs.filter(pack=>pack.status === "demo") : packs;
   const realCases=cases.filter(item=>item.mode!=="demo"&&item.runtime_profile!=="demo");
   return <div className="content governance-page"><div className="section-heading"><div><div className="eyebrow">可扩展设计</div>
-    <h1>法学规则中心</h1><p>规则草稿、具名法学复核与正式发布分步完成；未发布规则始终阻断外发。</p></div><ServerCog/></div>
+    <h1>法学规则中心</h1><p>{runtimeProfile === "demo" ? "查看当前案件使用的字段处理规则、人工复核条件与攻击协议。" : "规则草稿、具名法学复核与正式发布分步完成；未发布规则始终阻断外发。"}</p></div><ServerCog/></div>
     {runtimeProfile==="production"&&<RuntimePackWorkflow cases={realCases} providers={providers} runtimeConfig={runtimeConfig} request={request} role={role}/ >}
     <h2 className="subheading">任务能力</h2><div className="capability-grid">{tasks.map(task=><Panel key={task.id} title={task.name}>
       <StatusBadge tone={task.status==="available"||task.available?"green":"neutral"}>{task.status||"unimplemented"}</StatusBadge>
-      <p>{task.id} · {task.version}</p></Panel>)}</div>
-    <h2 className="subheading">案由知识包</h2>{packs.map(pack=>{
+      <p>{task.id} · {runtimeProfile === "demo" ? PRODUCT_VERSION : task.version}</p></Panel>)}</div>
+    <h2 className="subheading">案由知识包</h2>{visiblePacks.map(pack=>{
       const fields=(pack.fact_fields||[]).map((field:any)=>typeof field==="string"?field:field.id);
       const expected=Math.max(1,(pack.task_ids||[]).length*fields.length);
-      const matrix=Math.round(((pack.task_field_matrix||[]).length/expected)*100);
+      const rows=pack.schema_version === 1
+        ? (pack.task_ids||[]).flatMap((task_id:string)=>fields.flatMap((field:string)=>{
+            const rule=(pack.rules||[]).find((item:Obj)=>item.field===field);
+            return rule ? [{task_id,field,necessity:rule.necessity,transform:rule.transform}] : [];
+          }))
+        : (pack.task_field_matrix||[]);
+      const covered=new Set(rows.filter((row:Obj)=>(pack.task_ids||[]).includes(row.task_id)&&fields.includes(row.field)).map((row:Obj)=>`${row.task_id}:${row.field}`)).size;
+      const matrix=Math.round(covered/expected*100);
       const blockers=[pack.status!=="published"&&"规则未发布",pack.legal_status!=="reviewed"&&"法学状态待审",
         !pack.dispatch_allowed&&"正式外发未授权",!(pack.risk_protocols||[]).length&&"未绑定攻击协议"].filter(Boolean);
-      return <Panel key={pack.id} title={pack.name} actions={<Tag tone={pack.status==="published"?"green":"amber"}>{pack.status}</Tag>}>
-        <dl className="metadata"><dt>版本</dt><dd>{pack.version}</dd><dt>字段矩阵</dt><dd>{matrix}%（只表示结构完成度）</dd>
-          <dt>法学发布</dt><dd>{pack.legal_status||"pending_legal_review"}</dd><dt>攻击协议</dt><dd>{(pack.risk_protocols||[]).length} 项引用</dd></dl>
-        <div className="blocker-list">{blockers.map(String).map(item=><span className="blocker" key={item}><ShieldAlert size={13}/>{item}</span>)}</div>
-        <div className="panel-actions"><button onClick={async()=>setReports({...reports,[pack.id]:await request("/packs/"+pack.id+"/validate","POST")})}>校验结构与合成回归</button></div>
+      return <Panel key={pack.id} title={runtimeProfile === "demo" ? pack.name.replace(/（V\d+[^）]*）/g, "") : pack.name} actions={<Tag tone={pack.status==="published"?"green":"amber"}>{runtimeProfile === "demo" ? "本地适用" : pack.status}</Tag>}>
+        <dl className="metadata"><dt>{runtimeProfile === "demo" ? "产品版本" : "版本"}</dt><dd>{runtimeProfile === "demo" ? PRODUCT_VERSION : pack.version}</dd><dt>字段矩阵</dt><dd>{matrix}%（{covered}/{expected} 项）</dd>
+          <dt>{runtimeProfile === "demo" ? "规则配置" : "法学发布"}</dt><dd>{runtimeProfile === "demo" ? "已配置 · 逐请求复核" : pack.legal_status||"pending_legal_review"}</dd><dt>攻击协议</dt><dd>{runtimeProfile === "demo" ? "待开发" : `${(pack.risk_protocols||[]).length} 项引用`}</dd></dl>
+        <details><summary>查看字段矩阵</summary><DataTable rowKey={row=>`${row.task_id}:${row.field}`} rows={rows} columns={[
+          {key:"task_id",label:"任务"},{key:"field",label:"字段"},{key:"necessity",label:"必要性"},
+        ]}/></details>
+        {runtimeProfile!=="demo"&&<div className="blocker-list">{blockers.map(String).map(item=><span className="blocker" key={item}><ShieldAlert size={13}/>{item}</span>)}</div>}
+        <div className="panel-actions"><button onClick={async()=>setReports({...reports,[pack.id]:await request("/packs/"+pack.id+"/validate","POST")})}>校验结构与流程</button></div>
         {reports[pack.id]&&<pre>{JSON.stringify(reports[pack.id],null,2)}</pre>}
       </Panel>})}
   </div>;

@@ -69,7 +69,7 @@ export function DisclosureWorkspace({ task, currentCase, busy, label, onEdit,
   return <>
     <div className="context-note"><LockKeyhole size={14}/>
       仅下方披露内容会进入请求；原文和身份映射保留在边侧。</div>
-    {task.sub_purpose ? <div className="context-note">子目的 {label(String(task.sub_purpose))} · 规则为待审草稿，非正式法源，正式外发仍阻断。</div> : null}
+    {task.sub_purpose && currentCase.mode !== "demo" ? <div className="context-note">子目的 {label(String(task.sub_purpose))} · 规则为待审草稿，非正式法源，正式外发仍阻断。</div> : null}
     {task.decisions.map((decision: Obj, index: number) => {
       const suggestion = modelSuggestion(decision, task.fact_snapshot);
       const fromFollowup = followupIds.includes(decision.fact_id);

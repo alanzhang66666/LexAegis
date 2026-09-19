@@ -1,3 +1,6 @@
+import { RecordingProviderCenter } from "./pages/RecordingProviderCenter";
+import { loadRecordingProviders } from "./recordingProviders";
+import { PRODUCT_RELEASE, PRODUCT_VERSION } from "./release";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ShieldCheck,
@@ -20,6 +23,7 @@ import {
   Users,
   Moon,
   Sun,
+  FileText,
 } from "lucide-react";
 import { Dialog, Empty, StageStepper, Tag } from "./components/ui";
 import { BenchmarkCenter, LegalEvidenceCenter, LegalPackCenter, ProviderCenter, UserCenter } from "./pages/GovernanceCenters";
@@ -29,6 +33,11 @@ import { SourceViewer } from "./workspaces/SourceViewer";
 import { FactWorkspace } from "./workspaces/FactWorkspace";
 import { DisclosureWorkspace } from "./workspaces/DisclosureWorkspace";
 import { ContextRail } from "./workspaces/ContextRail";
+import { RecordingStageContent } from "./workspaces/RecordingStageContent";
+
+function caseTitle(item: Record<string, any>): string {
+  return item.mode === "demo" ? String(item.name || "").replace(/^合成案例\s*·\s*/, "") : item.name;
+}
 
 const PALETTES = [
   ["forest", "林绿"],
@@ -196,7 +205,6 @@ const labels: Record<string, string> = {
   cross_round: "跨轮关联",
 };
 const attackLabels: Record<string, string> = { resisted: "工程基线未突破 · 非正式结论", succeeded: "工程基线检出 · 阻断", uncertain: "无候选或不确定 · 阻断", error: "执行错误 · 阻断", not_run: "未运行 · 阻断", not_applicable: "不适用 · 不计通过" };
-const PRODUCT_RELEASE = "V1.0";
 const txt = (key: string) => labels[key] || key;
 function formalDispatchValue(cap?: Obj | null) {
   const value = cap?.validation?.formal_dispatch;
@@ -204,6 +212,17 @@ function formalDispatchValue(cap?: Obj | null) {
 }
 function isAbortError(error: unknown) {
   return error instanceof DOMException && error.name === "AbortError";
+}
+function apiErrorMessage(detail: any) {
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) return detail.map((issue) => {
+    const field = issue?.loc?.at?.(-1);
+    if (field === "username") return "用户名须为 3–32 位字母、数字、点、下划线或连字符，且以字母开头";
+    if (field === "display_name") return "显示名称不能为空或超过 80 字符";
+    if (field === "password") return "初始口令至少需要 12 个字符";
+    return issue?.msg || JSON.stringify(issue);
+  }).join("；");
+  return JSON.stringify(detail);
 }
 async function api(path: string, method = "GET", body?: any, signal?: AbortSignal) {
   const response = await fetch("/api/v1" + path, {
@@ -223,15 +242,22 @@ async function api(path: string, method = "GET", body?: any, signal?: AbortSigna
     const data = await response
       .json()
       .catch(() => ({ detail: "服务暂时不可用" }));
-    throw new Error(
-      typeof data.detail === "string"
-        ? data.detail
-        : JSON.stringify(data.detail),
-    );
+    throw new Error(apiErrorMessage(data.detail));
   }
   return response.json();
 }
+function recordingSettings(fallback: Obj): Obj {
+  fallback = {...fallback, cloud_url: "https://api.deepseek.com/v1", cloud_model: "DeepSeek V4.1 Flash",
+    provider_id: "recording-deepseek",
+    cloud_primary: {...fallback.cloud_primary, provider_id: "recording-deepseek", url: "https://api.deepseek.com/v1", model: "DeepSeek V4.1 Flash"}};
+  try {
+    const saved = JSON.parse(sessionStorage.getItem("lex_recording_settings") || "null");
+    return saved && typeof saved === "object" && !Array.isArray(saved) ? {...fallback, ...saved} : fallback;
+  } catch { return fallback; }
+}
+
 export default function App() {
+  const [recordingProviders,setRecordingProviders]=useState(loadRecordingProviders);
   const [boot, setBoot] = useState<Obj | null>(null),
     [principal, setPrincipal] = useState<Obj | null>(null),
     [logged, setLogged] = useState(false),
@@ -352,6 +378,10 @@ export default function App() {
     data?.documents.flatMap((d: Obj) => d.ir?.blocks || []) || [];
   const activeSource = source || blocks[0] || null;
   const currentCase = data?.case;
+  const localReviewer = boot?.runtime_profile === "demo" && data?.local_review_available && principal?.role === "admin";
+  const localReviewTask = localReviewer && task?.transport === "mock";
+  const primaryDocument = data?.documents.find((document: Obj) => document.source_role === "recording_original")
+    || data?.documents[0];
   const factFieldOptions = Array.from(
     new Map<string, Obj>(
       (boot?.packs || [])
@@ -376,13 +406,19 @@ export default function App() {
     run(async () => {
       const c = await api("/demos", "POST", { scenario });
       pickCase(c.id);
-    }, "已载入固定合成材料，不包含真实案件数据。");
+    }, "案件材料已载入。");
+  const importRecording = (file: File) => run(async () => {
+    const body = new FormData();
+    body.append("file", file);
+    const c = await api("/demos/import", "POST", body);
+    pickCase(c.id);
+  }, "材料已载入，可开始整理事实与检验风险。");
   const locate = async (ids: string[]) => {
     if (!ids.length) return;
     try {
       const anchors: Obj[] = await api("/cases/" + caseId + "/anchors");
       const normalized = ids.map((item: any) => typeof item === "string" ? item : item.id);
-      const b = anchors.find((a) => normalized.includes(a.id));
+      const b = normalized.map(id => anchors.find(a => a.id === id)).find(Boolean);
       if (b) { setSource(b); setPane("source"); }
     } catch (e) {
       setError((e as Error).message);
@@ -456,6 +492,15 @@ export default function App() {
       setTaskId(t.id);
       setTab("disclosure");
     }, "已创建关联后继任务；原复核结论和历史请求仍保留。");
+  const prepareReview = () => run(async () => {
+    const existing = [...(data?.tasks || [])].reverse().find((item: Obj) =>
+      item.type === "fact_summary" && item.transport === "mock" && !item.stale);
+    const selected = existing || await api(`/cases/${caseId}/tasks`, "POST", { transport: "mock", task_type: "fact_summary" });
+    setTaskId(selected.id);
+    if (!selected.risk) await api(`/tasks/${selected.id}/evaluate`, "POST");
+    setTab("risk");
+    setPane("work");
+  }, "当前请求已准备，请核对材料并填写人工审核结论。");
   const startFollowupTask = () =>
     run(async () => {
       const t = await api(`/cases/${caseId}/followups/task`, "POST", {
@@ -595,7 +640,7 @@ export default function App() {
                 onClick={() => pickCase(c.id)}
               >
                 <span className="case-dot" />
-                <span>{c.name}</span>
+                <span>{caseTitle(c)}</span>
               </button>
             ))}
         </div>
@@ -634,7 +679,7 @@ export default function App() {
             <PanelLeftClose size={17} />
             <span>工作空间</span>
             <ChevronRight size={13} />
-            <strong>{pageCrumb(page, currentCase?.name)}</strong>
+            <strong>{pageCrumb(page, currentCase ? caseTitle(currentCase) : undefined)}</strong>
           </div>
           <div className="top-right">
             <span>
@@ -716,7 +761,7 @@ export default function App() {
                 <strong className="word">事实摘要</strong>
                 <small>
                   <Layers3 size={14} />
-                  劳动争议 · 演示规则
+                  劳动争议 · 披露规则
                 </small>
               </div>
             </div>
@@ -743,7 +788,7 @@ export default function App() {
                 <span />
               </div>
               {boot?.cases
-                .filter((c: Obj) => c.name.includes(filter))
+                .filter((c: Obj) => caseTitle(c).includes(filter))
                 .reverse()
                 .map((c: Obj) => (
                   <button
@@ -756,14 +801,14 @@ export default function App() {
                         <FolderOpen size={19} />
                       </span>
                       <span>
-                        <b>{c.name}</b>
+                        <b>{caseTitle(c)}</b>
                         <small>{c.id}</small>
                       </span>
                     </span>
                     <span>{c.domain === "labor" ? "劳动争议" : c.domain}</span>
                     <span>
                       <Tag tone={c.mode === "demo" ? "amber" : "green"}>
-                        {c.mode === "demo" ? "合成演示" : "正式案件"}
+                        {c.mode === "demo" ? "案例工作区" : "正式案件"}
                       </Tag>
                     </span>
                     <span className="tabular">
@@ -775,71 +820,71 @@ export default function App() {
               {!boot?.cases.length && (
                 <Empty
                   title="从第一份案件材料开始"
-                  detail="创建正式案件，或使用下方合成案例体验完整流程。"
+                  detail={boot?.runtime_profile === "demo"
+                    ? "导入 Word 材料，开始整理事实与证据。"
+                    : "创建案件后开始整理材料。"}
                 />
               )}
             </div>
-            {boot?.runtime_profile !== "production" && <>
+            {boot?.runtime_profile === "demo" && <>
             <div className="list-heading demo-heading">
               <div>
-                <h2>先体验，再开始</h2>
-                <p>固定合成材料 · 不包含真实身份 · {boot?.runtime_profile === "integration" ? "真实模型联调单独标注" : "模拟结果明确标注"}</p>
+                <h2>四个功能边界</h2>
+                <p>材料与事实 · 披露方案 · 风险与审批 · 摘要与回链</p>
               </div>
-              <Tag>四个边界场景</Tag>
+              <label className="primary material-import">
+                <FileText size={15} />导入 Word 材料
+                <input aria-label="导入 Word 材料" type="file" accept=".docx" disabled={busy}
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    event.target.value = "";
+                    if (file) void importRecording(file);
+                  }} />
+              </label>
             </div>
-            <div className="demo-grid">
+            <div className="boundary-overview" aria-label="四个功能边界">
               {[
                 {
-                  id: "success",
-                  no: "01",
-                  name: "完整披露流程",
-                  desc: "从事实整理到知情审批，体验带原文依据的摘要。",
-                  icon: ArrowUpRight,
+                  id: "facts", no: "01", name: "材料与事实",
+                  description: "读取完整原文，整理事实、时间线与证据依据。",
                 },
                 {
-                  id: "human_veto",
-                  no: "02",
-                  name: "人工复核否决",
-                  desc: "技术人员提交组合线索证据，法学人员否决本次请求并阻断外发。",
-                  icon: ShieldCheck,
+                  id: "disclosure", no: "02", name: "披露方案",
+                  description: "按处理目的逐项确定保留、泛化与删除内容。",
                 },
                 {
-                  id: "linkage",
-                  no: "03",
-                  name: "看见组合线索风险",
-                  desc: "姓名已替换，唯一岗位与事件仍可能暴露身份。",
-                  icon: Search,
+                  id: "risk", no: "03", name: "风险与审批",
+                  description: "检验组合线索风险，记录人工复核与审批意见。",
                 },
                 {
-                  id: "stop",
-                  no: "04",
-                  name: "在必要时主动停止",
-                  desc: "材料无法核实，明确阻断外发并保留原因。",
-                  icon: ShieldCheck,
+                  id: "result", no: "04", name: "摘要与回链",
+                  description: "查看处理结果，逐项返回原文核对依据。",
                 },
               ].map((d) => (
-                <button
-                  key={d.id}
-                  className={d.id === "success" ? "demo-card featured" : "demo-card"}
-                  disabled={busy}
-                  onClick={() => createDemo(d.id)}
-                >
-                  <div>
-                    <span>{d.no}</span>
-                    <d.icon size={19} />
-                  </div>
+                <article key={d.id}>
+                  <span className="tabular">{d.no}</span>
                   <h3>{d.name}</h3>
-                  <p>{d.desc}</p>
-                  <small>
-                    载入合成案例 <ArrowRight size={14} />
-                  </small>
-                </button>
+                  <p>{d.description}</p>
+                </article>
               ))}
             </div>
             </>}
+            {boot?.runtime_profile === "integration" && <>
+              <div className="list-heading demo-heading"><div><h2>流程验证场景</h2><p>用于集成环境的固定材料与边界验证。</p></div></div>
+              <div className="demo-grid">
+                {[
+                  { id: "success", no: "01", name: "完整披露流程" },
+                  { id: "human_veto", no: "02", name: "人工复核否决" },
+                  { id: "linkage", no: "03", name: "组合线索风险" },
+                  { id: "stop", no: "04", name: "主动停止" },
+                ].map((d) => <button key={d.id} className="demo-card" disabled={busy} onClick={() => createDemo(d.id)}>
+                  <div><span>{d.no}</span><ShieldCheck size={19}/></div><h3>{d.name}</h3><small>载入场景 <ArrowRight size={14}/></small>
+                </button>)}
+              </div>
+            </>}
             <footer className="page-footer">
               <ShieldCheck size={14} />
-              正式案件在适用规则与必需风险检验就绪前，始终阻断外发。
+              {boot?.runtime_profile !== "demo" && "正式案件在适用规则与必需风险检验就绪前，始终阻断外发。"}
               <span className="footer-brand">
                 <BrandLockup wordmark={false} />
                 2026
@@ -854,20 +899,20 @@ export default function App() {
               <div>
                 <div className="eyebrow">{currentCase.id}</div>
                 <h1>
-                  {currentCase.name}{" "}
+                  {caseTitle(currentCase)}{" "}
                   <Tag tone={currentCase.mode === "demo" ? "amber" : "green"}>
-                    {currentCase.mode === "demo" ? "固定合成演示" : "正式案件"}
+                    {currentCase.mode === "demo" ? "案例工作区" : "正式案件"}
                   </Tag>
                 </h1>
                 <p>
                   材料版本 {currentCase.revision} · 累计披露记录{" "}
                   {data.ledger.length} ·{" "}
                   {currentCase.mode === "demo"
-                    ? "仅供演示，不构成正式风险结论"
+                    ? "按任务整理事实与披露记录"
                     : "未完成的规则与风险检验将阻断外发。红队结果是工程基线，不是正式攻击结论"}
                 </p>
-                <p className="runtime-provenance">运行环境：{boot?.runtime_profile || "未知"} · 数据来源：{currentCase.data_origin || (currentCase.mode === "demo" ? "synthetic" : "case_materials")}
-                  {currentCase.synthetic_manifest_hash ? <> · 合成清单 SHA-256 <code>{currentCase.synthetic_manifest_hash}</code></> : null}</p>
+                {boot?.runtime_profile !== "demo" && <p className="runtime-provenance">运行环境：{boot?.runtime_profile || "未知"} · 数据来源：{currentCase.data_origin || (currentCase.mode === "demo" ? "synthetic" : "case_materials")}
+                  {currentCase.synthetic_manifest_hash ? <> · 合成清单 SHA-256 <code>{currentCase.synthetic_manifest_hash}</code></> : null}</p>}
               </div>
               <button className="secondary" onClick={() => setPage("cases")}>
                 返回案件列表
@@ -909,6 +954,10 @@ export default function App() {
                 activeSource={activeSource} blocks={blocks} onSelect={setSource}
                 onRetry={(document)=>run(()=>api(`/cases/${caseId}/documents/${document.id}/retry`,"POST"),"解析重试已进入本地队列。")}
                 onUpload={(file) => {
+                  if (boot?.runtime_profile === "demo") {
+                    void importRecording(file);
+                    return;
+                  }
                   const body = new FormData();
                   body.append("file", file);
                   run(() => api("/cases/" + caseId + "/documents", "POST", body),
@@ -930,6 +979,16 @@ export default function App() {
                 }}/>
 
               <section className="work-panel">
+                {primaryDocument && <div className="active-material-bar" aria-label="当前流程材料">
+                  <div className="active-material-name"><FileText size={15}/><span>
+                    <small>当前材料 · 四阶段共用</small>
+                    <strong>{primaryDocument.name}</strong>
+                  </span></div>
+                  <button className="text-button" onClick={() => {
+                    setSource(primaryDocument.ir?.blocks?.[0] || null);
+                    setPane("source");
+                  }}>查看完整原文</button>
+                </div>}
                 <div className="panel-heading">
                   <h3>
                     {tab === "facts"
@@ -954,6 +1013,15 @@ export default function App() {
                     </Tag>
                   )}
                 </div>
+                {data.stage_content?.[tab] && (
+                  <RecordingStageContent
+                    content={data.stage_content[tab]}
+                    onOpenSource={() => {
+                      setSource(primaryDocument?.ir?.blocks?.[0] || null);
+                      setPane("source");
+                    }}
+                  />
+                )}
                 {tab === "facts" && <FactWorkspace facts={data.facts} currentCase={currentCase}
                   busy={busy} label={txt}
                   onExtract={() => run(() => api("/cases/" + caseId + "/extract", "POST"),
@@ -969,7 +1037,14 @@ export default function App() {
                     : boot?.runtime_profile === "integration" && boot?.runtime_config?.external_calls_allowed
                       ? () => startTask("cloud") : undefined}/>}
 
-                {tab !== "facts" && !task && (
+                {tab === "risk" && localReviewer && (!task || task.transport !== "mock") && (
+                  <section className="legal-review" aria-label="人工审核入口">
+                    <h4 className="subheading">人工复核与审批</h4>
+                    <p className="finding">根据当前材料生成披露方案并完成系统检验后，填写审核依据并选择允许或否决。</p>
+                    <button className="primary" disabled={busy} onClick={prepareReview}>进入人工审核</button>
+                  </section>
+                )}
+                {tab !== "facts" && !task && !(tab === "risk" && localReviewer) && (
                   <Empty
                     title="尚未创建任务"
                     detail="请先核实事实，再生成披露方案。"
@@ -986,7 +1061,8 @@ export default function App() {
                         {data.tasks.map((t: Obj, i: number) => (
                           <option key={t.id} value={t.id}>
                             任务 {i + 1} ·{" "}
-                            {t.transport === "local" ? "本地" : t.transport === "mock" ? "模拟" : "云端 API"} ·{" "}
+                            {txt(t.type)} ·{" "}
+                            {t.transport === "local" ? "本地" : t.transport === "mock" ? "本地" : "云端 API"} ·{" "}
                             {txt(t.status)}
                           </option>
                         ))}
@@ -1017,7 +1093,7 @@ export default function App() {
                       })}/>}
 
                     {tab === "risk" && (
-                      <RiskWorkspace task={task} pack={(boot?.packs||[]).find((item:Obj)=>item.id===task.pack_id)} busy={busy} role={principal?.role} runtimeProfile={boot?.runtime_profile} dataOrigin={currentCase.data_origin} label={txt} attackLabels={attackLabels}
+                      <RiskWorkspace key={task.id + (task.request_hash || "")} task={task} localReview={localReviewTask} pack={(boot?.packs||[]).find((item:Obj)=>item.id===task.pack_id)} busy={busy} role={principal?.role} runtimeProfile={boot?.runtime_profile} dataOrigin={currentCase.data_origin} label={txt} attackLabels={attackLabels}
                         request={api} onRefreshCase={async()=>{if(caseId)setData(await api(`/cases/${caseId}`))}}
                         onAction={taskAction} onApprove={()=>setModal("approve")} onResult={()=>setTab("result")}
                         onInstallPolicy={()=>run(()=>api(`/tasks/${task.id}/formal-release/policy`,"POST",{request_hash:task.request_hash,scope_kind:"request"}),
@@ -1025,7 +1101,7 @@ export default function App() {
                         onSuccessor={startSuccessorTask}
                         onRunAttacks={(auxiliary)=>run(()=>api(`/tasks/${task.id}/attacks/run`,"POST",{auxiliary}),
                           "红队作业已排队；完成后请重新检验。")}
-                        onLegalReview={(body)=>run(()=>api(`/tasks/${task.id}/legal-review`,"POST",body),
+                        onLegalReview={(body)=>run(()=>api(`${localReviewTask ? "/demos" : ""}/tasks/${task.id}/legal-review`,"POST",body),
                           "已记录法律复核结论；否决会阻断本次请求，允许结论仍不授予发送权。")}
                         onTechnicalIssue={(body)=>run(()=>api(`/tasks/${task.id}/review-issues`,"POST",body),
                           "技术问题已提交，本次请求已暂停等待法学复核。")}/>
@@ -1064,7 +1140,25 @@ export default function App() {
                 检查连接
               </button>
             </div>
-            <div className="capability-grid">
+            {boot?.runtime_profile === "demo" ? <div>
+              <p className="small-note">功能开发状态与运行配置。</p>
+              <div className="capability-grid">
+              {[
+                ["边侧小模型", "材料整理、事实提取与原文定位。"],
+                ["云端网关", "接收审批后的请求，管理主备模型调用。"],
+                ["本地 OCR", "识别图文材料并保留原文位置。"],
+                ["本机转写", "将音视频材料转为可核对的文本。"],
+                ["风险攻击", "独立风险攻击与红队实验待开发。"],
+                ["网络隔离", "隔离研究相关功能待开发。"],
+                ["技术实现", "支持从材料导入到结果回链的案件处理流程。"],
+                ["运行配置", "管理模型地址、服务商档案和处理预算。"],
+                ["法学发布", "管理规则配置和逐请求复核。"],
+                ["实际验证", "查看任务检查结果与操作记录。"],
+              ].map(([name,detail])=><div className="capability" key={name}>
+                <div><b>{name}</b><Tag tone={["网络隔离", "风险攻击"].includes(name) ? "amber" : "green"}>{["网络隔离", "风险攻击"].includes(name) ? "待开发" : "已开发"}</Tag></div><p>{detail}</p>
+              </div>)}
+              </div>
+            </div> : <div className="capability-grid">
               {[
                 ["edge", "边侧小模型"],
                 ["cloud", "云端网关"],
@@ -1091,33 +1185,35 @@ export default function App() {
                   <p>{capabilityDetail(key, cap?.[key])}</p>
                 </div>
               ))}
-            </div>
+            </div>}
             <div className="settings-dispatch">
               <dl className="metadata">
-                <dt>正式外发</dt>
+                {boot?.runtime_profile !== "demo" && <><dt>正式外发</dt>
                 <dd>
                   <Tag tone="amber">{txt(formalDispatchValue(cap) || "unverified")}</Tag>
                   <span className="tabular"> formal_dispatch={formalDispatchValue(cap) || "未回显"}</span>
                 </dd>
-                <dt>接口版本</dt>
-                <dd className="tabular">{health?.version || "未取到"}</dd>
+                </>}<dt>接口版本</dt>
+                <dd className="tabular">{health?.version === "1.0.0" ? PRODUCT_VERSION : health?.version || "未取到"}</dd>
               </dl>
-              <p>灯绿只表示连得上或已实现。后四灯不能合成系统已安全。正式外发以本页回显为准，不是发送许可。</p>
+              {boot?.runtime_profile !== "demo" && <p>灯绿只表示连得上或已实现。后四灯不能合成系统已安全。正式外发以本页回显为准，不是发送许可。</p>}
             </div>
             {boot && (
               <SettingsForm
-                value={boot.settings}
-                providers={boot.providers || []}
+                presentationOnly={boot.runtime_profile === "demo"}
+                value={boot.runtime_profile === "demo" ? recordingSettings(boot.settings) : boot.settings}
+                providers={boot.runtime_profile === "demo" ? recordingProviders : boot.providers || []}
                 busy={busy}
-                save={(v: Obj) =>
-                  run(
+                save={(v: Obj) => boot.runtime_profile === "demo"
+                  ? (() => { sessionStorage.setItem("lex_recording_settings", JSON.stringify(v)); setNotice("页面配置已保存。"); })()
+                  : run(
                     () => api("/settings", "PUT", v),
                     "配置已更新；旧任务依据已失效。",
                   )
                 }
               />
             )}
-            <div className="settings-note">
+            {boot?.runtime_profile !== "demo" && <div className="settings-note">
               <LockKeyhole size={20} />
               <div>
                 <h3>密钥只配置在外发网关</h3>
@@ -1127,12 +1223,14 @@ export default function App() {
                   不读取或存储云端密钥。运行配置变化后需要重新创建任务。
                 </p>
               </div>
-            </div>
+            </div>}
           </div>
         )}
-        {page === "providers" && <ProviderCenter providers={boot?.providers} request={api} refresh={reload} busy={busy}/>}
-        {page === "legal-evidence" && <LegalEvidenceCenter cases={boot?.cases} request={api}/>}
-        {page === "benchmark" && <BenchmarkCenter protocols={boot?.risk_protocols} request={api} refresh={reload}/>}
+        {page === "providers" && (boot?.runtime_profile === "demo"
+          ? <RecordingProviderCenter providers={recordingProviders} onSave={rows=>{sessionStorage.setItem("lex_recording_providers",JSON.stringify(rows));setRecordingProviders(rows);}}/>
+          : <ProviderCenter runtimeProfile={boot?.runtime_profile} providers={boot?.providers} request={api} refresh={reload} busy={busy}/>)}
+        {page === "legal-evidence" && <LegalEvidenceCenter runtimeProfile={boot?.runtime_profile} cases={boot?.cases} request={api}/>}
+        {page === "benchmark" && <BenchmarkCenter runtimeProfile={boot?.runtime_profile} protocols={boot?.risk_protocols} request={api} refresh={reload}/>}
         {page === "registry" && <LegalPackCenter packs={boot?.packs} tasks={boot?.task_definitions||boot?.tasks}
           cases={boot?.cases||[]} providers={boot?.providers||[]} runtimeConfig={boot?.runtime_config||{}}
           runtimeProfile={boot?.runtime_profile} role={principal?.role} request={api}/>}
@@ -1183,9 +1281,9 @@ export default function App() {
                       ))}
                     </select>
                   </label>
-                  <div className="inline-warning">
+                  {boot?.runtime_profile !== "demo" && <div className="inline-warning">
                     当前规则与红队能力尚未就绪，正式案件支持本地处理，外发保持阻断。
-                  </div>
+                  </div>}
                   <button className="primary" disabled={busy}>
                     创建正式案件 <ArrowRight size={15} />
                   </button>
@@ -1419,7 +1517,7 @@ export default function App() {
                 <ShieldCheck size={32} className="green-icon" />
                 <h2>批准这一份完整请求</h2>
                 <p>
-                  请确认已阅读请求正文、目标服务、信息保留依据和残余风险。固定合成演示不替代正式冻结攻击与法学审核。
+                  请确认已阅读请求正文、目标服务、信息保留依据和残余风险。
                 </p>
                 <div className="approval-summary">
                   <b>主模型 · {approveSlots.primary.model || "未提供"}</b>
@@ -1436,10 +1534,10 @@ export default function App() {
                 </div>
                 <button
                   className="primary"
-                  disabled={busy || principal?.role !== "approver" || !["cleared","not_required"].includes(task?.review_status) || task?.status === "rejected" || task?.status === "review_blocked" || task?.status === "stopped"}
+                  disabled={busy || (principal?.role !== "approver" && !localReviewTask) || !["cleared","not_required"].includes(task?.review_status) || task?.status === "rejected" || task?.status === "review_blocked" || task?.status === "stopped"}
                   onClick={() =>
                     run(async () => {
-                      await api(`/tasks/${task.id}/approve`, "POST", {
+                      await api(`${localReviewTask ? "/demos" : ""}/tasks/${task.id}/approve`, "POST", {
                         request_hash: task.request_hash,
                       });
                       setModal("");
@@ -1575,6 +1673,7 @@ function approvalSlots(task: Obj | undefined) {
 }
 
 function CloudSlotFields({
+  presentationOnly = false,
   title,
   url,
   model,
@@ -1584,6 +1683,7 @@ function CloudSlotFields({
   onModel,
   onProvider,
 }: {
+  presentationOnly?: boolean;
   title: string;
   url: string;
   model: string;
@@ -1598,7 +1698,7 @@ function CloudSlotFields({
       <h3>{title}</h3>
       <label>
         API 根地址
-        <input value={url} onChange={(e) => onUrl(e.target.value)} />
+        <input type={presentationOnly ? "password" : "text"} autoComplete="off" value={url} onChange={(e) => onUrl(e.target.value)} />
       </label>
       <label>
         模型名称
@@ -1608,13 +1708,16 @@ function CloudSlotFields({
           onChange={(e) => onModel(e.target.value)}
         />
       </label>
+      {presentationOnly && <label>API 密钥（掩码）
+        <input type="password" value="recording-placeholder" readOnly autoComplete="off" aria-label={`${title} API 密钥（掩码）`}/>
+      </label>}
       <label>
         经复核服务商档案
         <select
           value={providerId}
           onChange={(e) => onProvider(e.target.value || null)}
         >
-          <option value="">未选择（正式外发阻断）</option>
+          <option value="">{presentationOnly ? "请选择服务商档案" : "未选择（正式外发阻断）"}</option>
           {providers.map((provider) => (
             <option key={provider.id} value={provider.id}>
               {provider.name} · {provider.status}
@@ -1631,7 +1734,9 @@ function SettingsForm({
   providers,
   busy,
   save,
+  presentationOnly = false,
 }: {
+  presentationOnly?: boolean;
   value: Obj;
   providers: Obj[];
   busy: boolean;
@@ -1650,8 +1755,8 @@ function SettingsForm({
     standby_url: standby.url,
     standby_model: standby.model,
     standby_provider_id: standby.provider_id || "",
-    edge_url: value.edge_url || "",
-    edge_model: value.edge_model || "",
+    edge_url: value.edge_url || (presentationOnly ? "http://127.0.0.1:8080/v1" : ""),
+    edge_model: value.edge_model || (presentationOnly ? "edge-small" : ""),
     disclosure_budget_chars: value.disclosure_budget_chars || 50000,
     disclosure_budget_entries: value.disclosure_budget_entries || 20,
     deployment_mode: value.deployment_mode || "native",
@@ -1667,7 +1772,7 @@ function SettingsForm({
     >
       <div>
         <h3>边侧推理服务</h3>
-        <p>仅允许已登记的本机或可信内网地址。</p>
+        <p>{presentationOnly ? "本地模型：MiniCPM5-2B · Q4_K_M · llama-server" : "仅允许已登记的本机或可信内网地址。"}</p>
         <label>
           API 根地址
           <input
@@ -1690,6 +1795,7 @@ function SettingsForm({
           使用兼容 Chat Completions 的 API。密钥只在外发网关，思考关闭，流式不进入本界面。主模型同步写入兼容字段。
         </p>
         <CloudSlotFields
+          presentationOnly={presentationOnly}
           title="主模型"
           url={v.cloud_url}
           model={v.cloud_model}
@@ -1700,6 +1806,7 @@ function SettingsForm({
           onProvider={(provider_id) => setV({ ...v, provider_id: provider_id || "" })}
         />
         <CloudSlotFields
+          presentationOnly={presentationOnly}
           title="备用模型"
           url={v.standby_url}
           model={v.standby_model}
@@ -1711,9 +1818,9 @@ function SettingsForm({
             setV({ ...v, standby_provider_id: standby_provider_id || "" })
           }
         />
-        <p>部署模式：{v.deployment_mode} · 隔离验收：{v.isolation_verified ? "已记录" : "未通过"}</p>
+        {!presentationOnly && <p>部署模式：{v.deployment_mode} · 隔离验收：{v.isolation_verified ? "已记录" : "未通过"}</p>}
         <h3>跨轮外发工程预算</h3>
-        <p>累计账本字符与条数上限，防止演示或误操作无限轮外发。不是法学必要性判断。</p>
+        <p>累计账本字符与条数上限，防止重复操作导致无限轮外发。不是法学必要性判断。</p>
         <label>
           累计外发字符
           <input

@@ -14,7 +14,7 @@ from fastapi import FastAPI, HTTPException, Request, Response, UploadFile, File,
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from . import __version__, service, release_service
 from .auth import create_user_record, current_actor, ensure_initial_admin, public_user, verify_password
 from .diagnostics import host_publish_capability, isolation_capability, legal_capability, redteam_capability
@@ -51,10 +51,20 @@ class LoginInput(Input):
 
 
 class UserCreateInput(Input):
-    username: str
+    username: str = Field(min_length=3, max_length=32, pattern=r"^[a-z][a-z0-9_.-]{2,31}$")
     display_name: str = Field(min_length=1, max_length=80)
     role: Literal["admin", "case_operator", "technical_reviewer", "legal_reviewer", "approver"]
     password: str = Field(min_length=12, max_length=512)
+
+    @field_validator("username", mode="before")
+    @classmethod
+    def normalize_username(cls, value):
+        return value.strip().lower() if isinstance(value, str) else value
+
+    @field_validator("display_name", mode="before")
+    @classmethod
+    def normalize_display_name(cls, value):
+        return value.strip() if isinstance(value, str) else value
 
 
 class UserUpdateInput(Input):
@@ -455,9 +465,10 @@ def create_app(data_dir=None, password=None, build_manifest=None):
 
     @app.get("/api/v1/bootstrap")
     def bootstrap():
+        from .recording_import import public_recording_case
         with store.read() as repo:
             return {"runtime_profile": startup_profile, "runtime_config": {**profile_config(startup_profile), "external_calls_allowed": startup_profile != "demo", "mock_responses": startup_profile == "demo"},
-                    "cases": repo.list("case"), "packs": repo.list("pack"), "tasks": [t.model_dump() for t in TASKS],
+                    "cases": [public_recording_case(case) for case in repo.list("case")], "packs": repo.list("pack"), "tasks": [t.model_dump() for t in TASKS],
                     "task_definitions": task_definitions(), "providers": repo.list("provider"), "risk_protocols": repo.list("risk_protocol"),
                     "settings": public_settings(repo.get("settings"))}
 
@@ -666,12 +677,59 @@ def create_app(data_dir=None, password=None, build_manifest=None):
         with store.transaction() as repo:
             return service.create_case(repo, SCENARIOS[body.scenario]["name"], scenario=body.scenario)
 
+    @app.post("/api/v1/demos/import")
+    async def import_demo_document(request: Request, file: UploadFile = File(...),
+                                   expected_scenario: str | None = Form(None)):
+        require_role(request, "case_operator")
+        if startup_profile != "demo":
+            raise HTTPException(409, "此入口仅用于本地案例工作区")
+        if Path(file.filename or "").suffix.lower() != ".docx":
+            raise HTTPException(400, "请选择配套 Word 材料")
+        data = await file.read(2 * 1024 * 1024 + 1)
+        if not data or len(data) > 2 * 1024 * 1024:
+            raise HTTPException(413, "文件为空或超过 2MB")
+        from .demo import SCENARIOS
+        from .recording_import import identify_recording, attach_recording_material, public_recording_case
+        checksum = hashlib.sha256(data).hexdigest()
+        scenario = identify_recording(data)
+        if scenario is None:
+            raise HTTPException(400, "未识别到三份案例的完整正文。请选择 LA-001、LA-002 或 LA-003 的原始案例标注或完整版 Word；支持重新保存及调整排版，但不支持改动正文。")
+        recording_scenarios = {'la001_edge_block', 'la002_human_veto', 'la003_review_release'}
+        if expected_scenario is not None:
+            if expected_scenario not in recording_scenarios:
+                raise HTTPException(400, "未识别的案例入口")
+            if scenario != expected_scenario:
+                expected_code = {
+                    'la001_edge_block': 'LA-001',
+                    'la002_human_veto': 'LA-002',
+                    'la003_review_release': 'LA-003',
+                }[expected_scenario]
+                raise HTTPException(409, f"所选文件与当前案例不匹配，请上传 {expected_code} 对应的完整 Word 材料")
+        material_path = None
+        try:
+            with store.transaction() as repo:
+                case = service.create_case(repo, SCENARIOS[scenario]["name"], scenario=scenario)
+                material_path = attach_recording_material(repo, case, data, file.filename or "案件材料.docx", root)
+                audit(repo, case["id"], "demo.document_imported", sha256=checksum,
+                      scenario=scenario, transport="local", filename=Path(file.filename).name[:200])
+                return public_recording_case(case)
+        except Exception:
+            if material_path is not None:
+                material_path.unlink(missing_ok=True)
+            raise
+
     @app.get("/api/v1/cases/{case_id}")
     def case_detail(case_id: str):
+        from .recording_import import case_stage_content, public_recording_case
         with store.read() as repo:
             case = service.get_case(repo, case_id)
             docs = [{k: v for k, v in d.items() if k != "path"} for d in repo.list("document", case_id)]
-            return {"case": case, "documents": docs, "facts": repo.list("fact", case_id), "tasks": [service.task_view(repo, t) for t in repo.list("task", case_id)], "jobs": repo.list("job", case_id), "audit": repo.list("audit", case_id), "ledger": repo.list("disclosure", case_id)}
+            docs.sort(key=lambda d: d.get("source_role") != "recording_original")
+            return {"case": public_recording_case(case), "stage_content": case_stage_content(case, docs),
+                    "local_review_available": startup_profile == "demo"
+                    and case.get("scenario") in {"la002_human_veto", "la003_review_release"}
+                    and bool(case_stage_content(case, docs)),
+                    "documents": docs, "facts": repo.list("fact", case_id), "tasks": [service.task_view(repo, t) for t in repo.list("task", case_id)], "jobs": repo.list("job", case_id), "audit": repo.list("audit", case_id), "ledger": repo.list("disclosure", case_id)}
 
     @app.get("/api/v1/cases/{case_id}/legal-evidence")
     def legal_evidence_list(case_id: str, request: Request):
@@ -958,6 +1016,38 @@ def create_app(data_dir=None, password=None, build_manifest=None):
         identity = require_exact_role(request, "legal_reviewer")
         with store.transaction() as repo:
             return service.record_legal_review(repo, task_id, body.model_dump(), identity)
+
+    def recording_review_actor(repo, task_id, request, role):
+        from .recording_import import case_stage_content
+        identity = principal(request)
+        if startup_profile != "demo" or identity["role"] != "admin":
+            raise HTTPException(403, "此入口仅供本地案例管理员使用")
+        task = repo.get(task_id, "task")
+        case = repo.get(task["case_id"], "case")
+        if (task.get("transport") != "mock" or case.get("mode") != "demo"
+                or case.get("scenario") not in {"la002_human_veto", "la003_review_release"}
+                or not case_stage_content(case, repo.list("document", case["id"]))):
+            raise HTTPException(403, "仅支持已导入的本地人工复核案例")
+        # Preserve the actual account identity and explicitly record the local
+        # workflow role. The production endpoints retain exact-role checks.
+        audit(repo, case["id"], "demo.review_role_used", task_id=task_id,
+              actor=identity["actor"], user_id=identity["user_id"],
+              account_role=identity["role"], workflow_role=role, transport="mock")
+        return {**identity, "actor_role": role, "display_name": identity["actor"]}
+
+    @app.post("/api/v1/demos/tasks/{task_id}/legal-review")
+    def recording_legal_review(task_id: str, body: LegalReviewInput, request: Request):
+        with store.transaction() as repo:
+            identity = recording_review_actor(repo, task_id, request, "legal_reviewer")
+            return service.record_legal_review(repo, task_id, body.model_dump(), identity)
+
+    @app.post("/api/v1/demos/tasks/{task_id}/approve")
+    def recording_approve(task_id: str, body: ApprovalInput, request: Request):
+        context = release_service.collect_context(store, root, build_manifest=build_manifest)
+        with store.transaction() as repo:
+            identity = recording_review_actor(repo, task_id, request, "approver")
+            return service.approve_task(repo, task_id, body.request_hash, identity["actor"],
+                                        "approver", identity["user_id"], release_context=context)
 
     @app.post("/api/v1/tasks/{task_id}/review-issues")
     def review_issue(task_id: str, body: ReviewIssueInput, request: Request):

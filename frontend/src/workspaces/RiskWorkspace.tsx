@@ -6,7 +6,8 @@ import { FormalReleaseIntake } from "./FormalReleaseIntake";
 
 type Obj = Record<string, any>;
 
-export function RiskWorkspace({ task, pack, busy, role, runtimeProfile, dataOrigin, label, attackLabels, request, onRefreshCase, onAction, onApprove, onResult, onRunAttacks, onInstallPolicy, onLegalReview, onTechnicalIssue, onSuccessor }:{
+export function RiskWorkspace({ task, pack, busy, role, localReview = false, runtimeProfile, dataOrigin, label, attackLabels, request, onRefreshCase, onAction, onApprove, onResult, onRunAttacks, onInstallPolicy, onLegalReview, onTechnicalIssue, onSuccessor }:{
+  localReview?: boolean;
   task: Obj; pack?: Obj; busy: boolean; role?:string; runtimeProfile?:string; dataOrigin?:string; label:(key:string)=>string; attackLabels:Record<string,string>;
   onAction:(action:string)=>void; onApprove:()=>void; onResult:()=>void; onRunAttacks:(auxiliary:Obj)=>void;
   onInstallPolicy?:()=>void;
@@ -15,7 +16,11 @@ export function RiskWorkspace({ task, pack, busy, role, runtimeProfile, dataOrig
 }) {
   const [auxiliary, setAuxiliary] = useState("{}");
   const [inputError, setInputError] = useState("");
-  if (!task.risk) return <Empty title="检验当前披露方案" detail="冻结请求后，查看完整发送内容与阻断原因。" />;
+  if (!task.risk) return <>
+    <Empty title="检验当前披露方案" detail="冻结请求后，查看完整发送内容与检验结果。" />
+    {localReview && <div className="bottom-action"><button className="primary" disabled={busy || task.stale}
+      onClick={() => onAction("evaluate")}>检验方案并进入人工审核</button></div>}
+  </>;
   const formal = task.request?.mode === "formal";
   const syntheticAttackRun = ["demo", "integration"].includes(runtimeProfile || "")
     && dataOrigin === "bundled_synthetic";
@@ -66,16 +71,17 @@ export function RiskWorkspace({ task, pack, busy, role, runtimeProfile, dataOrig
     <div className="review-status-strip"><b>人工复核：{({pending:"待人工复核",blocked:"已暂停",rejected:"已否决",cleared:"已完成",not_required:"无需复核"} as Record<string,string>)[reviewStatus] || reviewStatus}</b>
       <span>{task.status === "stopped" ? "当前任务已终止，原请求及初检记录保留；如需继续处理，请新建任务。" : task.review_status === "rejected" || task.status === "rejected" ? "否决仅针对当前请求；请调整后创建关联后继任务。" : task.review_status === "blocked" || task.status === "review_blocked" ? "原初检结果保留供追溯，当前请求已停止。" : reviewBlocked ? "完成具名人工复核后才能继续。" : "人工复核状态已解除；仍需通过其余风险门禁和审批。"}</span>
     </div>
-    <div className={"product-release-state " + (releaseAllowed ? "ready" : "blocked")}>
+    {runtimeProfile!=="demo"&&<div className={"product-release-state " + (releaseAllowed ? "ready" : "blocked")}>
       <b>正式放行门：{releaseState === "eligible" ? "符合当前放行范围" : releaseState === "armed_once" ? "一次性许可已就绪" : releaseState === "not_applicable" ? "本任务不适用正式外发" : "未满足，禁止审批或发送"}</b>
       {releaseReasons.length > 0 && <ul>{[...new Set(releaseReasons)].map((message:string)=><li key={message}>{message}</li>)}</ul>}
-    </div>
+    </div>}
     <IssueList issues={task.risk.blockers}/>
+    {localReview && <ApprovalWorkspace task={task} pack={pack} busy={busy} role="legal_reviewer" onSubmit={onLegalReview} onTechnicalIssue={onTechnicalIssue}/>}
     <h4 className="subheading">四类攻击运行</h4>
-    <div className="attack-list">{(task.risk.attacks || []).map((attack:Obj)=><div key={attack.kind}>
+    {runtimeProfile === "demo" ? <p className="context-note"><Tag tone="amber">待开发</Tag> 独立风险攻击与红队实验待开发。</p> : <div className="attack-list">{(task.risk.attacks || []).map((attack:Obj)=><div key={attack.kind}>
       <span>{label(attack.kind)}</span><Tag tone={attack.outcome === "resisted" ? "green" : "amber"}>
         {attackLabels[attack.outcome || "not_run"]}</Tag>
-      {syntheticAttackRun && attack.outcome && attack.outcome !== "not_run" && <Tag>{runtimeProfile==="demo"?"模拟结果":"合成材料联调"}</Tag>}
+      {syntheticAttackRun && attack.outcome && attack.outcome !== "not_run" && <Tag>{runtimeProfile==="demo"?"预置结果":"合成材料联调"}</Tag>}
       <details><summary>检验依据</summary><dl className="metadata">
         {attack.protocol_id&&<><dt>协议</dt><dd>{attack.protocol_id} · {attack.protocol_version || "版本未记录"}</dd></>}
         {attack.attacker_view&&<><dt>攻击者可见范围</dt><dd>{Array.isArray(attack.attacker_view)?attack.attacker_view.join("、"):attack.attacker_view}</dd></>}
@@ -87,15 +93,15 @@ export function RiskWorkspace({ task, pack, busy, role, runtimeProfile, dataOrig
         {attack.input_hash&&attack.input_hash!==attack.attacker_view_hash&&<><dt>攻击输入哈希</dt><dd><code>{attack.input_hash}</code></dd></>}
         {!attack.protocol_id&&!attack.attacker_view&&!attack.input_hash&&!attack.result_hash&&<dd>当前结果未提供独立协议证据。</dd>}
       </dl></details>
-    </div>)}</div>
-    {attackRunAllowed && <details className="attack-runner">
+    </div>)}</div>}
+    {runtimeProfile !== "demo" && attackRunAllowed && <details className="attack-runner">
       {formal ? <>
       <summary>运行绑定到当前请求的隔离红队</summary>
       <p>只允许提供攻击者可见的辅助数据；原文、mapping、anchors 和 local_text 会被拒绝。</p>
       <textarea rows={5} value={auxiliary} onChange={event=>setAuxiliary(event.target.value)}
         aria-label="攻击者可见辅助数据 JSON"/>
       {inputError && <p className="error">{inputError}</p>}
-      </> : <><summary>合成材料四类攻击联调</summary><p>仅使用已登记合成材料和当前冻结请求，不接受自定义攻击输入。</p></>}
+      </> : <><summary>四类攻击检验</summary><p>仅使用已登记材料和当前冻结请求，不接受自定义攻击输入。</p></>}
       <button className="secondary" disabled={busy || task.redteam_status === "pending" || manuallyStopped || ["rejected","stopped","sending","unknown","complete"].includes(task.status)} onClick={()=>formal?runAttacks():onRunAttacks({})}>
         {task.redteam_status === "pending" ? "红队作业排队中" : "排队运行四类攻击"}
       </button>
@@ -120,9 +126,9 @@ export function RiskWorkspace({ task, pack, busy, role, runtimeProfile, dataOrig
     <div className="approval-actions">
       {runtimeProfile==="production"&&task.request?.mode==="formal"&&task.transport==="cloud"&&task.request_hash&&role==="admin"&&onInstallPolicy&&
         <button className="secondary" disabled={busy||Boolean(release.policy_id||release.policy?.id||task.formal_release_policy_id)} onClick={onInstallPolicy}>为当前完整请求创建阻断策略</button>}
-      {task.status === "review" && role === "approver" && !reviewBlocked && releaseAllowed && <button className="primary" disabled={busy} onClick={onApprove}><Check size={16}/>审批当前完整请求</button>}
+      {task.status === "review" && (role === "approver" || localReview) && !reviewBlocked && releaseAllowed && <button className="primary" disabled={busy} onClick={onApprove}><Check size={16}/>审批当前完整请求</button>}
       {task.status === "approved" && ["case_operator","admin"].includes(role||"") && <button className="primary" disabled={busy || reviewBlocked || !releaseAllowed} onClick={()=>onAction("send")}><Play size={15}/>
-        {task.transport === "mock" ? "执行模拟调用" : task.transport === "local" ? "生成本地摘要草稿" : "发送至已批准云端"}</button>}
+        {task.transport === "mock" ? "执行任务" : task.transport === "local" ? "生成本地摘要草稿" : "发送至已批准云端"}</button>}
       {task.status === "approved" && !["case_operator","admin"].includes(role||"") && <p className="small-note">当前具名角色不能执行发送；请交由案件操作人员完成发送。</p>}
       {task.status === "unknown" && <button className="secondary" onClick={()=>onAction("reconcile")}>查询网关记录（不重发）</button>}
       <button className="secondary" disabled={busy || !canReevaluate}
@@ -136,7 +142,7 @@ export function RiskWorkspace({ task, pack, busy, role, runtimeProfile, dataOrig
       <FormalReleaseIntake task={task} role={role} request={request} busy={busy} onRefreshCase={onRefreshCase}/>}
     {task.status === "complete" && <button className="primary" onClick={onResult}>查看摘要与回链 <ArrowRight size={16}/></button>}
     {task.error && <div className="inline-warning"><AlertTriangle size={14}/>{task.error}</div>}
-    <ApprovalWorkspace task={task} pack={pack} busy={busy} role={role} onSubmit={onLegalReview} onTechnicalIssue={onTechnicalIssue}/>
+    {!localReview && <ApprovalWorkspace task={task} pack={pack} busy={busy} role={role} onSubmit={onLegalReview} onTechnicalIssue={onTechnicalIssue}/>}
   </>;
 }
 

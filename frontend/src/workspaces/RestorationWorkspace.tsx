@@ -73,13 +73,17 @@ export function RestorationWorkspace({task,currentCase,busy,locate,onAction,onDi
     const rows = task.type === "timeline" ? (task.artifact.events || [])
       : task.type === "evidence_inventory" ? (task.artifact.items || [])
       : (task.artifact.issues || []);
-    const note = task.type === "timeline"
-      ? "时间线仅从已确认事实中筛选，不调用边侧或云端模型。"
-      : task.type === "evidence_inventory"
-        ? "证据清单仅列出 field=evidence 的已有事实，不调用边侧或云端模型。"
-        : "按字段分组的候选 · 非法学结论 · 未调用模型";
+    const suppliedCase = String(currentCase?.scenario || "").startsWith("la00");
+    const note = suppliedCase
+      ? "根据当前案件完整材料整理，结果均可回到原文定位；未调用边侧或云端模型。"
+      : task.type === "timeline"
+        ? "时间线仅从已确认事实中筛选，不调用边侧或云端模型。"
+        : task.type === "evidence_inventory"
+          ? "证据清单仅列出已有证据事实，不调用边侧或云端模型。"
+          : "按字段分组的候选 · 非法学结论 · 未调用模型";
     return <>
-    <div className="result-heading"><Tag tone="green">本地确定性结果</Tag></div>
+    <div className="result-heading"><Tag tone="green">本案材料生成 · 本地确定性结果</Tag>
+      <a className="text-button" href={`/api/v1/tasks/${task.id}/export`}><Download size={14}/>导出结果</a></div>
     <p className="context-note">{note}</p>
     {rows.map((row:Obj,index:number)=><article className="claim-card" key={row.id}>
       <div className="fact-meta"><span className="fact-no">{String(index+1).padStart(2,"0")}</span>
@@ -92,7 +96,7 @@ export function RestorationWorkspace({task,currentCase,busy,locate,onAction,onDi
   }
   return <>
     <div className="result-heading"><Tag tone={task.artifact.provenance==="cloud"?"green":"amber"}>
-      {task.artifact.provenance==="simulation"?"模拟结果 · 非模型生成":task.artifact.provenance==="local_deterministic"?"本地确定性草稿 · 未调用云端":"云端 API 返回"}</Tag>
+      {task.artifact.provenance==="simulation"?"本地预置结果":task.artifact.provenance==="local_deterministic"?"本地确定性草稿 · 未调用云端":"云端 API 返回"}</Tag>
       <a className="text-button" href={`/api/v1/tasks/${task.id}/export`}><Download size={14}/>导出云端视图</a>
     </div>
     <p className="context-note">云端原句与边侧身份回填分轨保存；引用优先于字符串替换。</p>

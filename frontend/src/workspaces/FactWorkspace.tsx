@@ -55,7 +55,7 @@ export function FactWorkspace({ facts, currentCase, busy, label, onExtract, onOp
         {marks.map((mark) => <Tag key={mark.key}>{mark.text}</Tag>)}</div>}
       <p>{fact.value}</p><div className="fact-footer">
         <button onClick={() => onLocate(fact.source_ids)}><Link2 size={13}/>查看原文依据</button>
-        <span>{fact.origin === "edge_model" ? "边侧模型提取" : fact.origin === "synthetic" ? "合成标注" : "人工录入"}</span>
+        <span>{fact.origin === "edge_model" ? "边侧模型提取" : fact.origin === "recording_annotation" ? "材料标注" : fact.origin === "synthetic" ? "预置标注" : "人工录入"}</span>
         {currentCase.mode === "formal" && <>
           <button onClick={() => onOpen(fact)}>编辑</button>
           <button className="danger-text" onClick={() => onDelete(fact)}>删除</button>
@@ -65,8 +65,8 @@ export function FactWorkspace({ facts, currentCase, busy, label, onExtract, onOp
     }) : <Empty title="将材料整理为可核实事实" detail="使用边侧模型提取，或选择原文片段后人工添加。"/>}
     {onStartCloud&&currentCase.mode==="formal"&&<p className="small-note">新建只生成待检验披露请求草案，不会调用服务商；外发仍需规则、证据、风险复核、审批和一次性许可。</p>}
     <div className="bottom-action">
-      {currentCase.mode === "formal" && <button className="secondary" disabled={busy || !facts.length}
-        onClick={onTimeline}>本地生成时间线</button>}
+      <button className="secondary" disabled={busy || !facts.length}
+        onClick={onTimeline}>本地生成时间线</button>
       <button className="secondary" disabled={busy || !facts.length} onClick={onEvidence}>
         本地整理证据清单</button>
       <button className="secondary" disabled={busy || !facts.length} onClick={onIssues}>

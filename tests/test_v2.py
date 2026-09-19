@@ -183,7 +183,7 @@ def test_wire_payload_excludes_local_only_data(demo_env):
     wire=evaluated["request"]["wire_payload"]
     assert set(wire)=={"contract_version","task","facts"}
     assert all(set(item)<= {"id","text","field"} and "field" in item for item in wire["facts"])
-    assert "林澄" not in str(wire) and "mapping" not in str(wire).lower()
+    assert "乔安" not in str(wire) and "mapping" not in str(wire).lower()
     assert "[[LEX:P0001]]" in str(wire)
     deps=evaluated["request"]["dependencies"]
     assert not deps["dual_slot"].get("standby")

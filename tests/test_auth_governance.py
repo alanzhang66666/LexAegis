@@ -60,6 +60,24 @@ def test_local_accounts_enforce_roles_and_named_audit(env):
     assert login(client, "operator.one", "operator-password-123").status_code == 401
 
 
+def test_local_account_validation_returns_field_errors_instead_of_server_error(env):
+    client = env["client"]
+    for username, display_name in (("not valid", "测试用户"), ("valid.user", "   ")):
+        response = client.post("/api/v1/users", json={
+            "username": username, "display_name": display_name,
+            "role": "case_operator", "password": "long-enough-password",
+        })
+        assert response.status_code == 422, response.text
+        assert isinstance(response.json()["detail"], list)
+    created = client.post("/api/v1/users", json={
+        "username": " Upper.User ", "display_name": " 测试用户 ",
+        "role": "case_operator", "password": "long-enough-password",
+    })
+    assert created.status_code == 200, created.text
+    assert created.json()["username"] == "upper.user"
+    assert created.json()["display_name"] == "测试用户"
+
+
 def test_provider_lifecycle_requires_complete_profile_and_resets_review(env):
     client = env["client"]
     saved = client.put("/api/v1/providers/provider_test", json=provider_payload())

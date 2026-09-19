@@ -93,9 +93,9 @@ def create_case(repo, name, domain="labor", scenario=None, reference_code=None):
     if scenario:
         seed = SCENARIOS[scenario]
         document_id = uid("doc")
-        blocks = [{"id": f"{document_id}:v1:b{i}", "document_id": document_id, "document_version": 1, "kind": "paragraph", "text": value, "locator": f"合成段落 {i+1}", "page": None, "bbox": None, "confidence": None, "reviewed": True} for i, (_, value) in enumerate(seed["facts"])]
+        blocks = [{"id": f"{document_id}:v1:b{i}", "document_id": document_id, "document_version": 1, "kind": "paragraph", "text": value, "locator": f"材料段落 {i+1}", "page": None, "bbox": None, "confidence": None, "reviewed": True} for i, (_, value) in enumerate(seed["facts"])]
         ir = {"schema_version": 1, "document_id": document_id, "version": 1, "blocks": blocks, "warnings": [seed["note"]], "needs_review": scenario == "stop"}
-        doc = {"id": document_id, "case_id": case["id"], "name": "合成示例材料", "version": 1, "status": "ready", "extension": "demo", "ir": ir, "path": None}
+        doc = {"id": document_id, "case_id": case["id"], "name": seed.get("document_name", "合成示例材料"), "version": 1, "status": "ready", "extension": "demo", "ir": ir, "path": None}
         repo.put("document", doc, case["id"])
         repo.put("document_version", {"id": f"{document_id}:v1", "ir": ir}, case["id"])
         for i, (field, value) in enumerate(seed["facts"]):
@@ -318,7 +318,13 @@ def create_task(repo, case_id, transport, task_type="fact_summary", pack_id=None
                 supplemental_evidence=case.get("supplemental_evidence", []))
     review.initialize_task_review(repo, task, parent_task_id)
     if definition["execution_type"] == "local_deterministic":
-        task["artifact"] = execute_local(task_type, {"facts": facts})
+        prepared_result = None
+        if case.get("scenario"):
+            from .recording_import import build_recording_local_artifact
+            prepared_result = build_recording_local_artifact(
+                case["scenario"], task_type, facts, anchor_index(repo, case_id)
+            )
+        task["artifact"] = execute_local(task_type, {"facts": facts}, prepared_result)
         task["status"] = "complete"
     repo.put("task", task, case_id)
     audit(repo, case_id, "task.created", task_id=task["id"], task_type=task_type, execution_type=definition["execution_type"])

@@ -253,6 +253,8 @@ def restore_in_progress(app_root: str | Path, gateway_root: str | Path, profile:
 
 def validate_case_creation(scenario: str | None) -> None:
     profile = selected_profile()
+    if profile != "demo" and SCENARIOS.get(scenario, {}).get("offline_only"):
+        raise ValueError("recording cases are restricted to the offline demo profile")
     if profile in ("demo", "integration"):
         if scenario not in SCENARIOS:
             raise ValueError(f"{profile} profile accepts bundled synthetic scenarios only")
@@ -263,6 +265,8 @@ def validate_case_creation(scenario: str | None) -> None:
 def require_case_scope(case: dict[str, Any]) -> None:
     profile = selected_profile()
     mode = case.get("mode")
+    if profile != "demo" and SCENARIOS.get(case.get("scenario"), {}).get("offline_only"):
+        raise ValueError("recording cases are restricted to the offline demo profile")
     if profile == "production" and (mode == "demo" or case.get("scenario")):
         raise ValueError("production profile rejects demo cases")
     if profile == "demo":
@@ -309,7 +313,7 @@ def dispatch_scope(request: dict[str, Any]) -> dict[str, Any]:
         if request.get("mode") != "demo" or data_origin != "bundled_synthetic" or manifest_hash not in _bundled_manifest_hashes() or transport not in ("local", "mock"):
             raise ValueError("demo requests must be bundled synthetic and offline")
     else:
-        if request.get("mode") != "demo" or data_origin != "bundled_synthetic" or manifest_hash not in _bundled_manifest_hashes():
+        if request.get("mode") != "demo" or data_origin != "bundled_synthetic" or manifest_hash not in _bundled_manifest_hashes(include_offline=False):
             raise ValueError("integration requests must bind a synthetic manifest")
         if transport not in ("local", "cloud"):
             raise ValueError("integration requests permit local or cloud transport only")
@@ -325,8 +329,9 @@ def synthetic_manifest_hash(scenario: str) -> str:
     return digest(SCENARIOS[scenario])
 
 
-def _bundled_manifest_hashes() -> set[str]:
-    return {synthetic_manifest_hash(scenario) for scenario in SCENARIOS}
+def _bundled_manifest_hashes(include_offline: bool = True) -> set[str]:
+    return {synthetic_manifest_hash(scenario) for scenario, seed in SCENARIOS.items()
+            if include_offline or not seed.get("offline_only")}
 
 
 def backup_bindings(app_root: str | Path, gateway_root: str | Path, profile: str | None = None) -> dict[str, Any]:

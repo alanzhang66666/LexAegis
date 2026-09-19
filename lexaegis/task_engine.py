@@ -197,11 +197,13 @@ def validate_task_payload(task_id: str, payload: dict) -> dict:
     return definition
 
 
-def execute_local(task_id: str, payload: dict) -> dict:
+def execute_local(task_id: str, payload: dict, prepared_result: dict | None = None) -> dict:
     definition = validate_task_payload(task_id, payload)
     if definition["status"] != "available" or definition["execution_type"] != "local_deterministic":
         raise ValueError("任务不可作为本地确定性任务执行")
-    if task_id in BUILTIN_HANDLERS:
+    if prepared_result is not None:
+        result = prepared_result
+    elif task_id in BUILTIN_HANDLERS:
         result = BUILTIN_HANDLERS[task_id](payload)
     else:
         plugin = _plugins().get(task_id)

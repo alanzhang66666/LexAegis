@@ -200,7 +200,7 @@ test("synthetic case: disclosure, explicit approval, dispatch and source-linked 
   await expect(
     page.getByRole("heading", { name: /待人工复核，本次请求暂不可继续/ }),
   ).toBeVisible();
-  await expect(page.getByText("未运行 · 阻断")).toHaveCount(4);
+  await expect(page.getByText("独立风险攻击与红队实验待开发。", {exact:false})).toBeVisible();
   await expect(page.getByRole("button", { name: "审批当前完整请求" })).toHaveCount(0);
   await signIn(page, "success.legal", "success-review-password-123");
   await page.locator(".case-row").filter({ hasText: caseData.id }).click();
@@ -230,14 +230,14 @@ test("synthetic case: disclosure, explicit approval, dispatch and source-linked 
   await signIn(page, "admin", "local-acceptance-only");
   await page.locator(".case-row").filter({ hasText: caseData.id }).click();
   await page.getByRole("button", { name: /03 风险与审批/ }).click();
-  await page.getByRole("button", { name: "执行模拟调用" }).click();
+  await page.getByRole("button", { name: "执行任务" }).click();
   await expect(page.getByRole("button", { name: "查看摘要与回链" })).toBeVisible();
 
   await signIn(page, "success.legal", "success-review-password-123");
   await page.locator(".case-row").filter({ hasText: caseData.id }).click();
   await page.getByRole("button", { name: /03 风险与审批/ }).click();
   await page.getByRole("button", { name: "查看摘要与回链" }).click();
-  await expect(page.getByText("模拟结果 · 非模型生成")).toBeVisible();
+  await expect(page.getByText("本地预置结果")).toBeVisible();
   await expect(page.getByText("外发事实均已被引用。")).toBeVisible();
   const reviews = page.getByRole("button", { name: "已核对本项", exact: true });
   while (await reviews.count()) {
@@ -254,7 +254,7 @@ test("synthetic case: disclosure, explicit approval, dispatch and source-linked 
   await expect(page.getByText("回写待办")).toBeVisible();
   await expect(page.getByText("0 项未处理")).toBeVisible();
   await page.getByRole("button", { name: "回到原文" }).first().click();
-  await expect(page.locator(".source-text")).toContainText("林澄");
+  await expect(page.locator(".source-text")).toContainText("乔安");
   await page.evaluate(() => window.scrollTo(0, 0));
   await page.screenshot({
     path: "../.data/acceptance-result.png",
@@ -273,16 +273,12 @@ test("restoration empty state before dispatch", async ({ page }) => {
   await expect(page.getByText("完成审批和调用后，结果会在此进入来源校核。")).toBeVisible();
 });
 
-test("offline attacks retain detected and uncertain outcomes with simulation provenance", async ({ page }) => {
+test("demo keeps independent attack tools marked as planned", async ({ page }) => {
   await page.getByRole("button", { name: /01 完整披露流程/ }).click();
   await page.getByRole("button", { name: "生成披露方案", exact: true }).click();
   await page.getByRole("button", { name: "检验风险并冻结请求" }).click();
-  await page.getByText("合成材料四类攻击联调", { exact: true }).click();
-  await page.getByRole("button", { name: "排队运行四类攻击" }).click();
-  await expect(page.locator(".attack-list").getByText("模拟结果", { exact: true })).toHaveCount(4);
-  await expect(page.getByText("工程基线检出 · 阻断", { exact: true })).toHaveCount(3);
-  await expect(page.getByText("无候选或不确定 · 阻断", { exact: true })).toHaveCount(1);
-  await expect(page.getByRole("button", { name: "审批当前完整请求" })).toHaveCount(0);
+  await expect(page.getByText("独立风险攻击与红队实验待开发。", { exact: false })).toBeVisible();
+  await expect(page.getByRole("button", { name: "排队运行四类攻击" })).toHaveCount(0);
 });
 
 test("combination clues block approval without faking a risk pass", async ({
@@ -339,9 +335,19 @@ test("dashboard layout at desktop and mobile, capabilities remain honest", async
     fullPage: true,
   });
   await page.getByRole("button", { name: "运行配置", exact: true }).click();
-  await expect(
-    page.getByText("未取得证据的能力保持未验证。", { exact: false }),
-  ).toBeVisible({ timeout: 15000 });
+  await expect(page.locator(".capability").getByText("已开发", { exact: true })).toHaveCount(8);
+  await expect(page.locator(".capability").getByText("边侧小模型", { exact: true })).toBeVisible();
+  await expect(page.locator(".capability").getByText("网络隔离", { exact: true })).toHaveCount(1);
+  await expect(page.getByRole("heading", { name: "云端大模型", exact: true })).toBeVisible();
+  const writes: string[] = [];
+  page.on("request", request => { if (request.method() === "PUT" && request.url().endsWith("/api/v1/settings")) writes.push(request.url()); });
+  await page.getByLabel("边侧模型名称", { exact: true }).fill("recording-local-model");
+  await page.getByRole("button", { name: "保存运行配置", exact: true }).click();
+  await expect(page.getByText("页面配置已保存。", { exact: true })).toBeVisible();
+  await page.reload();
+  await page.getByRole("button", { name: "运行配置", exact: true }).click();
+  await expect(page.getByLabel("边侧模型名称", { exact: true })).toHaveValue("recording-local-model");
+  expect(writes).toHaveLength(0);
   await page.setViewportSize({ width: 390, height: 844 });
   const overflow = await page.evaluate(
     () => document.documentElement.scrollWidth > window.innerWidth,

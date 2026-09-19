@@ -1,0 +1,29 @@
+[
+  {
+    "code": "LA-001",
+    "scenario": "la001_edge_block",
+    "path": "LA-001_终端销售劳动争议_完整版.docx",
+    "sha256": "ea6a481b0ca044c43ae5cfd336cb7f34388c048de0805de2682818a10f67356c",
+    "source_sha256": "ef46a49f17e9e11dd044372c10ee96d14062cdae0b67ceac1332c59c0d6a1437",
+    "source_blocks_preserved": 107,
+    "source_characters": 11394
+  },
+  {
+    "code": "LA-002",
+    "scenario": "la002_human_veto",
+    "path": "LA-002_店长劳动关系确认_完整版.docx",
+    "sha256": "96b2ee7669a449fc8e9c57bb6c9de9173b99c5e6201536632f73409b8c97d99d",
+    "source_sha256": "1ea44572abd1eb39051fff2266f8ac6fae66b6774dab57dc3e7cc9d9468bbd5c",
+    "source_blocks_preserved": 58,
+    "source_characters": 4775
+  },
+  {
+    "code": "LA-003",
+    "scenario": "la003_review_release",
+    "path": "LA-003_平台配送劳动争议_完整版.docx",
+    "sha256": "4945a1e45ab2c762f1a41decbbe633a66fb5b9d983eaac4995b3f0c283359980",
+    "source_sha256": "5920c6bc676518915daf9568c2c4c1042ee82f445785d1a0fd0da44207e3a1ef",
+    "source_blocks_preserved": 66,
+    "source_characters": 11762
+  }
+]
