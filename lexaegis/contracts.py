@@ -2,7 +2,7 @@
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class Contract(BaseModel):
@@ -148,7 +148,7 @@ class ManualApprovalRecord(Contract):
     material_version: int = Field(ge=0)
     conclusion: Literal[
         "allow_processing", "allow_after_minimization",
-        "needs_further_verification", "prohibit_external_processing",
+        "needs_further_verification", "prohibit_external_processing", "reject_current_request",
     ]
     reason: str = Field(min_length=1)
     reviewed_condition_ids: list[str] = Field(default_factory=list)
@@ -164,6 +164,11 @@ class ManualApprovalRecord(Contract):
     external_processing_note: str = ""
     minimization_note: str = ""
     final_basis: str = ""
+    reviewer_id: str = ""
+    reviewer_role: str = "legal_reviewer"
+    idempotency_key: str = ""
+    resolved_issue_ids: list[str] = Field(default_factory=list)
+    resolution_reason: str = ""
 
 
 class ImmutableRelation(Contract):
@@ -240,6 +245,9 @@ class DomainPack(Contract):
     references: list[str]
     review_record: str | None = None
     required_attacks: list[Literal["identity", "candidate_set", "sensitive_inference", "cross_round"]]
+    legal_sources: list[LegalSourceRef] = Field(default_factory=list)
+    manual_review_conditions: list[ManualReviewCondition] = Field(default_factory=list)
+    risk_protocols: list["RiskProtocolRef"] = Field(default_factory=list)
 
 
 class FactFieldDefinition(Contract):
@@ -672,7 +680,7 @@ class GateEvidenceReceipt(Contract):
     technical_evidence_request_hash: str | None = None
 
 
-RoleActionRole = Literal["legal_reviewer", "case_operator", "approver", "admin"]
+RoleActionRole = Literal["legal_reviewer", "case_operator", "technical_reviewer", "approver", "admin"]
 RoleActionKind = Literal[
     "legal_confirmation", "engineering_record", "g10_approval", "evidence_revocation"
 ]
@@ -720,6 +728,8 @@ class ReleaseBuildManifest(Contract):
 
 class FormalReleasePolicy(Contract):
     id: str = Field(min_length=1)
+    scope_kind: Literal["first_acceptance", "request"] = "first_acceptance"
+    bound_request_hash: str | None = None
     tuple: ReleaseTuple
     build_manifest_hash: str = ""
     allowed_target: str = ""
@@ -733,17 +743,27 @@ class FormalReleasePolicy(Contract):
     installed_by: str | None = None
     installed_at: str | None = None
 
-    @field_validator("tuple")
-    @classmethod
-    def require_first_release_scope(cls, value: ReleaseTuple) -> ReleaseTuple:
+    @model_validator(mode="after")
+    def validate_release_scope(self):
         expected = {
             "case_id": "LA-001",
             "purpose": "R_fact_summary",
             "recipient": "D_DeepSeek_official_API",
         }
-        if value != expected:
-            raise ValueError("first-release policy requires the exact LA-001 × R × D scope")
-        return value
+        if self.scope_kind == "first_acceptance":
+            if self.tuple != expected or self.bound_request_hash is not None:
+                raise ValueError("first-acceptance policy requires the exact LA-001 × R × D scope")
+        else:
+            value = self.bound_request_hash or ""
+            candidate = value.removeprefix("sha256:")
+            if len(candidate) != 64 or any(ch not in "0123456789abcdef" for ch in candidate):
+                raise ValueError("request policy requires a canonical bound_request_hash")
+            if self.maximum_dispatches != 1:
+                raise ValueError("request policy permits exactly one dispatch")
+            if set(self.tuple) != {"case_id", "purpose", "recipient"} or not all(
+                    isinstance(item, str) and item.strip() for item in self.tuple.values()):
+                raise ValueError("request policy requires an exact case, purpose, and recipient tuple")
+        return self
 
 
 class FrozenFormalRequest(Contract):
@@ -793,6 +813,7 @@ class GateDecision(Contract):
 class IsolationReceipt(Contract):
     id: str = Field(min_length=1)
     request_hash: str = ""
+    tuple: ReleaseTuple
     build_manifest_hash: str = ""
     deployment_mode: Literal["unknown", "isolated"] = "unknown"
     deployment_identity_hash: str = ""

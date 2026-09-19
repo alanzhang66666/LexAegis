@@ -143,7 +143,8 @@ def test_frozen_request_contract_captures_required_hash_dependencies():
 
 
 def test_isolation_receipt_defaults_to_pending_and_cannot_claim_global_verification():
-    receipt = IsolationReceipt(id="isolation-1")
+    receipt = IsolationReceipt(id="isolation-1", tuple={
+        "case_id": "LA-001", "purpose": "R_fact_summary", "recipient": "D_DeepSeek_official_API"})
 
     assert receipt.deployment_mode == "unknown"
     assert receipt.status == "pending_legal_confirmation"

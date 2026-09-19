@@ -254,7 +254,8 @@ def test_assemble_does_not_keep_reasoning_content():
     assert result == claims
 
 
-def test_gateway_server_error_does_not_hit_standby(env):
+def test_gateway_server_error_does_not_hit_standby(integration_env):
+    env = integration_env
     provider, transport = _provider(httpx.Response(401, json={"error": "no"}), _sse(_claims()))
     case, task, record = _send_cloud(env, provider, "gw-unauthorized")
     assert record["status"] == "unknown"
@@ -268,7 +269,8 @@ def test_gateway_server_error_does_not_hit_standby(env):
     assert len(transport.calls) == 1
 
 
-def test_gateway_unknown_after_content_does_not_hit_standby(env):
+def test_gateway_unknown_after_content_does_not_hit_standby(integration_env):
+    env = integration_env
     provider, transport = _provider(_sse("{broken"), _sse(_claims()))
     case, task, record = _send_cloud(env, provider, "gw-broken-json")
     assert record["status"] == "unknown"
@@ -279,7 +281,8 @@ def test_gateway_unknown_after_content_does_not_hit_standby(env):
     assert task_state(env, case["id"], task["id"])["status"] == "unknown"
 
 
-def test_mock_demo_path_unchanged(env):
+def test_mock_demo_path_unchanged(demo_env):
+    env = demo_env
     case, task = demo_task(env)
     task = approve(env, task)
     assert env["client"].post(f"/api/v1/tasks/{task['id']}/send").status_code == 200

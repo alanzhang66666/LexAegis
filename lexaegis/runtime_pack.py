@@ -125,6 +125,8 @@ def _validate_draft_address(runtime_pack: Mapping[str, Any]) -> None:
         "dispatch_allowed": False,
         "pack": runtime_pack.get("pack"),
     }
+    if runtime_pack.get("scope_kind") == "request":
+        draft_content["scope_kind"] = "request"
     expected_hash = _sha256_ref(canonical(draft_content).encode("utf-8"))
     if runtime_pack.get("runtime_pack_hash") != expected_hash:
         raise ValueError("运行库draft内容地址无效")
@@ -155,8 +157,21 @@ def _validate_reviewed_runtime_pack(runtime_pack: Mapping[str, Any], evidence: M
         raise ValueError("运行库发布要求reviewed legal state")
     if runtime_pack.get("dispatch_allowed") is not True:
         raise ValueError("运行库发布要求显式dispatch_allowed=true")
-    if runtime_pack.get("published_scope") != FIRST_RELEASE_SCOPE:
-        raise ValueError("首发published_scope必须精确为LA-001 × R_fact_summary × D_DeepSeek_official_API")
+    scope = runtime_pack.get("published_scope")
+    if runtime_pack.get("scope_kind", "first_acceptance") == "first_acceptance":
+        if scope != FIRST_RELEASE_SCOPE:
+            raise ValueError("首发published_scope必须精确为LA-001 × R_fact_summary × D_DeepSeek_official_API")
+    elif runtime_pack.get("scope_kind") == "request":
+        allowed_shapes = ({"case_id", "purpose", "recipient"}, {"domain", "purpose", "recipient"})
+        if (not isinstance(scope, dict) or set(scope) not in allowed_shapes
+                or any(not _nonempty_text(value) or value != value.strip() or "*" in value for value in scope.values())):
+            raise ValueError("常规运行库必须限定明确案由或案件、任务和接收方，不能使用通配范围")
+        if scope.get("domain") and scope["domain"] != runtime_pack["pack"]["id"]:
+            raise ValueError("发布案由须与运行库源规则案由一致")
+        if scope["purpose"] not in {f"R_{task_id}" for task_id in runtime_pack["pack"]["task_ids"]}:
+            raise ValueError("发布任务须属于运行库已注册任务")
+    else:
+        raise ValueError("未知运行库发布范围类型")
 
     risk_weights = runtime_pack.get("risk_weights")
     if not isinstance(risk_weights, dict) or set(risk_weights) != RISK_WEIGHT_KEYS:
@@ -190,7 +205,7 @@ def _validate_reviewed_runtime_pack(runtime_pack: Mapping[str, Any], evidence: M
         raise ValueError("运行库内容哈希不匹配")
 
 
-def create_runtime_pack_draft(repo, source_pack: Path, import_report: Path) -> dict:
+def create_runtime_pack_draft(repo, source_pack: Path, import_report: Path, *, scope_kind="first_acceptance") -> dict:
     """Persist an independent, content-addressed runtime draft.
 
     The source and report hashes cover their exact bytes. The runtime address
@@ -198,16 +213,30 @@ def create_runtime_pack_draft(repo, source_pack: Path, import_report: Path) -> d
     are idempotent while a changed source pack or import report derives a new
     record. Repository files are opened read-only and never rewritten.
     """
-    source_bytes, raw_pack = _read_json_artifact(source_pack, "源pack")
-    report_bytes, report = _read_json_artifact(import_report, "导入报告")
+    source_bytes = _read_artifact(source_pack, "源pack")
+    report_bytes = _read_artifact(import_report, "导入报告")
+    return create_runtime_pack_from_bytes(repo, source_bytes, report_bytes, scope_kind=scope_kind)
+
+
+def create_runtime_pack_from_bytes(repo, source_bytes: bytes, report_bytes: bytes, *, scope_kind="request") -> dict:
+    if scope_kind not in {"first_acceptance", "request"}:
+        raise ValueError("未知运行库发布范围类型")
+    if any(not content or len(content) > MAX_ARTIFACT_BYTES for content in (source_bytes, report_bytes)):
+        raise ValueError("源pack或导入报告为空或超过20MB")
+    try:
+        raw_pack, report = (json.loads(content.decode("utf-8")) for content in (source_bytes, report_bytes))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("源pack和导入报告须为有效UTF-8 JSON") from exc
     if not isinstance(raw_pack, dict):
         raise ValueError("源pack必须是JSON对象")
     if not isinstance(report, dict):
         raise ValueError("导入报告必须是JSON对象")
 
     validate_pack(raw_pack)
-    if raw_pack.get("id") != EXPECTED_PACK_ID or raw_pack.get("version") != EXPECTED_PACK_VERSION:
+    if scope_kind == "first_acceptance" and (raw_pack.get("id") != EXPECTED_PACK_ID or raw_pack.get("version") != EXPECTED_PACK_VERSION):
         raise ValueError("运行库draft只能从labor 2.0.0-draft.3派生")
+    if raw_pack.get("schema_version") != 2:
+        raise ValueError("正式运行库必须采用V2声明式规则")
     if raw_pack.get("status") != "draft" or raw_pack.get("dispatch_allowed") is not False:
         raise ValueError("仓库源pack必须保持draft且dispatch_allowed=false")
 
@@ -215,13 +244,15 @@ def create_runtime_pack_draft(repo, source_pack: Path, import_report: Path) -> d
     import_report_hash = _sha256_ref(report_bytes)
     draft_content = {
         "schema_version": 1,
-        "source_pack_id": f"pack:{EXPECTED_PACK_ID}:{EXPECTED_PACK_VERSION}",
+        "source_pack_id": f"pack:{raw_pack['id']}:{raw_pack['version']}",
         "source_pack_hash": source_pack_hash,
         "import_report_hash": import_report_hash,
         "status": "draft",
         "dispatch_allowed": False,
         "pack": raw_pack,
     }
+    if scope_kind == "request":
+        draft_content["scope_kind"] = "request"
     runtime_pack_hash = _sha256_ref(canonical(draft_content).encode("utf-8"))
     record_id = "runtime-pack:" + runtime_pack_hash.removeprefix("sha256:")
 
@@ -322,6 +353,52 @@ def publish_runtime_pack(repo, runtime_pack_id: str, *, actor: str) -> dict:
         raise ValueError("运行库发布人不能为空")
     runtime_pack = repo.get(runtime_pack_id, "runtime_pack")
     return _published_runtime_pack(repo, runtime_pack, actor)
+
+
+def activate_runtime_pack(repo, runtime_pack_id: str, *, actor: str) -> dict:
+    """Expose a published immutable runtime pack to the shared workbench.
+
+    The separate activation record retains the exact export hash used by the
+    build manifest. No repository draft or previously approved pack is edited.
+    """
+    from .governance import pack_content_hash
+
+    runtime = repo.get(runtime_pack_id, "runtime_pack")
+    if runtime.get("status") != "published" or not _nonempty_text(actor):
+        raise ValueError("只有已发布且具名确认的运行库可用于工作台")
+    evidence = _resolve_law_05_evidence(repo, runtime.get("law_05_evidence_id", ""))
+    _validate_reviewed_runtime_pack(runtime, evidence)
+    content_id = runtime["content_hash"].removeprefix("sha256:")[:24]
+    source = runtime["pack"]
+    version = f"{source['version']}+runtime.{content_id}"
+    pack_id = f"pack:{source['id']}:{version}"
+    activation_id = f"activation:{pack_id}"
+    try:
+        activation = repo.get(activation_id, "runtime_pack_activation")
+    except KeyError:
+        activation = None
+    if activation:
+        if activation["runtime_pack_id"] != runtime_pack_id:
+            raise ValueError("运行库激活内容地址冲突")
+        return repo.get(pack_id, "pack")
+    value = {**source, "id": pack_id, "domain_id": source["id"], "version": version,
+             "status": "published", "legal_status": "reviewed", "dispatch_allowed": True,
+             "published_scope": dict(runtime["published_scope"]),
+             "risk_weights": dict(runtime["risk_weights"]), "references": list(runtime["references"]),
+             "reviewer": runtime["reviewer"], "reviewed_at": runtime["reviewed_at"],
+             "review_record": runtime["review_record"], "frozen_at": runtime["frozen_at"],
+             "published_by": runtime["published_by"]}
+    value["content_hash"] = pack_content_hash(value)
+    validate_pack({key: child for key, child in value.items() if key != "domain_id"} | {"id": source["id"]})
+    repo.put("pack", value)
+    repo.put("runtime_pack_activation", {
+        "id": activation_id, "pack_id": pack_id, "runtime_pack_id": runtime_pack_id,
+        "runtime_pack_hash": runtime["runtime_pack_hash"],
+        "artifact_sha256": _sha256_ref(canonical(runtime).encode("utf-8")),
+        "actor_user_id": actor, "activated_at": now(),
+    })
+    audit(repo, "", "runtime_pack.activated", pack_id=pack_id, runtime_pack_id=runtime_pack_id, actor=actor)
+    return value
 
 
 def _record_state(record: Mapping[str, Any]) -> str:
@@ -532,6 +609,24 @@ def retire_runtime_pack(
         dependent_invalidation=report,
     )
     repo.put("runtime_pack", retired)
+    # Active workbench requests reference the materialized pack, not the
+    # draft aggregate. Invalidate those concrete dependencies in this same
+    # transaction while preserving already-sending/rejected task history.
+    from . import release_service, review
+    for activation in repo.list("runtime_pack_activation"):
+        if activation.get("runtime_pack_id") != runtime_pack_id:
+            continue
+        active = repo.get(activation["pack_id"], "pack")
+        active.update(status="retired", dispatch_allowed=False)
+        repo.put("pack", active)
+        for task in repo.list("task"):
+            if task.get("pack_id") != active["id"] or task.get("status") in review.TERMINAL_TASK_STATES:
+                continue
+            review._stop_unstarted_sends(repo, task, reason="runtime_pack_retired")
+            release_service.revoke(repo, task, reason, actor)
+            task.update(stale=True, status="stale", approval=None)
+            repo.put("task", task, task["case_id"])
+            audit(repo, task["case_id"], "task.rules_invalidated", task_id=task["id"], actor=actor)
     audit(
         repo,
         "formal-release",

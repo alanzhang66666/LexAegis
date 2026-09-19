@@ -104,5 +104,6 @@ def test_provider_change_invalidates_frozen_task_dependencies(env):
     evaluated=client.post(f"/api/v1/tasks/{task['id']}/evaluate").json()
     changed=provider_payload();changed["retention"]="已变更的留存条件"
     client.put("/api/v1/providers/provider_test",json=changed)
-    result=client.post(f"/api/v1/tasks/{task['id']}/approve",json={"request_hash":evaluated["request_hash"]})
+    from tests.conftest import post_as
+    result=post_as(env, "approver", f"/api/v1/tasks/{task['id']}/approve",json={"request_hash":evaluated["request_hash"]})
     assert result.status_code==409 and "服务商档案已变化" in result.text

@@ -240,7 +240,8 @@ def test_dispatch_still_blocked_for_complete_overtime_scenario(env):
         pack = repo.get(task["pack_id"], "pack")
         assert pack["dispatch_allowed"] is False
         assert pack["legal_status"] == "pending_legal_review"
-    assert client.post(
+    from tests.conftest import post_as
+    assert post_as(env, "approver",
         f"/api/v1/tasks/{task['id']}/approve",
         json={"request_hash": body["request_hash"]},
     ).status_code == 409

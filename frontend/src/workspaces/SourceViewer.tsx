@@ -5,13 +5,14 @@ import { Empty, Tag } from "../components/ui";
 type Obj = Record<string, any>;
 
 export function SourceViewer({ data, currentCase, caseId, busy, activeSource, blocks,
-  onSelect, onUpload, onCorrect, onConfirm }: {
+  onSelect, onUpload, onCorrect, onConfirm, onRetry }: {
   data: Obj; currentCase: Obj; caseId: string; busy: boolean;
   activeSource: Obj | null; blocks: Obj[];
   onSelect: (source: Obj | null) => void;
   onUpload: (file: File) => void;
   onCorrect: (source: Obj) => void;
   onConfirm?: (source: Obj) => void;
+  onRetry?: (document: Obj) => void;
 }) {
   const [confirming, setConfirming] = useState(false);
   const [confirmError, setConfirmError] = useState("");
@@ -45,12 +46,14 @@ export function SourceViewer({ data, currentCase, caseId, busy, activeSource, bl
   return <section className="source-panel">
     <div className="panel-heading"><h3><FileText size={16}/>原始材料</h3><Tag>仅边侧</Tag></div>
     <div className="document-list">{data.documents.map((document: Obj) =>
-      <button key={document.id} onClick={() => onSelect(document.ir?.blocks[0] || null)}>
+      <div className="document-row" key={document.id}>
+      <button onClick={() => onSelect(document.ir?.blocks[0] || null)}>
         <FileText size={15}/><span>{document.name}<small>v{document.version} · {document.status === "ready" ? "已解析" : document.status}</small>
           {document.error && <small className="danger-text">{document.error}</small>}</span>
         {document.extension !== "demo" && <a href={`/api/v1/cases/${caseId}/documents/${document.id}/file`}
           onClick={event => event.stopPropagation()} title="下载原件"><Download size={14}/></a>}
-      </button>)}</div>
+      </button>{document.status === "failed" && onRetry && <button className="text-button" disabled={busy} onClick={()=>onRetry(document)}>重试解析</button>}
+      </div>)}</div>
     {currentCase.mode === "formal" && <label className="upload"><Upload size={17}/><span>
       上传 DOCX / PDF / 文本 / 表格 / 图片 / 音视频<small>TXT 按段落切块 · XLSX/CSV 按单元格定位 · PNG/JPEG 可选本地 OCR · 音视频本机转写后复核 · 最大 20 MB</small></span>
       <input type="file" accept=".docx,.pdf,.txt,.png,.jpg,.jpeg,.xlsx,.csv,.mp3,.m4a,.wav,.mp4" disabled={busy}

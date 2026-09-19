@@ -41,7 +41,7 @@ export function FactWorkspace({ facts, currentCase, busy, label, onExtract, onOp
         <button className="primary compact" onClick={() => onOpen()}><Plus size={14}/>添加事实</button>
         {onStartCloud && (
           <button className="secondary compact" disabled={busy || !facts.length} onClick={onStartCloud}>
-            云端摘要任务
+            正式云端摘要任务（仅生成草案）
           </button>
         )}
       </div>}</div>
@@ -63,6 +63,7 @@ export function FactWorkspace({ facts, currentCase, busy, label, onExtract, onOp
       </div>
     </article>;
     }) : <Empty title="将材料整理为可核实事实" detail="使用边侧模型提取，或选择原文片段后人工添加。"/>}
+    {onStartCloud&&currentCase.mode==="formal"&&<p className="small-note">新建只生成待检验披露请求草案，不会调用服务商；外发仍需规则、证据、风险复核、审批和一次性许可。</p>}
     <div className="bottom-action">
       {currentCase.mode === "formal" && <button className="secondary" disabled={busy || !facts.length}
         onClick={onTimeline}>本地生成时间线</button>}

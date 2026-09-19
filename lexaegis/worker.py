@@ -2,14 +2,16 @@ import os
 import time
 from pathlib import Path
 import httpx
-from . import service
+from . import service, release_service
 from .contracts import AttackRun
 from .diagnostics import resolve_redteam_url
 from .governance import protocol_content_hash
 from .gpu_runtime import gpu_stage, maybe_idle_unload, parse_in_aux_process, parse_uses_gpu
 from .parsing import parse
+from .policy import disclosure_history
 from .providers import EdgeClient, ExtractTruncatedError, merge_extract_facts
 from .runtime_identity import runtime_identity, write_runtime_identity
+from .runtime_profile import bind_runtime, current_profile
 from .storage import Store
 from .task_engine import validate_cloud_result
 from .util import app_dir, audit, digest, exclusive_lock, now, sign, uid
@@ -43,6 +45,7 @@ def chunk_extract_blocks(blocks, max_chars=EXTRACT_CHUNK_CHARS, max_blocks=EXTRA
 
 def finish_response(repo, task, record):
     status = record["status"]
+    release_service.mirror_outcome(repo, task, record)
     disclosure = repo.get(task["request"]["request_id"], "disclosure")
     if status == "complete":
         try:
@@ -111,8 +114,14 @@ def recover(store):
                 continue
             if job["kind"] in ("send", "reconcile"):
                 task = repo.get(job["payload"]["task_id"], "task")
-                finish_response(repo, task, {"status": "unknown"})
-                job.update(status="failed", error="工作进程中断；查询网关记录，不自动重发")
+                if task.get("status") in {"rejected", "review_blocked", "stopped"}:
+                    job.update(status="cancelled", error="人工决定已阻止尚未发送的请求")
+                elif task.get("status") == "queued" and job["kind"] == "send":
+                    # The durable sending boundary was never crossed.
+                    job.update(status="pending", error=None)
+                else:
+                    finish_response(repo, task, {"status": "unknown"})
+                    job.update(status="failed", error="工作进程中断；查询网关记录，不自动重发")
             elif job["kind"] == "redteam":
                 task = repo.get(job["payload"]["task_id"], "task")
                 for protocol_id in job["payload"].get("protocol_ids", []):
@@ -144,11 +153,16 @@ def recover(store):
 
 
 def process_one(store, root, gateway_client=None, redteam_client=None):
+    bind_runtime(root, "app")
     with store.transaction() as repo:
         pending = [j for j in repo.list("job") if j["status"] == "pending"]
         if not pending:
             return False
         job = pending[0]
+        if current_profile() == "demo" and job["kind"] not in {"send", "reconcile", "redteam"}:
+            job.update(status="failed", error="离线演示禁止模型或红队外部调用")
+            repo.put("job", job, job["case_id"])
+            return True
         job.update(status="running", started_at=now())
         repo.put("job", job, job["case_id"])
         audit(repo, job["case_id"], "job.started", job_id=job["id"], kind=job["kind"])
@@ -198,6 +212,11 @@ def process_one(store, root, gateway_client=None, redteam_client=None):
                                                          "role": fact.get("role") or "unknown",
                                                          "normalized": fact.get("normalized"),
                                                          "model_suggestion": suggestion}, origin="edge_model")
+                if batch_errors:
+                    job["warning"] = "部分抽取批次失败；已保留的结果均为未确认建议，可定位后重试：" + batch_errors[0]
+                    repo.put("job", job, case["id"])
+                    audit(repo, case["id"], "extract.partial", job_id=job["id"],
+                          failed_batches=len(batch_errors), facts_written=len(facts))
         elif job["kind"] == "redteam":
             with store.read() as repo:
                 task = repo.get(job["payload"]["task_id"], "task")
@@ -208,12 +227,13 @@ def process_one(store, root, gateway_client=None, redteam_client=None):
                 protocols = [repo.get(ident, "risk_protocol") for ident in job["payload"]["protocol_ids"]]
                 history = [
                     item.get("request", {}).get("wire_payload")
-                    for item in repo.list("disclosure", task["case_id"])
+                    for item in disclosure_history(repo.list("disclosure", task["case_id"]))
                     if item.get("request", {}).get("wire_payload")
                 ]
             secret = os.getenv("LEX_REDTEAM_SECRET", "")
             base = resolve_redteam_url()
-            client = redteam_client or httpx.Client(trust_env=False)
+            offline = current_profile() == "demo"
+            client = None if offline else (redteam_client or httpx.Client(trust_env=False))
             runs = []
             try:
                 for protocol in protocols:
@@ -227,15 +247,19 @@ def process_one(store, root, gateway_client=None, redteam_client=None):
                         "query_budget": max(1, protocol["query_budget"]),
                     }
                     try:
-                        if not secret:
-                            raise RuntimeError("redteam secret missing")
-                        response = client.post(
-                            base + "/evaluate",
-                            json={"view": view, "signature": sign(view, secret)},
-                            timeout=protocol["time_budget_seconds"],
-                        )
-                        response.raise_for_status()
-                        result = response.json()
+                        if offline:
+                            from .attacks import evaluate as evaluate_attack
+                            result = evaluate_attack(protocol, view["request"], view["disclosed_history"], view["auxiliary"])
+                        else:
+                            if not secret:
+                                raise RuntimeError("redteam secret missing")
+                            response = client.post(
+                                base + "/evaluate",
+                                json={"view": view, "signature": sign(view, secret)},
+                                timeout=protocol["time_budget_seconds"],
+                            )
+                            response.raise_for_status()
+                            result = response.json()
                         if (result.get("protocol") != protocol["kind"]
                                 or result.get("outcome") not in {"resisted", "succeeded", "uncertain", "error", "not_run"}):
                             raise ValueError("红队返回契约无效")
@@ -255,10 +279,14 @@ def process_one(store, root, gateway_client=None, redteam_client=None):
                         query_count=query_count, duration_ms=duration_ms,
                         started_at=started_at, finished_at=now(),
                     ).model_dump()
+                    run.update(protocol_version=protocol["version"], attacker_view=protocol["attacker_view"],
+                               input_hash=task["attack_input_hash"],
+                               provenance="simulation" if offline else "isolated_redteam",
+                               runtime_profile=current_profile())
                     run["result_hash"] = digest({key: value for key, value in run.items() if key != "result_hash"})
                     runs.append(run)
             finally:
-                if redteam_client is None:
+                if client is not None and redteam_client is None:
                     client.close()
             with store.transaction() as repo:
                 current = repo.get(task["id"], "task")
@@ -273,12 +301,19 @@ def process_one(store, root, gateway_client=None, redteam_client=None):
                           outcome=run["outcome"], result_hash=run["result_hash"])
                 current["redteam_status"] = ("complete" if all(run["outcome"] == "resisted" for run in runs)
                                                 else "incomplete")
+                if current.get("risk"):
+                    current["risk"]["attacks"] = [{**r, "kind": p["kind"]} for r, p in zip(runs, protocols)]
                 repo.put("task", current, task["case_id"])
         elif job["kind"] in ("send", "reconcile"):
+            context = release_service.collect_context(store, root, gateway_client=gateway_client)
             with store.transaction() as repo:
+                job = repo.get(job["id"], "job")
+                if job["status"] == "cancelled":
+                    return True
                 task = repo.get(job["payload"]["task_id"], "task")
                 if job["kind"] == "send":
-                    service.authorize_dispatch(repo, task, phase="send")
+                    service.authorize_dispatch(repo, task, phase="send", release_context=context)
+                    release_service.mark_sending(repo, task)
                     task["status"] = "sending"
                     repo.put("task", task, task["case_id"])
             secret = os.getenv("LEX_GATEWAY_SECRET", "")
@@ -287,6 +322,8 @@ def process_one(store, root, gateway_client=None, redteam_client=None):
             try:
                 if job["kind"] == "send":
                     content = {"request": task["request"], "approval": task["approval"]}
+                    if task.get("formal_release"):
+                        content["formal_release"] = task["formal_release"]
                     response = client.post(base+"/dispatch", json={**content, "signature": sign(content, secret)})
                 else:
                     ident = task["request"]["request_id"]
@@ -307,6 +344,9 @@ def process_one(store, root, gateway_client=None, redteam_client=None):
                 task = repo.get(task["id"], "task")
                 finish_response(repo, task, record)
         with store.transaction() as repo:
+            job = repo.get(job["id"], "job")
+            if job["status"] == "cancelled":
+                return True
             job.update(status="complete", finished_at=now())
             repo.put("job", job, job["case_id"])
             audit(repo, job["case_id"], "job.complete", job_id=job["id"])
@@ -314,6 +354,9 @@ def process_one(store, root, gateway_client=None, redteam_client=None):
         with store.transaction() as repo:
             # Domain errors contain no provider response text. Other errors are only named.
             detail = str(error) if isinstance(error, ValueError) else type(error).__name__
+            job = repo.get(job["id"], "job")
+            if job["status"] == "cancelled":
+                return True
             job.update(status="failed", error=detail, finished_at=now())
             repo.put("job", job, job["case_id"])
             if job["kind"] == "parse":
@@ -322,7 +365,11 @@ def process_one(store, root, gateway_client=None, redteam_client=None):
                 repo.put("document", doc, job["case_id"])
             if job["kind"] == "send":
                 task = repo.get(job["payload"]["task_id"], "task")
-                if isinstance(error, service.DomainError) and task.get("status") == "queued":
+                if task.get("status") in {"rejected", "review_blocked", "stopped"}:
+                    job.update(status="cancelled", error="人工复核阻断")
+                    repo.put("job", job, job["case_id"])
+                elif isinstance(error, ValueError) and task.get("status") == "queued":
+                    release_service.revoke(repo, task, "发送前校验失败")
                     finish_response(repo, task, {"status": "rejected", "error": str(error)})
                 else:
                     finish_response(repo, task, {"status": "unknown"})
@@ -332,6 +379,7 @@ def process_one(store, root, gateway_client=None, redteam_client=None):
 
 def run():
     root = app_dir()
+    bind_runtime(root, "app")
     root.mkdir(parents=True, exist_ok=True)
     expose_runtime_identity(root)
     with exclusive_lock(root / "worker.lock", error=SystemExit("已有一个工作进程在运行")):

@@ -2,6 +2,29 @@
 
 产品版本现为 **V1.0**（`1.0.0`），非正式发行。下文 2026-09-08/09 条目仍是 0.2.0 周期的本机证据，未因改号重跑。
 
+## 2026-09-19 双线开发验证
+
+本轮设备为 macOS，Python 3.12；浏览器使用本机 Google Chrome。分支为 `feat/production-demo-dual-track`。本机未安装 Docker Desktop 或 PowerShell，未持有本轮获准真实案件和云端密钥，不把下列代码及合成测试作为 Windows 或真实外发验收。
+
+| 本轮检查 | 实际结果与边界 |
+| --- | --- |
+| Python 全量测试 | `pytest -q -rs --tb=short`：**520 passed、3 skipped**。跳过 PaddleOCR、RapidOCR、whisper.cpp/large-v3-turbo 的实际资产测试；未自动安装模型。保留一项 Starlette/httpx 弃用提示。 |
+| 多案件生产调用链 | 同一个经 HTTP 准备、复核、发布、激活的规则包覆盖两宗合成正式案件。实际创建任务、生成请求、技术隔离登记、法学确认、逐请求策略、具名审批、worker 和独立测试网关分别完成一次调用，并拒绝跨请求使用许可。构建身份、攻击证据和服务商返回为受控测试替身，没有互联网调用。 |
+| 人工否决 | 浏览器实际执行技术人员提请暂停、法学人员否决，顶部状态与动作同步；初检和具名复核历史保留。随后切换到独立审批人，确认页面没有批准入口，直接提交同一请求哈希的批准也被 API 409 拒绝。后端覆盖并发入队、旧批准、重新检验和另建任务不能绕过未解决事项。 |
+| 成功演示闭环 | 浏览器实际执行披露、初检、法学允许、独立审批、模拟调用、逐条来源核对及最终确认。模拟结果保留来源标识。 |
+| 演示桌面回归 | `playwright.config.ts --project=desktop-1280 --grep-invert five-viewport`：**8 passed、2 skipped**，两项为仅在独立 production 配置执行的证据登记测试；四类模拟攻击保留实际检出与不确定结果，没有改写为通过。 |
+| 材料不足主动停止 | 新浏览器测试先复现待人工复核时停止按钮被错误禁用；修复后通过。案件操作角色无需先取得允许意见即可主动停止尚未发送的请求，排队停止仍走后端事务边界。刷新后状态仍为 stopped、批准为空、请求快照保留，重新检验不可用，全程没有发送请求；发送开始及已终结请求不提供停止入口。 |
+| 生产浏览器回归 | `playwright.runtime-pack.config.ts`：**4 passed**。覆盖技术规则草稿、正式 DOCX 入库与拒发、缺少权威构建时不可批准，以及 G1 人工待核登记与隔离文件绑定校验。最后一项仅替换证据上下文和收据接口来测试表单；案件、材料、事实、云端草案和请求冻结仍使用真实本地 API，不是正式证据验收。 |
+| 五种视口 | 1440、1280、900、650、390 像素五项通过，覆盖窄屏面板切换和横向溢出检查。 |
+| 前端与 wheel | 主动停止修复后 `pnpm build` 通过，1590 个模块。重建 `lexaegis-1.0.0-py3-none-any.whl`（536701 字节，SHA-256 `9b481e764ba35933b79696b919fba337ebbd3eae49f01966c6525fe37f8b5e77`）。归档与当前前端、规则及许可证逐文件比对通过；安装到独立目录后 API 导入及内置资产检查通过。修复重复打包保留旧资源的问题，旧归档确被新校验拒绝。此 wheel 尚未绑定正式镜像和获核验发布清单。 |
+| 恢复中断与旧授权 | 同构建恢复会撤销旧批准、排队发送和未消费许可；复制或任一撤权事务中断后，两端标记阻止启动。已消费网关记录及人工复核历史保留。故障注入和独立复审均通过。 |
+| CI 工作流静态检查 | `actionlint -shellcheck= .github/workflows/ci.yml` 通过；已补测试/构建依赖、测试环境分离、PowerShell 语法检查及 Compose 初始化。静态检查不代表远端 CI 已通过。 |
+| 远端 Actions | 仓库按所有者要求改为 PUBLIC 后，对提交 `8ca2c235c99b2c191b51757bd6a77b0b63141078` 手动触发 [运行 35435576189](https://github.com/Hanyuan9766/LexAegis/actions/runs/35435576189)。七个任务均在分配 runner 前失败、无执行步骤；Linux/macOS/Windows 检查注释一致为 `The job was not started because your account is locked due to a billing issue.` 仓库 Actions 已启用且允许所有 actions。须由账户所有者解除账单锁定后重新执行，不能将公开仓库或成功入队写成 CI 通过。此前 push/PR 运行仅返回 `startup_failure`，没有任务日志。 |
+
+本轮浏览器截图保存在被忽略的 `.artifacts/dual-track-acceptance/`，不提交运行数据库或凭据。真实联调、获准真实案件发送、Windows 干净机器安装、固定 Docker 镜像交付及现场升级回滚仍待目标环境验收。规则和法源补充稿保持待复核，未代签法律发布结论。
+
+## 2026-09-08 至 14 历史验证
+
 验证日期：2026-09-08。当前验证设备为 Windows / AMD64、Python 3.13、Docker Compose v5.5.0 / Engine 29.7.2。本文只记录实际执行证据；不填充隐私风险降低率、法律任务准确率或摘要质量等未经盲测的数据。
 
 ## 本机已执行验证
@@ -102,8 +125,10 @@ python -m lexaegis.cli dataset compare --output .data/comparable/mock_labor.json
 cd frontend
 pnpm exec tsc --noEmit
 pnpm build
-pnpm test:e2e -- --project=desktop-1280 --grep-invert "five-viewport"
-pnpm test:e2e -- --grep "five-viewport"
+pnpm exec playwright test --project=desktop-1280 --grep-invert "five-viewport"
+pnpm exec playwright test --grep "five-viewport"
+pnpm exec playwright test --config=playwright.human-veto.config.ts
+pnpm exec playwright test --config=playwright.runtime-pack.config.ts
 # 需 dotenv：doctor / probe-edge 自己不读 .env
 # docker compose --profile redteam --profile benchmark up -d --build --wait
 # lexaegis check-isolation

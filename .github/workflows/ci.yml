@@ -2,6 +2,7 @@ name: ci
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 jobs:
   cross-platform:
@@ -24,8 +25,17 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: "3.12", cache: pip}
       - run: python -m pip install -r requirements.lock -c constraints/${{ matrix.constraints }}
+      - run: python -m pip install -r requirements-test.lock -c constraints/${{ matrix.constraints }}
       - run: python -m pip install --no-deps -e .
       - run: python -m pytest -q
+      - name: Parse Windows maintenance script
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $parseTokens = $null
+          $parseErrors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PWD 'scripts/windows/lexaegis.ps1'), [ref]$parseTokens, [ref]$parseErrors) | Out-Null
+          if ($parseErrors.Count -gt 0) { $parseErrors | Format-List; exit 1 }
       - uses: pnpm/action-setup@v4
         with: {version: 11.19.0}
       - uses: actions/setup-node@v4
@@ -38,9 +48,21 @@ jobs:
       - run: python scripts/verify_wheel.py .artifacts/wheel
       - run: pnpm exec playwright install ${{ matrix.playwright_args }}
         working-directory: frontend
-      - run: pnpm test:e2e -- --project=desktop-1280 --grep-invert "five-viewport"
+      - run: pnpm exec playwright test --project=desktop-1280 --grep-invert "five-viewport"
+        working-directory: frontend
+      - run: pnpm exec playwright test --config=playwright.human-veto.config.ts
+        working-directory: frontend
+      - run: pnpm exec playwright test --config=playwright.runtime-pack.config.ts
         working-directory: frontend
       - run: lexaegis doctor
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: workflow-evidence-${{ matrix.os }}
+          path: |
+            .artifacts/dual-track-acceptance
+            frontend/test-results
+            frontend/playwright-report
 
   responsive-visual-baseline:
     runs-on: ubuntu-latest
@@ -49,6 +71,7 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: "3.12", cache: pip}
       - run: python -m pip install -r requirements.lock -c constraints/linux.txt
+      - run: python -m pip install -r requirements-test.lock -c constraints/linux.txt
       - run: python -m pip install --no-deps -e .
       - uses: pnpm/action-setup@v4
         with: {version: 11.19.0}
@@ -60,7 +83,7 @@ jobs:
         working-directory: frontend
       - run: pnpm exec playwright install --with-deps chromium
         working-directory: frontend
-      - run: pnpm test:e2e -- --grep "five-viewport"
+      - run: pnpm exec playwright test --grep "five-viewport"
         working-directory: frontend
       - uses: actions/upload-artifact@v4
         if: always()
@@ -107,7 +130,15 @@ jobs:
         with: {python-version: "3.12", cache: pip}
       - run: python -m pip install -r requirements.lock -c constraints/linux.txt
       - run: python -m pip install --no-deps -e .
-      - run: docker compose --profile redteam up -d --build --wait
+      - name: Prepare unverified CI manifest and writable container data
+        run: |
+          python scripts/prepare_ci_runtime.py
+          mkdir -p .data/production/app .data/production/gateway
+          sudo chown -R 10001:10001 .data/production
+          sudo chmod 700 .data/production/app .data/production/gateway
+      - run: docker pull alpine:3.20
+      - run: docker compose --profile redteam build
+      - run: docker compose --profile redteam up -d --pull never --wait
       - run: lexaegis check-isolation
       - if: always()
         run: docker compose --profile redteam down -v

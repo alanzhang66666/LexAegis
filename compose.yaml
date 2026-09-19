@@ -1,5 +1,7 @@
-name: lexaegis
+name: ${LEX_COMPOSE_PROJECT:-lexaegis-production}
 x-runtime: &runtime
+  image: ${LEX_RELEASE_IMAGE:-lexaegis:local}
+  pull_policy: never
   build: .
   read_only: true
   cap_drop: [ALL]
@@ -12,18 +14,22 @@ services:
     ports: ["127.0.0.1:${LEX_COMPOSE_API_PORT:-38765}:8765"]
     environment:
       LEX_DATA_DIR: /data
+      LEX_RUN_PROFILE: ${LEX_RUN_PROFILE:-production}
+      LEX_RELEASE_BUILD_MANIFEST_PATH: /release/release-build-manifest.json
       LEX_LOCAL_PASSWORD: ${LEX_LOCAL_PASSWORD:?Set a local password}
       LEX_GATEWAY_SECRET: ${LEX_GATEWAY_SECRET:?Set a signing secret}
       LEX_GATEWAY_URL: http://gateway:8766
       LEX_EDGE_URL: http://edge-model:8080/v1
       LEX_EDGE_MODEL: ${LEX_EDGE_MODEL:-}
-      LEX_API_PORT: ${LEX_COMPOSE_API_PORT:-38765}
+      LEX_API_PORT: 8765
       LEX_CLOUD_ALLOWED_HOSTS: ${LEX_CLOUD_ALLOWED_HOSTS:-api.deepseek.com,dashscope.aliyuncs.com,dashscope-intl.aliyuncs.com,api.openai.com}
       LEX_ISOLATED: "1"
       LEX_DEPLOYMENT_MODE: isolated
       LEX_RUNTIME_ROLE: api
       PYTHONDONTWRITEBYTECODE: "1"
-    volumes: ["app-data:/data"]
+    volumes:
+      - "${LEX_APP_DATA_PATH:-./.data/production/app}:/data"
+      - "${LEX_RELEASE_BUILD_MANIFEST_HOST_PATH:-./release-build-manifest.json}:/release/release-build-manifest.json:ro"
     # publish is not internal: Windows Docker otherwise drops 127.0.0.1 host bindings.
     # isolate-api-route then deletes the default route so the 1.1.1.1 probe still fails.
     networks: [internal, publish, redteam]
@@ -33,7 +39,8 @@ services:
       timeout: 3s
       retries: 6
   isolate-api-route:
-    image: alpine:3.20
+    image: ${LEX_ROUTE_IMAGE:-alpine:3.20}
+    pull_policy: never
     network_mode: service:api
     depends_on:
       api: {condition: service_started}
@@ -50,6 +57,8 @@ services:
       api: {condition: service_healthy}
     environment:
       LEX_DATA_DIR: /data
+      LEX_RUN_PROFILE: ${LEX_RUN_PROFILE:-production}
+      LEX_RELEASE_BUILD_MANIFEST_PATH: /release/release-build-manifest.json
       LEX_GATEWAY_URL: http://gateway:8766
       LEX_GATEWAY_SECRET: ${LEX_GATEWAY_SECRET:?Set a signing secret}
       LEX_REDTEAM_SECRET: ${LEX_REDTEAM_SECRET:?Set a separate red-team signing secret}
@@ -61,13 +70,17 @@ services:
       LEX_DEPLOYMENT_MODE: isolated
       LEX_RUNTIME_ROLE: worker
       PYTHONDONTWRITEBYTECODE: "1"
-    volumes: ["app-data:/data"]
+    volumes:
+      - "${LEX_APP_DATA_PATH:-./.data/production/app}:/data"
+      - "${LEX_RELEASE_BUILD_MANIFEST_HOST_PATH:-./release-build-manifest.json}:/release/release-build-manifest.json:ro"
     networks: [internal, redteam]
   gateway:
     <<: *runtime
     command: [python, -m, uvicorn, "lexaegis.gateway:create_gateway", --factory, --host, 0.0.0.0, --port, "8766", --no-access-log]
     environment:
       LEX_GATEWAY_DIR: /data
+      LEX_RUN_PROFILE: ${LEX_RUN_PROFILE:-production}
+      LEX_RELEASE_BUILD_MANIFEST_PATH: /release/release-build-manifest.json
       LEX_GATEWAY_SECRET: ${LEX_GATEWAY_SECRET:?Set a signing secret}
       LEX_CLOUD_API_KEY: ${LEX_CLOUD_API_KEY:-}
       LEX_CLOUD_PRIMARY_KEY: ${LEX_CLOUD_PRIMARY_KEY:-}
@@ -76,7 +89,9 @@ services:
       LEX_CLOUD_ALLOWED_HOSTS: ${LEX_CLOUD_ALLOWED_HOSTS:-api.deepseek.com,dashscope.aliyuncs.com,dashscope-intl.aliyuncs.com,api.openai.com}
       LEX_RUNTIME_ROLE: gateway
       PYTHONDONTWRITEBYTECODE: "1"
-    volumes: ["gateway-data:/data"]
+    volumes:
+      - "${LEX_GATEWAY_DATA_PATH:-./.data/production/gateway}:/data"
+      - "${LEX_RELEASE_BUILD_MANIFEST_HOST_PATH:-./release-build-manifest.json}:/release/release-build-manifest.json:ro"
     networks: [internal, egress]
   redteam:
     <<: *runtime
@@ -115,6 +130,3 @@ networks:
     driver: bridge
     driver_opts:
       com.docker.network.bridge.enable_ip_masquerade: "false"
-volumes:
-  app-data: {}
-  gateway-data: {}

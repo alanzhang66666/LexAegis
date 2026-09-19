@@ -72,8 +72,7 @@ def test_invalid_docx_demo_case_and_role_are_rejected(env):
     case = formal_case(env)
     assert upload(client, case["id"], data=b"not a DOCX").status_code == 400
     assert upload(client, case["id"], form_type="unknown").status_code == 400
-    demo = client.post("/api/v1/demos", json={"scenario": "success"}).json()
-    assert upload(client, demo["id"]).status_code == 409
+    assert client.post("/api/v1/demos", json={"scenario": "success"}).status_code == 409
     created = client.post("/api/v1/users", json={"username": "operator", "display_name": "测试操作员",
                                                  "role": "case_operator", "password": "operator-password-123"})
     assert created.status_code == 200

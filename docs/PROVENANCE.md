@@ -15,7 +15,7 @@ Ianvs 的 `PrivacyPreservingLLM` 总编排未移植。生产链只采用确定�
 
 ## 本仓库资产
 
-- `examples/` 与内置三个演示案例都是新建的合成数据，不对应真实当事人；它们只证明功能路径，不证明匿名化、法律适用性或模型效果。
+- `examples/` 与内置四个演示案例（成功、人工否决、组合风险、材料不足）都是新建的合成数据，不对应真实当事人；它们只证明功能路径，不证明匿名化、法律适用性或模型效果。
 - `packs/labor_demo.json` 是未正式审核的演示规则；`contract_test.json` 是扩展测试资产；`labor_v2_draft.json` 在保守缺省之上叠加加班核对条件规则，仍为待审草稿，`dispatch_allowed=false`。三者都不能充当正式法律依据。
 - `data/` 只收完全合成、结构抽象半合成或案由包回归夹具，与运行期 `.data/` 分开。入库材料须声明 `contains_real_case_content=false`，冻结内容哈希，同版本不可覆盖，且 `dispatch_allowed` 恒为 false。当前 `data/mock_labor_v1/` 是 8 条确定性虚构劳动争议记录，只服务技术对照；未标注的半合成完整材料不进入主库。
 - 不随仓库分发任何模型权重、API 密钥、真实案件、运行数据库、原文日志或本地访问口令。

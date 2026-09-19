@@ -9,6 +9,9 @@
 | [../README.md](../README.md) | 完整入口：现状、十门缺口、安装与合成演示 |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | 模块、契约、状态机、API、红队/实验附录 |
 | [DEPLOY.md](DEPLOY.md) | 数据目录、备份恢复、Compose 隔离 |
+| [DUAL_TRACK_DEPLOY.md](DUAL_TRACK_DEPLOY.md) | 三种运行环境、Windows 维护与隔离目录 |
+| [DUAL_TRACK_ACCEPTANCE.md](DUAL_TRACK_ACCEPTANCE.md) | 人工否决录制路径、正式单次放行与交付验收边界 |
+| [legal/PRODUCT_RULE_PREPARATION.md](legal/PRODUCT_RULE_PREPARATION.md) | 常规产品规则草稿、导入报告及法源待复核边界 |
 | [MODELS.md](MODELS.md) | 边侧小模型、云端双槽、OCR 与本机转写 |
 | [../data/README.md](../data/README.md) | 仓库评测语料、合成门禁与 dataset CLI |
 | [VALIDATION.md](VALIDATION.md) | 实际跑过的验证与未决项 |

@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "status": "pending_review",
+  "synthetic_pass_count": 0,
+  "source_pack": "packs/labor_product_draft.json",
+  "source_pack_id": "labor",
+  "source_pack_version": "3.0.0-product-draft.1",
+  "source_schema_version": 2,
+  "validation": "schema_validated; runtime_pack_request_importable",
+  "dispatch_allowed": false,
+  "legal_status": "pending_legal_review",
+  "sources_checked": [
+    {
+      "title": "《中华人民共和国个人信息保护法》",
+      "articles": [
+        "第56条",
+        "第59条"
+      ],
+      "official_source_url": "https://www.miit.gov.cn/jgsj/zfs/fl/art/2022/art_515a4b20c12f430eab54bb4f56d89f56.html",
+      "citation_status": "draft_reference"
+    }
+  ],
+  "manual_review_conditions_added": [
+    "pipia_trigger_content_unverified",
+    "entrusted_processor_role_unverified",
+    "legacy_lawyer_citation_unverified"
+  ],
+  "limitations": [
+    "本报告仅为资料整理和结构校验，不是法学意见或签署。",
+    "未作法学批准、发布或发送授权。",
+    "所有既有草稿规则与引文仍须逐项法学审阅。"
+  ]
+}

@@ -4,18 +4,97 @@
   "name": "劳动争议",
   "version": "0.1.0-demo",
   "status": "demo",
-  "task_ids": ["fact_summary", "evidence_inventory", "issue_extraction"],
-  "fact_fields": ["entity", "relation", "event", "date", "amount", "evidence"],
-  "rules": [
-    {"field":"entity","necessity":"conditional","transform":"pseudonymize","reason":"演示：保留主体关系，替换直接身份。"},
-    {"field":"relation","necessity":"required","transform":"pseudonymize","reason":"演示：保留主体关系并替换真实身份。"},
-    {"field":"event","necessity":"conditional","transform":"pseudonymize","reason":"演示：保留事件并替换已登记主体。"},
-    {"field":"date","necessity":"conditional","transform":"generalize","reason":"演示：按月泛化；精度损失需要律师复核。"},
-    {"field":"amount","necessity":"conditional","transform":"keep","reason":"演示：事实摘要中的金额需逐项核实。"},
-    {"field":"evidence","necessity":"conditional","transform":"pseudonymize","reason":"演示：保留证据归属并替换已登记主体。"}
+  "task_ids": [
+    "fact_summary",
+    "evidence_inventory",
+    "issue_extraction"
   ],
-  "forbidden_terms": ["唯一", "公开获奖"],
-  "references": ["纯合成演示规则，不是经过审核的法律意见或正式规则资产。"],
+  "fact_fields": [
+    "entity",
+    "relation",
+    "event",
+    "date",
+    "amount",
+    "evidence"
+  ],
+  "rules": [
+    {
+      "field": "entity",
+      "necessity": "conditional",
+      "transform": "pseudonymize",
+      "reason": "演示：保留主体关系，替换直接身份。"
+    },
+    {
+      "field": "relation",
+      "necessity": "required",
+      "transform": "pseudonymize",
+      "reason": "演示：保留主体关系并替换真实身份。"
+    },
+    {
+      "field": "event",
+      "necessity": "conditional",
+      "transform": "pseudonymize",
+      "reason": "演示：保留事件并替换已登记主体。"
+    },
+    {
+      "field": "date",
+      "necessity": "conditional",
+      "transform": "generalize",
+      "reason": "演示：按月泛化；精度损失需要律师复核。"
+    },
+    {
+      "field": "amount",
+      "necessity": "conditional",
+      "transform": "keep",
+      "reason": "演示：事实摘要中的金额需逐项核实。"
+    },
+    {
+      "field": "evidence",
+      "necessity": "conditional",
+      "transform": "pseudonymize",
+      "reason": "演示：保留证据归属并替换已登记主体。"
+    }
+  ],
+  "forbidden_terms": [
+    "唯一",
+    "公开获奖"
+  ],
+  "references": [
+    "纯合成演示规则，不是经过审核的法律意见或正式规则资产。"
+  ],
   "review_record": null,
-  "required_attacks": ["identity", "candidate_set", "sensitive_inference", "cross_round"]
+  "required_attacks": [
+    "identity",
+    "candidate_set",
+    "sensitive_inference",
+    "cross_round"
+  ],
+  "legal_sources": [
+    {
+      "id": "demo_scope_control",
+      "title": "合成演示处理范围规则（项目自定）",
+      "tier": "项目自定规则",
+      "rule_nature": "project_control",
+      "citation_status": "draft_reference",
+      "applies_to": "仅适用于内置合成场景及本次冻结请求",
+      "norm_summary": "核对用途、字段必要性和补充线索；初检结论不能代替具名专业复核。"
+    }
+  ],
+  "manual_review_conditions": [
+    {
+      "id": "demo_processing_review",
+      "trigger": "合成请求完成初检后，核对处理范围及补充线索",
+      "why_machine_cannot": "初检没有全部补充事实，不能代替技术证据和法学判断",
+      "what_to_verify": [
+        "当前请求是否包含不必要的组合识别线索",
+        "补充证据是否改变初检的事实前提",
+        "披露内容是否符合本次用途"
+      ],
+      "legal_source_ids": [
+        "demo_scope_control"
+      ],
+      "gate_id": "G7",
+      "blocking": true
+    }
+  ]
 }

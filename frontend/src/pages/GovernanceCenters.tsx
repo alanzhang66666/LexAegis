@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { FlaskConical, Plus, ServerCog, ShieldAlert, Users } from "lucide-react";
+import { Download, FlaskConical, Plus, RefreshCw, ServerCog, ShieldAlert, Upload, Users } from "lucide-react";
 import { Button, DataTable, Panel, StatusBadge, Tag } from "../components/ui";
 
 type Obj = Record<string, any>;
@@ -173,7 +173,7 @@ export function UserCenter({request}:{request:RequestFn}) {
     <DataTable rowKey={row=>row.id} rows={usersList} columns={[{key:"display_name",label:"人员"},{key:"username",label:"用户名"},
       {key:"role",label:"角色",render:row=><select aria-label={`${row.username} 的角色`} value={row.role}
         onChange={async event=>{try{await request("/users/"+row.username,"PUT",{role:event.target.value});load()}catch(e){setError((e as Error).message)}}}>
-        {["admin","case_operator","legal_reviewer","approver"].map(value=><option key={value}>{value}</option>)}</select>},
+        {["admin","case_operator","technical_reviewer","legal_reviewer","approver"].map(value=><option key={value}>{value}</option>)}</select>},
       {key:"status",label:"状态",render:row=><Tag tone={row.status==="active"?"green":"amber"}>{row.status}</Tag>},
       {key:"action",label:"操作",render:row=><button disabled={row.username==="admin"} onClick={async()=>{try{
         await request("/users/"+row.username,"PUT",{status:row.status==="active"?"disabled":"active"});load()
@@ -182,16 +182,149 @@ export function UserCenter({request}:{request:RequestFn}) {
       <label>用户名<input value={form.username} onChange={e=>setForm({...form,username:e.target.value})}/></label>
       <label>显示名称<input value={form.display_name} onChange={e=>setForm({...form,display_name:e.target.value})}/></label>
       <label>角色<select value={form.role} onChange={e=>setForm({...form,role:e.target.value})}>
-        {["admin","case_operator","legal_reviewer","approver"].map(value=><option key={value}>{value}</option>)}</select></label>
+        {["admin","case_operator","technical_reviewer","legal_reviewer","approver"].map(value=><option key={value}>{value}</option>)}</select></label>
       <label>初始口令<input type="password" minLength={12} value={form.password} onChange={e=>setForm({...form,password:e.target.value})}/></label>
     </div>{error&&<p className="error">{error}</p>}<Button variant="primary" onClick={create}>创建账户</Button></Panel>
   </div>;
 }
 
-export function LegalPackCenter({packs=[],tasks=[],request}:{packs?:Obj[];tasks?:Obj[];request:RequestFn}) {
+const runtimePackBase="/formal-release/runtime-packs";
+const runtimeRiskKinds=["entity","density","context","combination","cross_round"] as const;
+const firstAcceptanceScope={case_id:"LA-001",purpose:"R_fact_summary",recipient:"D_DeepSeek_official_API"};
+type ReviewDraft={reviewRecord:string;evidenceId:string;caseId:string;recipient:string;dispatchAllowed:boolean;
+  weights:Record<string,string>;references:string;retireReason:string};
+const emptyReviewDraft=():ReviewDraft=>({reviewRecord:"",evidenceId:"",caseId:"",recipient:"",dispatchAllowed:false,
+  weights:Object.fromEntries(runtimeRiskKinds.map(key=>[key,""])),references:"",retireReason:""});
+const law05Kinds=new Set(["法05","法05_门5_规则发布法学签署","法 05 · 门 5 · 劳动争议 V2 规则发布的法学签署"]);
+
+export function RuntimePackWorkflow({cases,providers=[],runtimeConfig={},request,role}:{cases:Obj[];providers?:Obj[];runtimeConfig?:Obj;request:RequestFn;role?:string}) {
+  const [records,setRecords]=useState<Obj[]>([]),[activations,setActivations]=useState<Obj[]>([]),[artifacts,setArtifacts]=useState<Obj[]>([]);
+  const [scopeKind,setScopeKind]=useState(""),[sourceFile,setSourceFile]=useState<File|null>(null),[reportFile,setReportFile]=useState<File|null>(null),[evidenceFile,setEvidenceFile]=useState<File|null>(null);
+  const [forms,setForms]=useState<Record<string,ReviewDraft>>({}),[error,setError]=useState(""),[notice,setNotice]=useState(""),[busy,setBusy]=useState(false);
+  const canPrepare=role==="admin"||role==="technical_reviewer",canReview=role==="legal_reviewer",canRetire=role==="legal_reviewer"||role==="admin";
+  const providerId=runtimeConfig.cloud_primary?.provider_id||runtimeConfig.provider_id||"";
+  const canUploadEvidence=canPrepare||canReview||role==="approver";
+  const legalArtifacts=artifacts.filter(item=>law05Kinds.has(item.template_kind));
+  const load=async()=>{
+    if(role==="case_operator")return;
+    const [runtime,evidence]=await Promise.all([request(runtimePackBase),request("/formal-release")]);
+    setRecords(runtime.packs||[]);setActivations(runtime.activations||[]);setArtifacts(evidence.artifacts||[]);
+  };
+  useEffect(()=>{load().catch(e=>setError((e as Error).message))},[role]);
+  const updateForm=(id:string,updates:Partial<ReviewDraft>)=>setForms(old=>({...old,[id]:{...emptyReviewDraft(),...old[id],...updates}}));
+  const prepare=async()=>{
+    if(!sourceFile||!reportFile||!scopeKind) return;
+    setBusy(true);setError("");setNotice("");
+    try{
+      const sourcePack=JSON.parse(await sourceFile.text());
+      if(!sourcePack||Array.isArray(sourcePack)||typeof sourcePack!=="object")throw new Error("规则文件必须是 JSON 对象。");
+      const importReport=JSON.parse(await reportFile.text());
+      if(!importReport||Array.isArray(importReport)||typeof importReport!=="object")throw new Error("导入报告必须是 JSON 对象。");
+      const created=await request(runtimePackBase,"POST",{source_pack:sourcePack,import_report:importReport,scope_kind:scopeKind});
+      setScopeKind("");setSourceFile(null);setReportFile(null);await load();setNotice(`已保存规则草稿 ${created.id}；仍需法05证据及法学复核，当前不会授权任务发送。`);
+    }catch(e){setError((e as Error).message)}finally{setBusy(false)}
+  };
+  const uploadEvidence=async()=>{
+    if(!evidenceFile)return;
+    setBusy(true);setError("");setNotice("");
+    try{const body=new FormData();body.append("file",evidenceFile);
+      const result=await request("/formal-release/evidence?template_kind=%E6%B3%9505","POST",body);
+      setEvidenceFile(null);await load();setNotice(`已登记法05证据 ${result.id}（SHA-256 ${result.content_hash}）；尚未形成审核结论。`);
+    }catch(e){setError((e as Error).message)}finally{setBusy(false)}
+  };
+  const review=async(pack:Obj)=>{
+    const form={...emptyReviewDraft(),...forms[pack.id]};
+    const isFirst=(pack.scope_kind||"first_acceptance")==="first_acceptance";
+    const publishedScope=isFirst?firstAcceptanceScope:{...(form.caseId?{case_id:form.caseId}:{domain:pack.pack?.domain_id||pack.pack?.id||"labor"}),
+      purpose:"R_fact_summary",recipient:form.recipient||providerId};
+    const references=split(form.references);
+    const weights=Object.fromEntries(runtimeRiskKinds.map(key=>[key,Number(form.weights[key])]));
+    if(!form.reviewRecord.trim()||!form.evidenceId||!references.length||!form.dispatchAllowed||(!isFirst&&!publishedScope.recipient)||
+       Object.values(form.weights).some(value=>value===""||!Number.isFinite(Number(value))||Number(value)<0||Number(value)>1)){
+      setError("请完整填写具名复核记录、法05证据、案由/任务范围、五类风险权重和法源，并明确勾选发布授权。");return}
+    setBusy(true);setError("");setNotice("");
+    try{await request(`${runtimePackBase}/${encodeURIComponent(pack.id)}/review`,"POST",{
+      review_record:form.reviewRecord.trim(),law_05_evidence_id:form.evidenceId,published_scope:publishedScope,
+      risk_weights:weights,references,dispatch_allowed:form.dispatchAllowed});
+      await load();setNotice("法学复核记录已冻结为 reviewed 草稿。该步骤尚未发布或激活；请再次核对后另行发布。");
+    }catch(e){setError((e as Error).message)}finally{setBusy(false)}
+  };
+  const publish=async(pack:Obj)=>{
+    if(!window.confirm("确认发布并激活此已复核规则运行包？发布不批准任何具体请求或外发。"))return;
+    setBusy(true);setError("");setNotice("");
+    try{const result=await request(`${runtimePackBase}/${encodeURIComponent(pack.id)}/publish`,"POST",{});
+      await load();setNotice(`运行规则已发布并激活：${result.active_pack?.id||result.runtime_pack?.id}。具体请求仍须独立复核、策略核验和审批。`);
+    }catch(e){setError((e as Error).message)}finally{setBusy(false)}
+  };
+  const retire=async(pack:Obj)=>{
+    const reason=forms[pack.id]?.retireReason?.trim();if(!reason){setError("退役前请填写原因。");return}
+    setBusy(true);setError("");setNotice("");
+    try{await request(`${runtimePackBase}/${encodeURIComponent(pack.id)}/retire`,"POST",{reason});await load();setNotice("运行规则已登记退役；历史版本和激活记录保留。")}
+    catch(e){setError((e as Error).message)}finally{setBusy(false)}
+  };
+  return <section className="runtime-pack-workflow" aria-label="正式运行规则发布流程">
+    <div className="legal-block"><ShieldAlert/><div><h3>规则发布不是发送批准</h3><p>准备、法学复核和发布/激活分为独立操作；发布只使规则进入后续门禁。每个请求仍需单独策略、风险复核、审批和一次性许可。</p></div></div>
+    {canPrepare&&<Panel title="准备运行规则草稿"><div className="governance-form">
+      <label>明确适用范围<select value={scopeKind} onChange={event=>setScopeKind(event.target.value)}><option value="">请选择范围</option><option value="request">常规：指定正式案件和接收方</option><option value="first_acceptance">首个验收：LA-001 固定范围</option></select></label>
+      <label>案由规则 JSON<input type="file" accept="application/json,.json" onChange={event=>setSourceFile(event.target.files?.[0]||null)}/></label>
+      <label>对应导入核验报告 JSON<input type="file" accept="application/json,.json" onChange={event=>setReportFile(event.target.files?.[0]||null)}/></label>
+    </div><p className="small-note">系统按规范化 JSON 内容计算 SHA-256，并保存对应导入报告；导出文件用于构建清单绑定。系统不自动校正规则、不签署法律结论，也不勾选外发授权。</p>
+      <Button variant="primary" disabled={busy||!scopeKind||!sourceFile||!reportFile} onClick={prepare}>保存为运行库草稿</Button></Panel>}
+    {canUploadEvidence&&<Panel title="登记法05复核签署材料"><div className="governance-form">
+      <label>法05签署文件<input type="file" accept=".docx,.pdf,.txt,.png,.jpg,.jpeg" onChange={event=>setEvidenceFile(event.target.files?.[0]||null)}/></label>
+    </div><p className="small-note">上传只登记受控原件与哈希，不代表已核验；须在具体规则草稿中引用后才能复核。</p>
+      <Button variant="primary" disabled={busy||!evidenceFile} onClick={uploadEvidence}><Upload size={15}/>登记法05证据</Button></Panel>}
+    <div className="panel-actions"><h2 className="subheading">运行规则草稿与发布记录</h2><button disabled={busy} onClick={()=>load().catch(e=>setError((e as Error).message))}><RefreshCw size={14}/>刷新</button></div>
+    {!records.length?<Panel title="暂无运行规则草稿"><p>准备草稿不会更改案由规则；已激活规则需具备具名法学复核和法05证据。</p></Panel>:records.map(pack=>{
+      const form={...emptyReviewDraft(),...forms[pack.id]};const first=(pack.scope_kind||"first_acceptance")==="first_acceptance";
+      const packEvidence=legalArtifacts.find(item=>item.id===pack.law_05_evidence_id);
+      return <Panel key={pack.id} title={`${pack.source_pack_id||pack.id}`} actions={<StatusBadge tone={pack.status==="published"?"green":pack.status==="reviewed"?"amber":"neutral"}>{pack.status||"draft"}</StatusBadge>}>
+        <dl className="metadata"><dt>运行规则 ID</dt><dd><code>{pack.id}</code></dd><dt>源规则哈希</dt><dd><code>{pack.source_pack_hash}</code></dd>
+          <dt>导入报告哈希</dt><dd><code>{pack.import_report_hash}</code></dd><dt>当前外发授权</dt><dd>{pack.dispatch_allowed===true?"已由法学复核明确授权（仍不等于请求批准）":"未授权"}</dd>
+          {pack.law_05_evidence_id&&<><dt>法05证据</dt><dd>{pack.law_05_evidence_id} · {packEvidence?.content_hash||pack.law_05_evidence_hash||"哈希未回显"}</dd></>}
+          {pack.published_scope&&<><dt>适用范围</dt><dd>{[pack.published_scope.case_id,pack.published_scope.domain,pack.published_scope.purpose,pack.published_scope.recipient].filter(Boolean).join(" · ")}</dd></>}
+          {pack.reviewer&&<><dt>法学复核</dt><dd>{pack.reviewer} · {pack.reviewed_at}</dd></>}
+        </dl>
+        <div className="panel-actions"><a href={`/api/v1${runtimePackBase}/${encodeURIComponent(pack.id)}/export`}><Download size={14}/>导出 JSON</a>
+          {canReview&&pack.status==="draft"&&<button onClick={()=>updateForm(pack.id,{})}>填写法学复核</button>}
+          {canReview&&pack.status==="reviewed"&&<button className="primary" disabled={busy} onClick={()=>publish(pack)}>发布并激活规则</button>}</div>
+        {canReview&&pack.status==="draft"&&<div className="runtime-review-form">
+          <h4>法学人员复核</h4><label>具名复核意见<textarea rows={3} value={form.reviewRecord} onChange={event=>updateForm(pack.id,{reviewRecord:event.target.value})}/></label>
+          <label>引用已登记法05证据<select value={form.evidenceId} onChange={event=>updateForm(pack.id,{evidenceId:event.target.value})}><option value="">请选择已登记证据</option>
+            {legalArtifacts.map(item=><option key={item.id} value={item.id}>{item.id} · {item.source_path_hint||item.template_kind} · {item.content_hash}</option>)}</select></label>
+          {first?<p className="small-note">首个验收范围固定为 LA-001 · R_fact_summary · D_DeepSeek_official_API。该范围由规则固定，不可在页面扩展。</p>:<div className="governance-form">
+            <label>适用服务商档案<select value={form.recipient||providerId} onChange={event=>updateForm(pack.id,{recipient:event.target.value})}><option value="">请选择实际服务商档案</option>
+              {providers.map(item=><option key={item.id} value={item.id}>{item.name||item.id} · {item.id}{item.status!=="reviewed"?` · ${item.status}`:""}</option>)}</select></label>
+            <label>可选的单案限制<select value={form.caseId} onChange={event=>updateForm(pack.id,{caseId:event.target.value})}><option value="">全部符合条件的 labor 案件（逐案门禁仍适用）</option>
+              {cases.map(item=><option key={item.id} value={item.id}>{item.name} · {item.reference_code||item.id}</option>)}</select></label>
+            <label>发布范围<input value={`${form.caseId?`案件 ${form.caseId}`:(pack.pack?.domain_id||pack.pack?.id||"labor")} · R_fact_summary · ${form.recipient||providerId||"待选择服务商档案"}`} readOnly/></label>
+          </div>}
+          {!first&&<p className="small-note">该规则可供同案由的正式案件复用；可额外锁定单案。接收方必须是服务商档案中的实际 provider ID，不能用“primary”代表通配。具体请求正文、逐案复核和审批仍由各请求独立门禁核验。</p>}
+          <div className="governance-form runtime-weights">{runtimeRiskKinds.map(key=><label key={key}>{({entity:"主体识别",density:"信息密度",context:"上下文识别",combination:"组合风险",cross_round:"跨轮次风险"} as Record<string,string>)[key]}
+            <input type="number" min="0" max="1" step="0.01" value={form.weights[key]} onChange={event=>updateForm(pack.id,{weights:{...form.weights,[key]:event.target.value}})}/></label>)}</div>
+          <label>法源/依据引用（一行一项）<textarea rows={2} value={form.references} onChange={event=>updateForm(pack.id,{references:event.target.value})}/></label>
+          <label className="confirm-line"><input type="checkbox" checked={form.dispatchAllowed} onChange={event=>updateForm(pack.id,{dispatchAllowed:event.target.checked})}/>
+            我已完成法学核验，并明确允许该规则在所列范围进入后续门禁</label>
+          <p className="small-note">此处授权仅供下游门禁评估，不批准某个请求，不签发一次性许可。</p>
+          <Button variant="primary" disabled={busy} onClick={()=>review(pack)}>保存法学复核（不发布）</Button>
+        </div>}
+        {canRetire&&pack.status==="published"&&<div className="panel-actions"><label>退役原因<input value={form.retireReason} onChange={event=>updateForm(pack.id,{retireReason:event.target.value})}/></label>
+          <button className="danger-text" disabled={busy||!form.retireReason.trim()} onClick={()=>retire(pack)}>登记退役</button></div>}
+      </Panel>;
+    })}
+    {activations.length>0&&<Panel title="激活记录（只读）"><DataTable rowKey={row=>row.id} rows={activations} columns={[
+      {key:"pack_id",label:"工作台规则包"},{key:"runtime_pack_id",label:"源运行库"},{key:"runtime_pack_hash",label:"内容哈希"},{key:"actor_user_id",label:"操作人"},{key:"activated_at",label:"激活时间"},
+    ]}/></Panel>}
+    {notice&&<p className="notice" role="status">{notice}</p>}{error&&<p className="error" role="alert">{error}</p>}
+  </section>;
+}
+
+export function LegalPackCenter({packs=[],tasks=[],cases=[],providers=[],runtimeConfig={},request,runtimeProfile,role}:{packs?:Obj[];tasks?:Obj[];cases?:Obj[];providers?:Obj[];runtimeConfig?:Obj;request:RequestFn;runtimeProfile?:string;role?:string}) {
   const [reports,setReports]=useState<Record<string,Obj>>({});
+  const realCases=cases.filter(item=>item.mode!=="demo"&&item.runtime_profile!=="demo");
   return <div className="content governance-page"><div className="section-heading"><div><div className="eyebrow">可扩展设计</div>
-    <h1>法学规则中心</h1><p>技术结构可继续建设；未发布的法学规则始终保持正式外发阻断。</p></div><ServerCog/></div>
+    <h1>法学规则中心</h1><p>规则草稿、具名法学复核与正式发布分步完成；未发布规则始终阻断外发。</p></div><ServerCog/></div>
+    {runtimeProfile==="production"&&<RuntimePackWorkflow cases={realCases} providers={providers} runtimeConfig={runtimeConfig} request={request} role={role}/ >}
     <h2 className="subheading">任务能力</h2><div className="capability-grid">{tasks.map(task=><Panel key={task.id} title={task.name}>
       <StatusBadge tone={task.status==="available"||task.available?"green":"neutral"}>{task.status||"unimplemented"}</StatusBadge>
       <p>{task.id} · {task.version}</p></Panel>)}</div>

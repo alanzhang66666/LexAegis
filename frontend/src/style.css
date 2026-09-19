@@ -972,7 +972,13 @@ nav button:not(.active):hover {
 .document-list {
   padding: 8px 12px;
 }
-.document-list > button {
+.document-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  border-bottom: 1px solid #e8ece2;
+}
+.document-row > button:first-child {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -980,9 +986,9 @@ nav button:not(.active):hover {
   text-align: left;
   padding: 11px 3px;
   width: 100%;
-  border-bottom: 1px solid #e8ece2;
+  border-bottom: 0;
 }
-.document-list > button > span {
+.document-row > button:first-child > span {
   flex: 1;
   min-width: 0;
   overflow-wrap: anywhere;
@@ -1354,6 +1360,40 @@ nav button:not(.active):hover {
   color: #648443;
   border: 1px solid #dbe6cb;
 }
+.review-status-strip,
+.review-state-card {
+  display: grid;
+  gap: 5px;
+  margin: 0 16px 14px;
+  padding: 12px 14px;
+  border-radius: 6px;
+  background: var(--surface-muted, #f5f6f1);
+  color: var(--color-ink, #28312b);
+  font-size: 13px;
+}
+.review-status-strip span,
+.review-state-card span { color: var(--color-muted, #687068); line-height: 1.6; }
+.initial-risk-result { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin: 0 16px 12px; padding: 0 2px; font-size: 13px; }
+.initial-risk-result span { color: var(--color-muted); }
+.product-release-state { margin: 0 16px 14px; padding: 10px 12px; border-left: 3px solid var(--color-warning); background: var(--surface-muted); color: var(--color-ink); font-size: 13px; }
+.product-release-state.ready { border-left-color: var(--color-success); }
+.product-release-state ul { margin: 7px 0 0; padding-left: 20px; color: var(--color-muted); }
+.review-issue-list { margin: 12px 16px; padding: 12px; background: var(--surface-muted, #f5f6f1); color: var(--color-ink); border-left: 3px solid var(--color-warning); border-radius: 6px; }
+.review-issue-list h5 { margin: 0 0 8px; font-size: 13px; }
+.review-issue-list article { padding: 8px 0; border-top: 1px solid var(--color-line); }
+.review-issue-list small { display: block; margin-top: 4px; color: var(--color-muted); font-size: 12px; }
+.technical-review { margin: 10px 16px; padding: 12px; border: 1px solid var(--color-line); border-radius: 6px; }
+.technical-review summary { cursor: pointer; font-size: 13px; font-weight: 600; }
+.review-evidence-options { display: grid; gap: 7px; margin: 10px 0; border: 0; padding: 0; font-size: 13px; }
+.review-evidence-options label { display: flex; align-items: flex-start; gap: 7px; }
+.review-evidence-options .stack-label { display: grid; margin-top: 8px; }
+.runtime-provenance { color: var(--color-muted, #687068); font-size: 13px; overflow-wrap: anywhere; }
+.review-history { margin: 12px 16px; padding: 10px 0; border-top: 1px solid var(--color-line); }
+.review-history summary { cursor: pointer; font-size: 13px; }
+.review-history ol { padding-left: 20px; }
+.review-history li { margin: 8px 0; font-size: 13px; }
+.review-history li span,
+.review-history li small { display: block; margin-top: 3px; color: var(--color-muted); }
 .legal-review {
   margin: 12px 16px 20px;
   padding-top: 8px;
@@ -2164,6 +2204,22 @@ pre {
 .system-panel pre { overflow: auto; font-size: 12px; padding: 12px; background: #f5f7f3; border-radius: 6px; }
 .governance-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px; margin-bottom: 24px; }
 .governance-form { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 0 16px; }
+.runtime-pack-workflow { margin: 18px 0 30px; }
+.runtime-review-form { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+.runtime-review-form h4 { margin: 0 0 12px; font-size: 14px; }
+.runtime-weights { margin-top: 12px; }
+.runtime-pack-workflow .confirm-line { display: flex; flex-direction: row; align-items: flex-start; gap: 8px; }
+.runtime-pack-workflow .confirm-line input { width: auto; margin-top: 2px; }
+.runtime-pack-workflow .data-table { margin-bottom: 0; }
+.intake-gate { border-top: 1px solid var(--line); margin-top: 18px; padding-top: 12px; }
+.intake-template { border: 1px solid var(--line); border-radius: var(--radius-panel); padding: 12px; margin: 10px 0; }
+.intake-artifacts { display: grid; gap: 8px; border: 1px solid var(--line); border-radius: var(--radius-control); padding: 10px; margin: 12px 0; }
+.intake-artifacts label { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; }
+.intake-artifacts input { width: auto; margin-top: 3px; }
+.intake-isolation { padding: 14px 0; border-top: 1px solid var(--line); margin-top: 16px; }
+.intake-isolation label { display: block; margin: 10px 0; }
+.intake-receipts { display: grid; gap: 8px; }
+.intake-receipts .panel-actions { align-items: center; flex-wrap: wrap; }
 .panel-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
 .panel-actions > button { color: var(--green); font-size: 12px; }
 .data-table { background: var(--paper); border-radius: var(--radius-panel); overflow: auto; margin: 16px 0 24px; }

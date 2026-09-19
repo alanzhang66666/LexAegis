@@ -163,8 +163,15 @@ def _combination_blocker(matched):
     return forbidden_term_blocker(matched)
 
 
+def disclosure_history(ledger):
+    # A cancellation is committed only before the durable sending boundary.
+    # Unknown, rejected and legacy records remain conservative history.
+    return [item for item in ledger or [] if item.get("status") != "cancelled"]
+
+
 def ledger_usage(ledger):
-    count = len(ledger or [])
+    ledger = disclosure_history(ledger)
+    count = len(ledger)
     chars = 0
     for item in ledger or []:
         request = item.get("request") or {}
@@ -176,6 +183,7 @@ def ledger_usage(ledger):
 
 
 def assess(case, pack, facts, decisions, docs, ledger, transport, provider_results=None, attacks=None, isolation_verified=False, budget_chars=None, budget_entries=None, frozen_request=None):
+    ledger = disclosure_history(ledger)
     findings, gates = [], []
     emitted = "\n".join(d["output"] for d in decisions if d["output"])
     fact_by_id = {fact["id"]: fact for fact in facts}

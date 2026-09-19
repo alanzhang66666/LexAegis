@@ -51,11 +51,13 @@ _TECHNICAL_CONFIRMATION_TEMPLATES = {
 _TUPLE_KEYS = frozenset({"case_id", "purpose", "recipient"})
 _LEGAL_REVIEW_ROLE = "legal_reviewer"
 _ENGINEERING_RECORD_ROLE = "case_operator"
+_TECHNICAL_REVIEW_ROLE = "technical_reviewer"
 _APPROVAL_ROLE = "approver"
-_REVOCATION_ROLES = frozenset({"admin", _LEGAL_REVIEW_ROLE, _ENGINEERING_RECORD_ROLE, _APPROVAL_ROLE})
+_REVOCATION_ROLES = frozenset({"admin", _LEGAL_REVIEW_ROLE, _ENGINEERING_RECORD_ROLE, _TECHNICAL_REVIEW_ROLE, _APPROVAL_ROLE})
 _ROLE_ACTIONS = {
     _LEGAL_REVIEW_ROLE: "legal_confirmation",
     _ENGINEERING_RECORD_ROLE: "engineering_record",
+    _TECHNICAL_REVIEW_ROLE: "engineering_record",
     _APPROVAL_ROLE: "g10_approval",
 }
 _NAMED_ROLES = frozenset(_ROLE_ACTIONS)
@@ -458,10 +460,10 @@ class EvidenceIntakeService:
             return
         if confirmed_role not in _NAMED_ROLES:
             raise EvidenceReceiptError(f"{confirmed_role!r} is not a named confirmation role")
-        required_role = _required_receipt_role(gate_id, template_kind)
-        if confirmed_role != required_role:
+        allowed_roles = _allowed_receipt_roles(gate_id, template_kind)
+        if confirmed_role not in allowed_roles:
             raise EvidenceReceiptError(
-                f"{gate_id} {template_kind} must be confirmed by {required_role}, "
+                f"{gate_id} {template_kind} must be confirmed by {' or '.join(sorted(allowed_roles))}, "
                 f"not {confirmed_role}"
             )
         if parsed_confirmed_at > recorded_at:
@@ -552,11 +554,11 @@ class EvidenceIntakeService:
             if current.revoked_at:
                 raise EvidenceReceiptError("evidence receipt is already revoked")
 
-            required_role = _required_receipt_role(current.gate_id, current.template_kind)
-            if actor_role not in {"admin", required_role}:
+            allowed_roles = _allowed_receipt_roles(current.gate_id, current.template_kind)
+            if actor_role != "admin" and actor_role not in allowed_roles:
                 raise EvidenceReceiptError(
                     f"{current.gate_id} {current.template_kind} evidence must be revoked by "
-                    f"{required_role} or admin"
+                    f"{' or '.join(sorted(allowed_roles))} or admin"
                 )
             if current.confirmed_at:
                 confirmed_at = _parse_timestamp(current.confirmed_at, "confirmed_at")
@@ -747,6 +749,14 @@ def _required_receipt_role(gate_id: str, template_kind: str | None) -> str:
     if code.startswith("技"):
         return _ENGINEERING_RECORD_ROLE
     return _LEGAL_REVIEW_ROLE
+
+
+def _allowed_receipt_roles(gate_id: str, template_kind: str | None) -> frozenset[str]:
+    """Keep case-operator records compatible while allowing named technical reviewers."""
+    required = _required_receipt_role(gate_id, template_kind)
+    if required == _ENGINEERING_RECORD_ROLE:
+        return frozenset({_ENGINEERING_RECORD_ROLE, _TECHNICAL_REVIEW_ROLE})
+    return frozenset({required})
 
 
 def _record_state(record) -> str:

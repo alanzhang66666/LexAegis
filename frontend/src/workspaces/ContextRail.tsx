@@ -4,8 +4,8 @@ import { AuditTimeline } from "../components/ui";
 
 type Obj = Record<string, any>;
 
-export function ContextRail({ currentCase, task, caseId, audit, busy, onClose, onStartCloud }: {
-  currentCase: Obj; task?: Obj; caseId: string; audit: Obj[]; busy: boolean;
+export function ContextRail({ currentCase, task, caseId, audit, busy, runtimeProfile, runtimeConfig, onClose, onStartCloud }: {
+  currentCase: Obj; task?: Obj; caseId: string; audit: Obj[]; busy: boolean; runtimeProfile?: string; runtimeConfig?:Obj;
   onClose: () => void; onStartCloud: () => void;
 }) {
   const attempts = task?.attempts || [];
@@ -15,7 +15,11 @@ export function ContextRail({ currentCase, task, caseId, audit, busy, onClose, o
     <div className="boundary-card"><LockKeyhole size={20}/><h4>原文始终留在边侧</h4>
       <p>身份映射、内部理由和评分真值不会自动进入云端请求。</p></div>
     <dl className="metadata">
+      <dt>运行环境</dt><dd>{runtimeProfile || "未知"}</dd>
+      <dt>数据来源</dt><dd>{currentCase.data_origin || (currentCase.mode === "demo" ? "synthetic" : "case_materials")}</dd>
+      {currentCase.synthetic_manifest_hash&&<><dt>合成清单哈希</dt><dd><code>{currentCase.synthetic_manifest_hash}</code></dd></>}
       <dt>运行模式</dt><dd>{currentCase.mode === "demo" ? "固定合成演示" : "正式案件"}</dd>
+      {runtimeConfig&&<><dt>返回方式</dt><dd>{runtimeConfig.mock_responses ? "本地模拟" : runtimeConfig.external_calls_allowed ? "允许联调外呼" : "禁止外呼"}</dd></>}
       <dt>当前任务</dt><dd>{task?.type || "尚未创建"}</dd>
       <dt>规则版本</dt><dd>{task?.pack_id || "尚未绑定"}</dd>
       <dt>调用方式</dt><dd>{task ? task.transport === "mock" ? "模拟调用（不访问云端）" :
@@ -33,13 +37,15 @@ export function ContextRail({ currentCase, task, caseId, audit, busy, onClose, o
       ))}</dl>
       <p className="small-note">逐次尝试分开记录生成状态、是否离开本地和披露状态。可能披露不等于已确认送达。</p>
     </div>}
-    {currentCase.mode === "demo" && <button className="secondary full" disabled={busy} onClick={onStartCloud}>
-      <ExternalLink size={14}/>新建真实 API 演示任务</button>}
+    {currentCase.mode === "demo" && runtimeProfile === "integration" && runtimeConfig?.external_calls_allowed && <button className="secondary full" disabled={busy} onClick={onStartCloud}>
+      <ExternalLink size={14}/>新建真实 API 联调任务</button>}
+    {currentCase.mode === "formal" && runtimeProfile === "production" && <button className="secondary full" disabled={busy} onClick={onStartCloud}>
+      <ExternalLink size={14}/>新建正式云端请求草案</button>}
     <div className="context-divider"/>
     <h4 className="aside-title">操作留痕
       <a href={`/api/v1/cases/${caseId}/audit-export`} title="导出审计"><Download size={14}/></a></h4>
     <AuditTimeline events={audit}/>
-    <p className="small-note">风险攻击未按冻结协议完成时不会显示“通过”。正式案件当前保持外发阻断。</p>
+    <p className="small-note">创建请求只生成待检验草案，不会调用服务商。外发仍须规则、证据、风险复核、审批和一次性许可；风险攻击未按冻结协议完成时不会显示“通过”。</p>
   </aside>;
 }
 
