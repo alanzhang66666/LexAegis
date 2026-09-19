@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ShieldAlert } from "lucide-react";
 import { Tag } from "../components/ui";
 
@@ -9,6 +9,7 @@ const CONCLUSIONS = [
   ["allow_after_minimization", "补充脱敏后允许"],
   ["needs_further_verification", "补充核实"],
   ["prohibit_external_processing", "禁止外部处理"],
+  ["reject_current_request", "否决本次请求"],
 ] as const;
 
 const KIND_LABEL: Record<string, string> = {
@@ -47,8 +48,21 @@ function relatedLegalSources(task: Obj, pack?: Obj) {
   return [...new Set(ids)].map(id => byId[id]).filter(Boolean);
 }
 
-export function ApprovalWorkspace({ task, pack, busy, onSubmit }:{
-  task: Obj; pack?: Obj; busy: boolean; onSubmit:(body:Obj)=>void;
+function idempotencyKey() {
+  return typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `review-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function stableKey(keys: Map<string, string>, payload: Obj) {
+  const signature = JSON.stringify(payload);
+  if (!keys.has(signature)) keys.set(signature, idempotencyKey());
+  return keys.get(signature)!;
+}
+
+export function ApprovalWorkspace({ task, pack, busy, role, onSubmit, onTechnicalIssue }:{
+  task: Obj; pack?: Obj; busy: boolean; role?: string;
+  onSubmit:(body:Obj)=>Promise<any>|void; onTechnicalIssue:(body:Obj)=>Promise<any>|void;
 }) {
   const risk = task.risk || {};
   const gates: Obj[] = risk.gates || [];
@@ -68,6 +82,26 @@ export function ApprovalWorkspace({ task, pack, busy, onSubmit }:{
   const [pickedSources, setPickedSources] = useState<string[]>(() => related.map((item: Obj) => item.id));
   const [sourceQuery, setSourceQuery] = useState("");
   const [acknowledged, setAcknowledged] = useState(false);
+  const [issueReason, setIssueReason] = useState("");
+  const [issueEvidence, setIssueEvidence] = useState<string[]>([]);
+  const [resolvedIssueIds, setResolvedIssueIds] = useState<string[]>([]);
+  const [reviewEvidenceIds, setReviewEvidenceIds] = useState<string[]>([]);
+  const [resolutionReason, setResolutionReason] = useState("");
+  const technicalKeys = useRef(new Map<string, string>());
+  const legalKeys = useRef(new Map<string, string>());
+  const openIssues: Obj[] = (task.review_issues || []).filter((item: Obj) => item.status === "open");
+  const evidenceOptions = useMemo(() => {
+    const rows: {id:string; label:string}[] = [];
+    for (const fact of task.fact_snapshot || []) {
+      if (fact.id) rows.push({id:fact.id, label:`事实 ${fact.field || ""} · ${fact.id}`});
+      for (const id of fact.source_ids || []) rows.push({id, label:`材料段落 · ${id}`});
+    }
+    for (const item of task.supplemental_evidence || []) {
+      if (item.id) rows.push({id:item.id, label:item.label || item.title || `补充证据 · ${item.id}`});
+    }
+    const distinct = new Map(rows.map(item=>[item.id,item]));
+    return [...distinct.values()];
+  }, [task.fact_snapshot, task.supplemental_evidence]);
   useEffect(() => {
     if (pickedSources.length || !related.length) return;
     setPickedSources(related.map((item: Obj) => item.id));
@@ -94,15 +128,47 @@ export function ApprovalWorkspace({ task, pack, busy, onSubmit }:{
   const complete = Boolean(
     acknowledged && reason.trim() && factPremise.trim() && authorityJudgment.trim()
     && externalNote.trim() && minimizationNote.trim() && finalBasis.trim() && scopeNote.trim()
-    && pickedConditions.length && pickedSources.length
+    && pickedConditions.length && pickedSources.length && reviewEvidenceIds.length > 0
+    && (resolvedIssueIds.length === 0 || resolutionReason.trim())
+    && (!(openIssues.length && ["allow_processing", "allow_after_minimization"].includes(conclusion)) || resolvedIssueIds.length > 0)
   );
   const toggle = (value: string, list: string[], setList:(next:string[])=>void) => {
     setList(list.includes(value) ? list.filter(item => item !== value) : [...list, value]);
   };
   return (
     <section className="legal-review">
-      <h4 className="subheading">法律复核工作台</h4>
-      <p className="finding">本页只记录 G0/G7 待核实事项。结论不授予发送权。发送仍只走门 10，且产品闩保持关闭。</p>
+      <h4 className="subheading">人工复核与审批</h4>
+      <p className="finding">技术复核提交问题会立即暂停当前请求；法学复核可以否决本次请求。允许处理只解除相应复核限制，最终发送仍须由具名审批人批准。</p>
+      <div className="review-state-card">
+        <b>当前复核状态：{({pending:"待人工复核",blocked:"已暂停，等待复核",rejected:"人工复核已否决",cleared:"人工复核已完成",not_required:"无需人工复核"} as Record<string,string>)[task.review_status] || task.review_status || "待人工复核"}</b>
+        <span>系统初检与人工复核分别记录；本区域的否决针对当前请求。</span>
+      </div>
+      {openIssues.length > 0 && <div className="review-issue-list" aria-label="待处理人工复核问题">
+        <h5>待处理复核问题</h5>
+        {openIssues.map((item:Obj)=><article key={item.id}><b>{item.reason}</b>
+          <small>{item.created_by_role === "legal_reviewer" ? "法学复核" : item.created_by_role === "technical_reviewer" ? "技术复核" : item.created_by_role || "人工复核"} · {item.created_by_user_id || "具名复核"} · {item.created_at || "时间未记录"}</small>
+          {!!item.evidence_ids?.length&&<small>关联证据：{item.evidence_ids.join("、")}</small>}</article>)}
+      </div>}
+      {role === "technical_reviewer" && <details className="technical-review" open={openIssues.length===0}>
+        <summary>技术人员提交复核问题</summary>
+        <p>请指出当前请求中的具体风险，并关联本案事实、材料段落或补充证据。提交后请求立即暂停。</p>
+        <label className="stack-label">问题说明
+          <textarea rows={3} value={issueReason} onChange={event=>setIssueReason(event.target.value)} aria-label="技术复核问题说明"/>
+        </label>
+        <fieldset className="review-evidence-options"><legend>关联证据</legend>
+          {evidenceOptions.map(item=><label key={item.id}><input type="checkbox" checked={issueEvidence.includes(item.id)}
+            onChange={()=>setIssueEvidence(old=>old.includes(item.id)?old.filter(id=>id!==item.id):[...old,item.id])}/>{item.label}</label>)}
+          {!evidenceOptions.length&&<small>当前任务没有可引用的事实或补充证据。</small>}
+        </fieldset>
+        <button className="secondary" disabled={busy||!issueReason.trim()||!issueEvidence.length||!task.request_hash||["sending","unknown","complete","review_blocked","rejected","stopped"].includes(task.status)||["blocked","rejected"].includes(task.review_status)}
+          onClick={()=>{
+            const payload={request_hash:task.request_hash,reason:issueReason.trim(),evidence_ids:issueEvidence};
+            onTechnicalIssue({...payload,idempotency_key:stableKey(technicalKeys.current,payload)});
+          }}>
+          暂停请求并提交技术问题
+        </button>
+      </details>}
+      {role === "legal_reviewer" && <>
       <div className="review-blocks">
         <details open>
           <summary>为什么需要我看</summary>
@@ -179,6 +245,21 @@ export function ApprovalWorkspace({ task, pack, busy, onSubmit }:{
                 onChange={()=>setConclusion(value)}/>{label}</label>
             ))}
           </fieldset>
+          {openIssues.length > 0 && <fieldset className="review-evidence-options">
+            <legend>本次已解决的复核事项</legend>
+            {openIssues.map((item:Obj)=><label key={item.id}><input type="checkbox" checked={resolvedIssueIds.includes(item.id)}
+              onChange={()=>setResolvedIssueIds(old=>old.includes(item.id)?old.filter(id=>id!==item.id):[...old,item.id])}/>
+              {item.reason}</label>)}
+            <label className="stack-label">解决依据<textarea rows={2} value={resolutionReason}
+              onChange={event=>setResolutionReason(event.target.value)} aria-label="复核事项解决依据"/></label>
+            <small>只有“允许处理”或“补充脱敏后允许”可以关闭复核事项；仍须单独检验和审批。</small>
+          </fieldset>}
+          <fieldset className="review-evidence-options">
+            <legend>本次复核证据（必选）</legend>
+            {evidenceOptions.map(item=><label key={item.id}><input type="checkbox" checked={reviewEvidenceIds.includes(item.id)}
+              onChange={()=>setReviewEvidenceIds(old=>old.includes(item.id)?old.filter(id=>id!==item.id):[...old,item.id])}/>{item.label}</label>)}
+            {!evidenceOptions.length&&<small>当前任务没有可引用的事实、材料段落或补充证据。</small>}
+          </fieldset>
           <label className="stack-label">待核实事项对应的审批理由
             <textarea rows={3} value={reason} onChange={event=>setReason(event.target.value)} aria-label="审批理由"/>
           </label>
@@ -225,11 +306,15 @@ export function ApprovalWorkspace({ task, pack, busy, onSubmit }:{
           {task.legal_review && (
             <p className="finding">已有复核记录：{task.legal_review.conclusion} · {task.legal_review.reviewer}。材料或请求变化后须重做。</p>
           )}
-          <button className="secondary" disabled={busy || !complete}
-            onClick={()=>onSubmit({
+          <button className="secondary" disabled={busy || !complete || !task.request_hash || ["sending","unknown","complete","rejected","stopped"].includes(task.status)}
+            onClick={()=>{
+              const payload={
               request_hash: task.request_hash,
               material_version: task.request?.dependencies?.case_revision,
               conclusion, reason: reason.trim(),
+              resolved_issue_ids: resolvedIssueIds,
+              ...(resolvedIssueIds.length ? {resolution_reason:resolutionReason.trim()} : {}),
+              evidence_ids: reviewEvidenceIds,
               reviewed_condition_ids: pickedConditions,
               legal_source_ids: pickedSources,
               acknowledged_risk_notices: true,
@@ -239,11 +324,24 @@ export function ApprovalWorkspace({ task, pack, busy, onSubmit }:{
               minimization_note: minimizationNote.trim(),
               final_basis: finalBasis.trim(),
               scope_note: scopeNote.trim(),
-            })}>
-            <ShieldAlert size={14}/>提交法律复核记录
+              };
+              onSubmit({...payload,idempotency_key:stableKey(legalKeys.current,payload)});
+            }}>
+            <ShieldAlert size={14}/>{conclusion === "reject_current_request" || conclusion === "prohibit_external_processing" ? "提交否决并阻断本次请求" : "提交法律复核结论"}
           </button>
         </details>
       </div>
+      </>}
+      {role === "approver" && <p className="small-note">审批人可在风险检验区批准当前版本；法学复核结论本身不会授予发送权。</p>}
+      {!(["technical_reviewer","legal_reviewer","approver"].includes(role || "")) && <p className="small-note">当前角色不具备技术提请、法学否决或外发批准权限。</p>}
+      {!!(task.review_events || []).length && <details className="review-history">
+        <summary>人工复核留痕（{task.review_events.length}）</summary>
+        <ol>{task.review_events.slice().reverse().map((event:Obj)=><li key={event.id}>
+          <b>{event.event_type === "technical_issue_submitted" ? "技术复核提请" : event.event_type === "legal_review_recorded" ? "法学复核结论" : event.event_type}</b>
+          <span>{event.actor || event.actor_user_id || "未知复核人"} · {event.actor_role || "未知角色"} · {event.at || "时间未记录"}</span>
+          {event.payload?.reason&&<small>{event.payload.reason}</small>}
+        </li>)}</ol>
+      </details>}
     </section>
   );
 }

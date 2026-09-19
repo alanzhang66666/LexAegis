@@ -5,6 +5,7 @@ from lexaegis.release_build import build_manifest_identity_hash
 from lexaegis.util import digest
 from tests.conftest import login_as
 from tests.test_release_service_integration import _manifest, _seed_business_state
+from tests.test_workflow import formal_material
 
 
 def _context(manifest):
@@ -13,6 +14,35 @@ def _context(manifest):
             "runtime_identities": [{"process": item, "status": "verified",
                                     "runtime_identity_hash": identity}
                                    for item in ("api", "worker", "gateway")]}
+
+
+def test_request_preview_persists_without_release_build_and_cannot_be_approved(env, monkeypatch):
+    """Missing release evidence blocks dispatch, not inspection of the proposed body."""
+    monkeypatch.setattr(release_service, "collect_context", lambda *args, **kwargs: {
+        "build_manifest": None, "runtime_identities": [],
+    })
+    case, _document, _fact = formal_material(env)
+    client = env["client"]
+    created = client.post(f"/api/v1/cases/{case['id']}/tasks", json={"transport": "cloud"})
+    assert created.status_code == 200, created.text
+    task_id = created.json()["id"]
+    response = client.post(f"/api/v1/tasks/{task_id}/evaluate")
+    assert response.status_code == 200, response.text
+    preview = response.json()
+    assert preview["request_hash"] == digest(preview["request"])
+    assert preview["product_release"]["state"] == "blocked"
+    assert preview["approval"] is None
+    detail = client.get(f"/api/v1/cases/{case['id']}").json()
+    persisted = next(item for item in detail["tasks"] if item["id"] == task_id)
+    assert persisted["request_hash"] == preview["request_hash"]
+    assert persisted["request"] == preview["request"]
+    assert client.get(f"/api/v1/tasks/{task_id}/formal-release/intake-context").status_code == 409
+    login_as(env, "approver")
+    assert client.post(f"/api/v1/tasks/{task_id}/approve", json={
+        "request_hash": preview["request_hash"],
+    }).status_code == 409
+    with env["app"].state.store.read() as repo:
+        assert not repo.list("one_time_dispatch_grant")
 
 
 def test_intake_context_is_current_read_only_and_describes_gates(env, monkeypatch):

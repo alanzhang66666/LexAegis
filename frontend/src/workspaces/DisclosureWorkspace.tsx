@@ -2,7 +2,7 @@ import { ArrowRight, Link2, LockKeyhole } from "lucide-react";
 import { IssueList, Tag } from "../components/ui";
 
 type Obj = Record<string, any>;
-const TERMINAL = ["complete", "unknown", "stopped", "queued", "sending", "failed"];
+const TERMINAL = ["complete", "unknown", "stopped", "queued", "sending", "failed", "review_blocked", "rejected"];
 const JUDGMENT: Record<string, string> = {
   necessary: "必要",
   not_necessary: "不必要",
@@ -63,7 +63,7 @@ export function DisclosureWorkspace({ task, currentCase, busy, label, onEdit,
   onLocate: (ids: string[]) => void; onEditOutput: (decision: Obj) => void;
   onEvaluate: () => void;
 }) {
-  const disabled = busy || task.stale || TERMINAL.includes(task.status);
+  const disabled = busy || task.stale || TERMINAL.includes(task.status) || ["blocked","rejected"].includes(task.review_status);
   const followupIds: string[] = task.followup_fact_ids || [];
   const candidatesOf = (decision: Obj) => Array.isArray(decision.candidates) ? decision.candidates : [];
   return <>
@@ -74,7 +74,8 @@ export function DisclosureWorkspace({ task, currentCase, busy, label, onEdit,
       const suggestion = modelSuggestion(decision, task.fact_snapshot);
       const fromFollowup = followupIds.includes(decision.fact_id);
       const candidates = candidatesOf(decision);
-      const allowed = candidates.filter((item: Obj) => item.allowed);
+      const allowed = candidates.filter((item: Obj) => item.allowed).filter((item: Obj, index: number, rows: Obj[]) =>
+        rows.findIndex(other => other.transform === item.transform && other.output === item.output) === index);
       const rejected = candidates.filter((item: Obj) => !item.allowed);
       const basis = decision.processing_basis;
       const secrecy = decision.confidentiality;
@@ -97,10 +98,9 @@ export function DisclosureWorkspace({ task, currentCase, busy, label, onEdit,
         ? <div className="transform-options">{allowed.map((item: Obj) =>
           <button disabled={disabled} className={decision.selected_candidate_id === item.id ? "active" : ""} key={item.id}
             onClick={() => onEdit(decision, { transform: item.transform, candidate_id: item.id })}>
-            {label(item.kind || item.id)}</button>)}</div>
-        : <div className="transform-options">{["keep", "pseudonymize", "generalize", "delete"].map(value =>
-          <button disabled={disabled} className={decision.transform === value ? "active" : ""} key={value}
-            onClick={() => onEdit(decision, { transform: value })}>{label(value)}</button>)}</div>}
+            {(item.transform === "keep" || item.kind === "keep" ? "保持精度（身份已一致替换）" : label(item.kind || item.id))}</button>)}</div>
+        : <div className="finding">当前规则没有提供可选的已校验处理候选；保留当前输出，不提供未经校验的替换选项。</div>}
+      {allowed.some((item:Obj)=>item.transform === "keep") && <small className="reason">“保持精度”仍按稳定身份映射一致替换身份字段；原文与身份映射留在边侧。</small>}
       <div className={"disclosed-text " + (!decision.output ? "deleted" : "")}>
         {decision.output || "此项已删除，不进入外发内容。"}</div>
       {decision.retain_reason ? <small className="reason">保留理由：{readableReason(decision.retain_reason)}</small> : null}
@@ -128,11 +128,11 @@ export function DisclosureWorkspace({ task, currentCase, busy, label, onEdit,
       <div className="fact-footer">
         <button onClick={() => onLocate((task.fact_snapshot || []).find((fact: Obj) => fact.id === decision.fact_id)?.source_ids || [])}>
           <Link2 size={13}/>查看依据</button>
-        {currentCase.mode === "formal" && <button onClick={() => onEditOutput(decision)}>编辑披露文本</button>}
+        {currentCase.mode === "formal" && <button disabled={disabled} onClick={() => onEditOutput(decision)}>编辑披露文本</button>}
       </div>
     </article>;
     })}
-    <div className="bottom-action"><button className="primary" disabled={busy || task.stale} onClick={onEvaluate}>
+    <div className="bottom-action"><button className="primary" disabled={disabled} onClick={onEvaluate}>
       检验风险并冻结请求 <ArrowRight size={15}/></button></div>
   </>;
 }

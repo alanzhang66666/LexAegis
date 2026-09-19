@@ -26,4 +26,14 @@ with zipfile.ZipFile(wheels[0]) as archive:
         raise SystemExit("wheel is missing runtime assets: " + ", ".join(missing))
     if not any(name.startswith("lexaegis/frontend/assets/") and name.endswith(".js") for name in names):
         raise SystemExit("wheel has no built frontend JavaScript asset")
+    source_root = Path(__file__).resolve().parent.parent
+    for directory in ("frontend", "packs", "LICENSES"):
+        source = source_root / ("frontend/dist" if directory == "frontend" else directory)
+        expected = {f"lexaegis/{directory}/{path.relative_to(source).as_posix()}": path
+                    for path in source.rglob("*") if path.is_file()}
+        actual = {name for name in names if name.startswith(f"lexaegis/{directory}/") and not name.endswith("/")}
+        if not expected or actual != set(expected):
+            raise SystemExit(f"wheel {directory} differs from current build assets (missing or stale files)")
+        if any(archive.read(name) != path.read_bytes() for name, path in expected.items()):
+            raise SystemExit(f"wheel {directory} content differs from current build assets")
 print(f"verified self-contained wheel: {wheels[0].name}")

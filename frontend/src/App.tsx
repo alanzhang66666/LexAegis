@@ -185,6 +185,8 @@ const labels: Record<string, string> = {
   complete: "已完成",
   unknown: "结果不明",
   stopped: "已停止",
+  review_blocked: "人工复核暂停",
+  rejected: "人工复核否决",
   pending: "排队中",
   running: "运行中",
   cancelled: "已取消",
@@ -444,6 +446,16 @@ export default function App() {
       : taskType === "evidence_inventory" ? "本地证据清单已生成，未发生外发。"
       : taskType === "issue_extraction" ? "本地争点候选已生成，未发生外发。"
       : "披露方案已生成，请逐项核对。");
+  const startSuccessorTask = () =>
+    run(async () => {
+      const t = await api(`/cases/${caseId}/tasks`, "POST", {
+        transport: task?.transport || (currentCase?.mode === "demo" ? "mock" : "local"),
+        task_type: task?.type || "fact_summary",
+        parent_task_id: task?.id,
+      });
+      setTaskId(t.id);
+      setTab("disclosure");
+    }, "已创建关联后继任务；原复核结论和历史请求仍保留。");
   const startFollowupTask = () =>
     run(async () => {
       const t = await api(`/cases/${caseId}/followups/task`, "POST", {
@@ -767,12 +779,13 @@ export default function App() {
                 />
               )}
             </div>
+            {boot?.runtime_profile !== "production" && <>
             <div className="list-heading demo-heading">
               <div>
                 <h2>先体验，再开始</h2>
-                <p>固定合成材料 · 不包含真实身份 · 模拟结果明确标注</p>
+                <p>固定合成材料 · 不包含真实身份 · {boot?.runtime_profile === "integration" ? "真实模型联调单独标注" : "模拟结果明确标注"}</p>
               </div>
-              <Tag>三个边界场景</Tag>
+              <Tag>四个边界场景</Tag>
             </div>
             <div className="demo-grid">
               {[
@@ -784,15 +797,22 @@ export default function App() {
                   icon: ArrowUpRight,
                 },
                 {
-                  id: "linkage",
+                  id: "human_veto",
                   no: "02",
+                  name: "人工复核否决",
+                  desc: "技术人员提交组合线索证据，法学人员否决本次请求并阻断外发。",
+                  icon: ShieldCheck,
+                },
+                {
+                  id: "linkage",
+                  no: "03",
                   name: "看见组合线索风险",
                   desc: "姓名已替换，唯一岗位与事件仍可能暴露身份。",
                   icon: Search,
                 },
                 {
                   id: "stop",
-                  no: "03",
+                  no: "04",
                   name: "在必要时主动停止",
                   desc: "材料无法核实，明确阻断外发并保留原因。",
                   icon: ShieldCheck,
@@ -816,6 +836,7 @@ export default function App() {
                 </button>
               ))}
             </div>
+            </>}
             <footer className="page-footer">
               <ShieldCheck size={14} />
               正式案件在适用规则与必需风险检验就绪前，始终阻断外发。
@@ -845,6 +866,8 @@ export default function App() {
                     ? "仅供演示，不构成正式风险结论"
                     : "未完成的规则与风险检验将阻断外发。红队结果是工程基线，不是正式攻击结论"}
                 </p>
+                <p className="runtime-provenance">运行环境：{boot?.runtime_profile || "未知"} · 数据来源：{currentCase.data_origin || (currentCase.mode === "demo" ? "synthetic" : "case_materials")}
+                  {currentCase.synthetic_manifest_hash ? <> · 合成清单 SHA-256 <code>{currentCase.synthetic_manifest_hash}</code></> : null}</p>
               </div>
               <button className="secondary" onClick={() => setPage("cases")}>
                 返回案件列表
@@ -860,13 +883,13 @@ export default function App() {
               <button className={contextOpen?"selected":""} onClick={()=>setContextOpen(!contextOpen)}>依据与留痕</button>
             </div>
             {data.jobs.some((j: Obj) =>
-              ["pending", "running", "failed"].includes(j.status),
+              ["pending", "running", "failed"].includes(j.status) || (j.status === "completed" && Boolean(j.warning)),
             ) && (
               <div className="jobs">
                 {data.jobs.slice(-3).map((j: Obj) => (
                   <span key={j.id}>
                     <Clock3 size={13} />
-                    {j.kind} · {txt(j.status)} {j.error && <b>{j.error}</b>}
+                    {j.kind} · {txt(j.status)} {j.error && <b>{j.error}</b>}{j.warning && <b className="warning-text">{typeof j.warning === "string" ? j.warning : JSON.stringify(j.warning)}</b>}
                     {j.status === "pending" &&
                       !["send", "reconcile"].includes(j.kind) && (
                         <button
@@ -884,6 +907,7 @@ export default function App() {
             <div className={`three-panel pane-${pane} ${contextOpen?"context-open":""}`}>
               <SourceViewer data={data} currentCase={currentCase} caseId={caseId} busy={busy}
                 activeSource={activeSource} blocks={blocks} onSelect={setSource}
+                onRetry={(document)=>run(()=>api(`/cases/${caseId}/documents/${document.id}/retry`,"POST"),"解析重试已进入本地队列。")}
                 onUpload={(file) => {
                   const body = new FormData();
                   body.append("file", file);
@@ -940,7 +964,10 @@ export default function App() {
                   onEvidence={() => startTask("local", "evidence_inventory")}
                   onIssues={() => startTask("local", "issue_extraction")}
                   onSummary={() => startTask(currentCase.mode === "demo" ? "mock" : "local")}
-                  onStartCloud={() => startTask("cloud")}/>}
+                  onStartCloud={boot?.runtime_profile === "production" && currentCase.mode === "formal"
+                    ? () => startTask("cloud")
+                    : boot?.runtime_profile === "integration" && boot?.runtime_config?.external_calls_allowed
+                      ? () => startTask("cloud") : undefined}/>}
 
                 {tab !== "facts" && !task && (
                   <Empty
@@ -990,12 +1017,18 @@ export default function App() {
                       })}/>}
 
                     {tab === "risk" && (
-                      <RiskWorkspace task={task} pack={(boot?.packs||[]).find((item:Obj)=>item.id===task.pack_id)} busy={busy} label={txt} attackLabels={attackLabels}
+                      <RiskWorkspace task={task} pack={(boot?.packs||[]).find((item:Obj)=>item.id===task.pack_id)} busy={busy} role={principal?.role} runtimeProfile={boot?.runtime_profile} dataOrigin={currentCase.data_origin} label={txt} attackLabels={attackLabels}
+                        request={api} onRefreshCase={async()=>{if(caseId)setData(await api(`/cases/${caseId}`))}}
                         onAction={taskAction} onApprove={()=>setModal("approve")} onResult={()=>setTab("result")}
+                        onInstallPolicy={()=>run(()=>api(`/tasks/${task.id}/formal-release/policy`,"POST",{request_hash:task.request_hash,scope_kind:"request"}),
+                          "已创建阻断状态的请求级策略；仍需完成证据核验、独立风险检查、审批和一次性许可。")}
+                        onSuccessor={startSuccessorTask}
                         onRunAttacks={(auxiliary)=>run(()=>api(`/tasks/${task.id}/attacks/run`,"POST",{auxiliary}),
                           "红队作业已排队；完成后请重新检验。")}
                         onLegalReview={(body)=>run(()=>api(`/tasks/${task.id}/legal-review`,"POST",body),
-                          "已记录法律复核。该记录不授予发送权。")}/>
+                          "已记录法律复核结论；否决会阻断本次请求，允许结论仍不授予发送权。")}
+                        onTechnicalIssue={(body)=>run(()=>api(`/tasks/${task.id}/review-issues`,"POST",body),
+                          "技术问题已提交，本次请求已暂停等待法学复核。")}/>
                     )}
 
                     {tab === "result" && (
@@ -1007,7 +1040,7 @@ export default function App() {
                   </>
                 )}
               </section>
-              <ContextRail currentCase={currentCase} task={task} caseId={caseId}
+              <ContextRail currentCase={currentCase} task={task} caseId={caseId} runtimeProfile={boot?.runtime_profile} runtimeConfig={boot?.runtime_config}
                 audit={data.audit} busy={busy} onClose={() => setContextOpen(false)}
                 onStartCloud={() => startTask("cloud")}/>
             </div>
@@ -1100,7 +1133,9 @@ export default function App() {
         {page === "providers" && <ProviderCenter providers={boot?.providers} request={api} refresh={reload} busy={busy}/>}
         {page === "legal-evidence" && <LegalEvidenceCenter cases={boot?.cases} request={api}/>}
         {page === "benchmark" && <BenchmarkCenter protocols={boot?.risk_protocols} request={api} refresh={reload}/>}
-        {page === "registry" && <LegalPackCenter packs={boot?.packs} tasks={boot?.task_definitions||boot?.tasks} request={api}/>}
+        {page === "registry" && <LegalPackCenter packs={boot?.packs} tasks={boot?.task_definitions||boot?.tasks}
+          cases={boot?.cases||[]} providers={boot?.providers||[]} runtimeConfig={boot?.runtime_config||{}}
+          runtimeProfile={boot?.runtime_profile} role={principal?.role} request={api}/>}
         {page === "users" && <UserCenter request={api}/>}
       </main>
 
@@ -1401,7 +1436,7 @@ export default function App() {
                 </div>
                 <button
                   className="primary"
-                  disabled={busy}
+                  disabled={busy || principal?.role !== "approver" || !["cleared","not_required"].includes(task?.review_status) || task?.status === "rejected" || task?.status === "review_blocked" || task?.status === "stopped"}
                   onClick={() =>
                     run(async () => {
                       await api(`/tasks/${task.id}/approve`, "POST", {
