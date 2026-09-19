@@ -11,14 +11,15 @@ from lexaegis.worker import process_one, recover
 from lexaegis.policy import check_claims
 from lexaegis.service import seed_followups
 from lexaegis.util import digest, sign
-from .conftest import demo_task, approve
+from .conftest import demo_task, approve, post_as
 
 
 def task_state(env, case_id, task_id):
     return next(t for t in env["client"].get(f"/api/v1/cases/{case_id}").json()["tasks"] if t["id"]==task_id)
 
 
-def test_complete_synthetic_workflow_and_source_confirmation(env):
+def test_complete_synthetic_workflow_and_source_confirmation(demo_env):
+    env = demo_env
     case,task=demo_task(env)
     task=approve(env,task)
     client=env["client"]
@@ -48,7 +49,8 @@ def test_complete_synthetic_workflow_and_source_confirmation(env):
     assert local["bundle_type"]=="local_review_bundle"
 
 
-def test_followups_from_unused_create_next_disclosure_task(env):
+def test_followups_from_unused_create_next_disclosure_task(demo_env):
+    env = demo_env
     case, task = demo_task(env)
     task = approve(env, task)
     client = env["client"]
@@ -80,16 +82,18 @@ def test_followups_from_unused_create_next_disclosure_task(env):
 
 
 @pytest.mark.parametrize("scenario",["linkage","stop"])
-def test_risk_and_stop_examples_block_approval(env,scenario):
+def test_risk_and_stop_examples_block_approval(demo_env,scenario):
+    env = demo_env
     case,task=demo_task(env,scenario)
     result=env["client"].post(f"/api/v1/tasks/{task['id']}/evaluate").json()
     assert result["risk"]["blockers"]
     assert result["risk"]["completion"]=="incomplete"
-    assert env["client"].post(f"/api/v1/tasks/{task['id']}/approve",json={"request_hash":result["request_hash"]}).status_code==409
+    assert post_as(env, "approver", f"/api/v1/tasks/{task['id']}/approve", json={"request_hash":result["request_hash"]}).status_code==409
     assert env["client"].post(f"/api/v1/tasks/{task['id']}/stop").json()["status"]=="stopped"
 
 
-def test_unapproved_and_modified_requests_do_not_send(env):
+def test_unapproved_and_modified_requests_do_not_send(demo_env):
+    env = demo_env
     case,task=demo_task(env)
     client=env["client"]
     assert client.post(f"/api/v1/tasks/{task['id']}/send").status_code==409
@@ -98,10 +102,11 @@ def test_unapproved_and_modified_requests_do_not_send(env):
     decision=task["decisions"][0]
     assert client.patch(f"/api/v1/tasks/{task['id']}/decisions/{decision['fact_id']}",json={"transform":"delete","necessity":"unnecessary"}).status_code==200
     assert client.post(f"/api/v1/tasks/{task['id']}/send").status_code==409
-    assert client.post(f"/api/v1/tasks/{task['id']}/approve",json={"request_hash":old_hash}).status_code==409
+    assert post_as(env, "approver", f"/api/v1/tasks/{task['id']}/approve", json={"request_hash":old_hash}).status_code==409
 
 
-def test_concurrent_double_submit_reserves_one_send(env):
+def test_concurrent_double_submit_reserves_one_send(demo_env):
+    env = demo_env
     case,task=demo_task(env)
     task=approve(env,task)
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -112,7 +117,8 @@ def test_concurrent_double_submit_reserves_one_send(env):
     assert len([j for j in data["jobs"] if j["kind"]=="send"])==1
 
 
-def test_history_invalidates_second_approval(env):
+def test_history_invalidates_second_approval(demo_env):
+    env = demo_env
     case,first=demo_task(env)
     second=env["client"].post(f"/api/v1/cases/{case['id']}/tasks",json={"transport":"mock"}).json()
     first,second=approve(env,first),approve(env,second)
@@ -123,7 +129,8 @@ def test_history_invalidates_second_approval(env):
     assert "累计披露" in result.text
 
 
-def test_timeout_becomes_unknown_and_reconcile_never_posts(env):
+def test_timeout_becomes_unknown_and_reconcile_never_posts(demo_env):
+    env = demo_env
     import httpx
     class TimeoutClient:
         def post(self,*args,**kwargs):
@@ -141,20 +148,25 @@ def test_timeout_becomes_unknown_and_reconcile_never_posts(env):
     assert task_state(env,case["id"],task["id"])["status"]=="unknown"
 
 
-def test_restart_recovers_inflight_send_as_unknown(env):
+def test_restart_recovers_inflight_send_as_unknown(demo_env):
+    env = demo_env
     case,task=demo_task(env)
     approve(env,task)
     env["client"].post(f"/api/v1/tasks/{task['id']}/send")
     with env["app"].state.store.transaction() as repo:
         job=repo.list("job",case["id"])[0]
         job["status"]="running"
+        task_record=repo.get(task["id"], "task")
+        task_record["status"]="sending"
+        repo.put("task", task_record, case["id"])
         repo.put("job",job,case["id"])
     recover(env["app"].state.store)
     assert task_state(env,case["id"],task["id"])["status"]=="unknown"
     assert not process_one(env["app"].state.store,env["root"],env["gate"])
 
 
-def test_gateway_hash_auth_and_deduplication(env):
+def test_gateway_hash_auth_and_deduplication(demo_env):
+    env = demo_env
     case,task=demo_task(env)
     task=approve(env,task)
     content={"request":task["request"],"approval":task["approval"]}
@@ -170,7 +182,8 @@ def test_gateway_hash_auth_and_deduplication(env):
     assert env["gate"].get('/requests/'+task['request']['request_id']).status_code==403
 
 
-def test_synthetic_mode_cannot_accept_user_material_or_custom_payload(env):
+def test_synthetic_mode_cannot_accept_user_material_or_custom_payload(demo_env):
+    env = demo_env
     case,task=demo_task(env)
     client=env["client"]
     assert client.post(f"/api/v1/cases/{case['id']}/documents",files={"file":("private.pdf",b"secret","application/pdf")}).status_code==409
@@ -219,7 +232,7 @@ def test_empty_ir_does_not_crash_and_blocks_outbound(env):
     body = evaluated.json()
     assert "材料解析、OCR 或转写复核未完成" in body["risk"]["blockers"]
     assert body["risk"]["approval_allowed"] is False
-    approved = client.post(
+    approved = post_as(env, "approver",
         f"/api/v1/tasks/{task.json()['id']}/approve",
         json={"request_hash": body["request_hash"]},
     )
@@ -297,7 +310,7 @@ def test_local_fact_summary_draft_skips_outbound_gate(env):
     assert ready.status_code == 200, ready.text
     assert ready.json()["risk"]["approval_allowed"] is True, ready.text
     assert ready.json()["request"]["target"] == "local://fact-summary-draft"
-    approved = client.post(
+    approved = post_as(env, "approver",
         f"/api/v1/tasks/{task['id']}/approve",
         json={"request_hash": ready.json()["request_hash"]},
     )
@@ -329,7 +342,8 @@ def test_corrected_doc_retains_old_anchors_and_stales_tasks_after_restart(env):
         assert restarted.post(f"/api/v1/tasks/{task['id']}/evaluate").status_code==409
 
 
-def test_case_mapping_isolated_and_consistent(env):
+def test_case_mapping_isolated_and_consistent(demo_env):
+    env = demo_env
     case,a=demo_task(env)
     b=env["client"].post(f"/api/v1/cases/{case['id']}/tasks",json={"transport":"mock"}).json()
     other,c=demo_task(env)
@@ -342,7 +356,8 @@ def test_case_mapping_isolated_and_consistent(env):
     assert first["mapping_entries"] is not second["mapping_entries"]
 
 
-def test_hallucinated_numbers_and_missing_sources_never_auto_verify(env):
+def test_hallucinated_numbers_and_missing_sources_never_auto_verify(demo_env):
+    env = demo_env
     case,task=demo_task(env)
     valid=task["decisions"][5]["fact_id"]
     claims=check_claims({"claims":[{"text":"工资999999元","source_ids":[valid]},{"text":"无依据陈述","source_ids":["missing"]}]},task,task["fact_snapshot"])
@@ -376,7 +391,8 @@ def test_settings_accepts_frontend_dual_slots_and_bootstraps_them(env):
     assert rejected.status_code==422
 
 
-def test_endpoint_change_invalidates_old_task(env):
+def test_endpoint_change_invalidates_old_task(demo_env):
+    env = demo_env
     case,task=demo_task(env)
     approve(env,task)
     response=env["client"].put('/api/v1/settings',json={"cloud_url":"https://api.openai.com/v1","cloud_model":"new-model","edge_url":"http://localhost:11434/v1","edge_model":""})
@@ -392,7 +408,8 @@ def test_public_edge_endpoint_and_cross_site_calls_rejected(env):
         assert unauthenticated.get('/api/v1/bootstrap').status_code==401
 
 
-def test_cloud_mock_provider_and_unknown_provider_error(env):
+def test_cloud_mock_provider_and_unknown_provider_error(integration_env):
+    env = integration_env
     class Provider:
         api_key="test-only-key"
         calls=0

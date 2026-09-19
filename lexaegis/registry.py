@@ -203,6 +203,9 @@ def seed_packs(repo):
     existing = {item["id"]: item for item in repo.list("pack")}
     for path in sorted(root.glob("*.json")):
         raw = json.loads(path.read_text(encoding="utf-8"))
+        from .runtime_profile import current_profile
+        if current_profile() == "production" and raw.get("status") == "demo":
+            continue
         if not existing:
             import_pack(repo, raw)
             continue

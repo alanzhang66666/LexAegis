@@ -5,14 +5,16 @@
 | | |
 | --- | --- |
 | 版本 | **V1.0**（`1.0.0`）。非正式发行 |
-| 盘点日 | 2026-09-14 |
+| 代码更新日 | 2026-09-19；下方十案证据盘点仍为 2026-09-14，未据代码更新改写真实验收结论 |
 | 正式外发 | **失败关闭。** `formal_dispatch=blocked`。真实云端 API 成功外发：**从未有过** |
 | 十案 | **层 A 评估完成，0 案真实发送。** D 路径「走一遍」= `evaluate`，不是 HTTP 发送 |
-| 仓库包 | `packs/labor_v2_draft.json` = `2.0.0-draft.3` / `draft`，`dispatch_allowed=false`。无一 `published` |
+| 仓库包 | 原 `2.0.0-draft.3` 与新增产品 `3.0.0-product-draft.1` 均为草稿，`dispatch_allowed=false`。无一 `published` |
 
 不要写成「已通过」「外发已开通」「10 案可发」。细则与禁写句见 [docs/LOCAL_STATUS.md](docs/LOCAL_STATUS.md) 第八节；法学只走 [docs/legal/README.md](docs/legal/README.md)。
 
 现行规格三角：[架构](docs/ARCHITECTURE.md) · [验证](docs/VALIDATION.md) · [来源](docs/PROVENANCE.md)。入口地图：[docs/PROJECT_MAP.md](docs/PROJECT_MAP.md)。文档索引：[docs/README.md](docs/README.md)。Agent 边界：[AGENTS.md](AGENTS.md)。
+
+本轮双线实现与操作入口：[三环境与 Windows 交付](docs/DUAL_TRACK_DEPLOY.md)、[人工否决、常规逐请求放行及验收](docs/DUAL_TRACK_ACCEPTANCE.md)、[产品规则草稿准备](docs/legal/PRODUCT_RULE_PREPARATION.md)。产品版可对不同案件和后续新请求分别审批；规则、请求、证据、许可各自绑定版本，不再以全库一次试点额度代替常规授权。
 
 ---
 
@@ -21,10 +23,10 @@
 ### 已在代码里（工程落地 ≠ 法学通过）
 
 - 工作台四步：事实与证据 → 逐项披露 → 风险冻结/审批 → 摘要回链。治理四页：法学规则、服务商、隔离实验、本地用户。
-- 本地角色：`admin` / `case_operator` / `legal_reviewer` / `approver`。密钥只进网关，不进 API/worker。
+- 本地角色：`admin` / `case_operator` / `technical_reviewer` / `legal_reviewer` / `approver`。技术提请暂停、法学否决和发送批准分别校验角色，管理员不能隐式代行这三个动作。密钥只进网关，不进 API/worker。
 - 正式 wire 只走稳定 token；`mapping` / 原文 / `anchors` / `local_text` 不上云。
 - 正式门禁失败关闭：`validate_formal_gate` + `authorize_dispatch`。评估、批准、入队、发送时重验冻结哈希。409 是门禁，不是产品 bug。
-- 三个固定合成演示。01 可走通**模拟**发送（拼接已披露事实，不声称模型生成）。02 组合线索批准 409，不要强行批准。
+- 四个固定合成场景：成功、人工复核否决、系统组合风险、材料不足停止。`demo` 离线模拟；`integration` 使用同批合成材料联调真实模型，分别标注结果来源。
 - D 路径试点：可收紧为仅 `api.deepseek.com`，备槽不纳入批准目标。DeepSeek 密钥不得指向百炼。
 - 本机 pytest（2026-09-14）：**283 过 / 3 跳过**。远端 CI 本轮未取，不能写成已通过。
 
@@ -80,7 +82,7 @@
 
 ## 2. 怎么跑
 
-需要 Python 3.12+。从源码开发前端需要 Node.js 22+ 和 pnpm 11。工作台用 **http://127.0.0.1:8765**，不要用 `localhost`。演示只接受内置合成材料。口令看终端。
+源码运行需要 Python 3.12+、Node.js 22+ 和 pnpm 11。工作台默认地址为 `production` **http://127.0.0.1:38765**、`demo` **http://127.0.0.1:48765**、`integration` **http://127.0.0.1:58765**，以终端实际地址为准。演示只接受内置合成材料。客户 Windows 固定镜像交付见[维护说明](docs/DUAL_TRACK_DEPLOY.md)；以下为源码开发方式。
 
 ### Linux / macOS
 
@@ -93,7 +95,7 @@ python -m pip install -r requirements.lock
 python -m pip install -e ".[test]"
 cd frontend && pnpm install --frozen-lockfile && pnpm build && cd ..
 python scripts/make_examples.py
-lexaegis start
+lexaegis start --profile demo
 ```
 
 ### Windows（PowerShell）
@@ -107,19 +109,19 @@ pnpm install --frozen-lockfile
 pnpm build
 cd ..
 python scripts/make_examples.py
-lexaegis start
+lexaegis start --profile demo
 ```
 
 若激活脚本被拦截：`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`。端口占用或文件锁失败时，先结束旧进程，见 [部署说明](docs/DEPLOY.md)。
 
-`Ctrl+C` 停止 API（8765）、网关（8766）、worker。不配置模型、不下边侧权重，即可走三个固定合成案例：
+`Ctrl+C` 停止本次启动的 API、网关和 worker。不配置模型、不下边侧权重，即可在 `demo` 环境走四个固定合成场景：
 
 1. 生成披露方案。
 2. 检验风险并查看完整请求。四类攻击显示「未运行」不得当作正式通过。
-3. 批准后执行模拟调用（模拟器组装已披露事实）。
+3. 法学复核允许后，由审批人批准并执行模拟调用（模拟器组装已披露事实）；人工否决场景则展示技术暂停和法学否决。
 4. 逐项回链并确认最终结果。
 
-「组合线索风险」和「主动停止」默认阻断审批。正式案件可上传 `examples/` 下合成 DOCX/PDF，或 UTF-8 文本、表格、音视频，体验解析与**正式外发阻断**。OCR/转写结果须人工复核后才能抽取。边侧未监听时 `lexaegis start` 会提示，或运行 `lexaegis edge --start`。
+「组合线索风险」和「主动停止」默认阻断审批。正式材料在独立 `production` 环境上传；`demo`、`integration` 不接受任意上传。OCR/转写结果须人工复核后才能抽取。边侧未监听时 `lexaegis start` 会提示，或运行 `lexaegis edge --start`。
 
 隔离栈：先停 native，再 Compose（宿主机默认 `LEX_COMPOSE_API_PORT` 或 **38765**）。`lexaegis check-isolation` 五项为真 ≠ 本请求隔离收据，≠ 可发送。
 

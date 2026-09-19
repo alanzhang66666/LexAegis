@@ -14,6 +14,7 @@ with zipfile.ZipFile(wheels[0]) as archive:
         "lexaegis/frontend/index.html",
         "lexaegis/packs/labor_demo.json",
         "lexaegis/packs/labor_v2_draft.json",
+        "lexaegis/packs/labor_product_draft.json",
         "lexaegis/NOTICE",
         "lexaegis/LICENSES/Apache-2.0.txt",
     )

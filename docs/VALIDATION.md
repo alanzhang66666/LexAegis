@@ -2,6 +2,24 @@
 
 产品版本现为 **V1.0**（`1.0.0`），非正式发行。下文 2026-09-08/09 条目仍是 0.2.0 周期的本机证据，未因改号重跑。
 
+## 2026-09-19 双线开发验证
+
+本轮设备为 macOS，Python 3.12；浏览器使用本机 Google Chrome。分支为 `feat/production-demo-dual-track`。本机未安装 Docker Desktop 或 PowerShell，未持有本轮获准真实案件和云端密钥，不把下列代码及合成测试作为 Windows 或真实外发验收。
+
+| 本轮检查 | 实际结果与边界 |
+| --- | --- |
+| Python 全量测试 | `pytest -q -rs --tb=short`：**519 passed、3 skipped**。跳过 PaddleOCR、RapidOCR、whisper.cpp/large-v3-turbo 的实际资产测试；未自动安装模型。保留一项 Starlette/httpx 弃用提示。 |
+| 多案件生产调用链 | 同一个经 HTTP 准备、复核、发布、激活的规则包覆盖两宗合成正式案件。实际创建任务、生成请求、技术隔离登记、法学确认、逐请求策略、具名审批、worker 和独立测试网关分别完成一次调用，并拒绝跨请求使用许可。构建身份、攻击证据和服务商返回为受控测试替身，没有互联网调用。 |
+| 人工否决 | 浏览器实际执行技术人员提请暂停、法学人员否决，顶部状态与动作同步；初检和具名复核历史保留。后端覆盖并发入队、旧批准、重新检验和另建任务不能绕过未解决事项。 |
+| 成功演示闭环 | 浏览器实际执行披露、初检、法学允许、独立审批、模拟调用、逐条来源核对及最终确认。模拟结果保留来源标识。 |
+| 五种视口 | 1440、1280、900、650、390 像素五项通过，覆盖窄屏面板切换和横向溢出检查。 |
+| 恢复中断与旧授权 | 同构建恢复会撤销旧批准、排队发送和未消费许可；复制或任一撤权事务中断后，两端标记阻止启动。已消费网关记录及人工复核历史保留。故障注入和独立复审均通过。 |
+| CI 工作流静态检查 | `actionlint -shellcheck= .github/workflows/ci.yml` 通过；已补测试/构建依赖、测试环境分离、PowerShell 语法检查及 Compose 初始化。静态检查不代表远端 CI 已通过。 |
+
+本轮浏览器截图保存在被忽略的 `.artifacts/dual-track-acceptance/`，不提交运行数据库或凭据。真实联调、获准真实案件发送、Windows 干净机器安装、固定 Docker 镜像交付及现场升级回滚仍待目标环境验收。规则和法源补充稿保持待复核，未代签法律发布结论。
+
+## 2026-09-08 至 14 历史验证
+
 验证日期：2026-09-08。当前验证设备为 Windows / AMD64、Python 3.13、Docker Compose v5.5.0 / Engine 29.7.2。本文只记录实际执行证据；不填充隐私风险降低率、法律任务准确率或摘要质量等未经盲测的数据。
 
 ## 本机已执行验证
@@ -102,8 +120,10 @@ python -m lexaegis.cli dataset compare --output .data/comparable/mock_labor.json
 cd frontend
 pnpm exec tsc --noEmit
 pnpm build
-pnpm test:e2e -- --project=desktop-1280 --grep-invert "five-viewport"
-pnpm test:e2e -- --grep "five-viewport"
+pnpm exec playwright test --project=desktop-1280 --grep-invert "five-viewport"
+pnpm exec playwright test --grep "five-viewport"
+pnpm exec playwright test --config=playwright.human-veto.config.ts
+pnpm exec playwright test --config=playwright.runtime-pack.config.ts
 # 需 dotenv：doctor / probe-edge 自己不读 .env
 # docker compose --profile redteam --profile benchmark up -d --build --wait
 # lexaegis check-isolation

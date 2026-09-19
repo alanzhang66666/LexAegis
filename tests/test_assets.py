@@ -226,7 +226,8 @@ def test_domain_pack_extends_without_gate_change_and_immutable_versions(env):
     assert env['client'].post('/api/v1/cases',json={'name':'测试扩展','domain':'new_domain'}).status_code==200
 
 
-def test_seed_packs_refreshes_stale_demo_not_published(tmp_path):
+def test_seed_packs_refreshes_stale_demo_not_published(tmp_path, monkeypatch):
+    monkeypatch.setenv("LEX_RUN_PROFILE", "demo")
     demo = json.loads((Path("packs/labor_demo.json")).read_text(encoding="utf-8"))
     assert demo["forbidden_terms"] == ["唯一", "公开获奖"]
     stale = Store(tmp_path / "stale.sqlite")
@@ -259,15 +260,22 @@ def test_redteam_truth_fields_rejected_and_placeholder_not_pass(monkeypatch):
     assert client.post('/evaluate',json={'view':view,'signature':sign(view,secret)}).status_code==422
 
 
-def test_backup_restore_includes_material_versions_approvals_and_send_records(env):
+def test_backup_restore_includes_material_versions_and_controlled_evidence(env):
     case,doc,fact=formal_material(env)
-    demo,task=demo_task(env);approve(env,task)
-    env['client'].post(f"/api/v1/tasks/{task['id']}/send")
-    process_one(env['app'].state.store,env['root'],env['gate'])
+    task = env["client"].post(f"/api/v1/cases/{case['id']}/tasks", json={"transport": "local"}).json()
+    assert task["status"] in ("draft", "blocked")
+    evidence = env["root"] / "legal-evidence" / "receipts" / "receipt.json"
+    evidence.parent.mkdir(parents=True)
+    evidence.write_text('{"receipt":"synthetic-test"}', encoding="utf-8")
+    release_evidence = env["root"] / "release-evidence" / "sha256" / "proof.bin"
+    release_evidence.parent.mkdir(parents=True)
+    release_evidence.write_bytes(b"release-evidence-bytes")
     destination=env['temp']/'backup.zip'
     backup(env['root'],env['temp']/'gateway',destination)
     with zipfile.ZipFile(destination) as archive:
         assert not any('password' in n or 'secret' in n for n in archive.namelist())
+        assert archive.read("app/legal-evidence/receipts/receipt.json") == evidence.read_bytes()
+        assert archive.read("app/release-evidence/sha256/proof.bin") == release_evidence.read_bytes()
     restored=env['temp']/'restored';gateway=env['temp']/'restored-gateway'
     restore(destination,restored,gateway)
     with TestClient(create_app(restored,password='restore-test')) as client:
@@ -275,9 +283,12 @@ def test_backup_restore_includes_material_versions_approvals_and_send_records(en
         detail=client.get('/api/v1/cases/'+case['id']).json()
         assert detail['facts'][0]['source_ids']==fact['source_ids']
         assert client.get(f"/api/v1/cases/{case['id']}/documents/{doc['id']}/file").status_code==200
-        demonstration=client.get('/api/v1/cases/'+demo['id']).json()
-        assert demonstration['tasks'][0]['approval']
-        assert demonstration['ledger'][0]['status']=='sent'
+        restored_detail=client.get('/api/v1/cases/'+case['id']).json()
+        restored_task = next(item for item in restored_detail['tasks'] if item['id'] == task['id'])
+        assert restored_task["id"] == task["id"]
+        assert restored_detail['ledger'] == []
+    assert (restored / "legal-evidence/receipts/receipt.json").read_bytes() == evidence.read_bytes()
+    assert (restored / "release-evidence/sha256/proof.bin").read_bytes() == release_evidence.read_bytes()
     with pytest.raises(ValueError):restore(destination,restored,gateway)
 
 
@@ -394,7 +405,8 @@ def test_empty_scan_cannot_confirm(env):
     assert unchanged["id"] == block["id"]
 
 
-def test_demo_cannot_confirm_block(env):
+def test_demo_cannot_confirm_block(demo_env):
+    env = demo_env
     case, _ = demo_task(env)
     data = env["client"].get(f"/api/v1/cases/{case['id']}").json()
     doc = data["documents"][0]

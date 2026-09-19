@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, ConfigDict, Field
-from . import __version__, service
+from . import __version__, service, release_service
 from .auth import create_user_record, current_actor, ensure_initial_admin, public_user, verify_password
 from .diagnostics import host_publish_capability, isolation_capability, legal_capability, redteam_capability
 from .parsing import UPLOAD_EXTENSIONS, ocr_capability
@@ -25,8 +25,9 @@ from .contracts import ProviderProfile, RiskProtocol
 from .governance import protocol_content_hash, publish_pack_record
 from .outbound_gate import product_dispatch_state
 from .registry import TASKS, import_pack, run_pack_regressions, task_definitions, validate_pack
-from .runtime_identity import runtime_identity
+from .runtime_identity import runtime_identity, write_runtime_identity
 from .storage import Store
+from .runtime_profile import bind_runtime, current_profile, profile_config
 from .util import app_dir, audit, digest, now, restrict_mode, sign, uid
 
 
@@ -35,12 +36,13 @@ class Input(BaseModel):
 
 
 class CaseInput(Input):
+    reference_code: str | None = Field(default=None, min_length=1, max_length=80, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]*$")
     name: str = Field(min_length=1, max_length=120)
     domain: str = "labor"
 
 
 class DemoInput(Input):
-    scenario: Literal["success", "linkage", "stop"] = "success"
+    scenario: Literal["success", "human_veto", "linkage", "stop"] = "success"
 
 
 class LoginInput(Input):
@@ -51,13 +53,13 @@ class LoginInput(Input):
 class UserCreateInput(Input):
     username: str
     display_name: str = Field(min_length=1, max_length=80)
-    role: Literal["admin", "case_operator", "legal_reviewer", "approver"]
+    role: Literal["admin", "case_operator", "technical_reviewer", "legal_reviewer", "approver"]
     password: str = Field(min_length=12, max_length=512)
 
 
 class UserUpdateInput(Input):
     display_name: str | None = Field(default=None, min_length=1, max_length=80)
-    role: Literal["admin", "case_operator", "legal_reviewer", "approver"] | None = None
+    role: Literal["admin", "case_operator", "technical_reviewer", "legal_reviewer", "approver"] | None = None
     status: Literal["active", "disabled"] | None = None
     password: str | None = Field(default=None, min_length=12, max_length=512)
 
@@ -103,6 +105,7 @@ class BlockConfirmation(Input):
 
 
 class TaskInput(Input):
+    parent_task_id: str | None = None
     transport: Literal["local", "mock", "cloud"] = "cloud"
     task_type: str = "fact_summary"
     pack_id: str | None = None
@@ -127,12 +130,23 @@ class ApprovalInput(Input):
     actor_role: Literal["approver"] = "approver"
 
 
+class ReviewIssueInput(Input):
+    request_hash: str
+    idempotency_key: str = Field(min_length=8, max_length=200)
+    reason: str = Field(min_length=1, max_length=4000)
+    evidence_ids: list[str] = Field(min_length=1, max_length=100)
+
+
 class LegalReviewInput(Input):
+    evidence_ids: list[str] = Field(min_length=1, max_length=100)
+    idempotency_key: str = Field(min_length=8, max_length=200)
+    resolved_issue_ids: list[str] = Field(default_factory=list)
+    resolution_reason: str = Field(default="", max_length=4000)
     request_hash: str
     material_version: int | None = None
     conclusion: Literal[
         "allow_processing", "allow_after_minimization",
-        "needs_further_verification", "prohibit_external_processing",
+        "needs_further_verification", "prohibit_external_processing", "reject_current_request",
     ]
     reason: str = Field(min_length=1, max_length=4000)
     reviewed_condition_ids: list[str] = Field(min_length=1)
@@ -240,6 +254,8 @@ def assert_docx_payload(data: bytes) -> None:
 def create_app(data_dir=None, password=None, build_manifest=None):
     explicit_password = password is not None
     root = Path(data_dir or app_dir()).resolve()
+    runtime = bind_runtime(root, "app")
+    startup_profile = runtime["runtime_profile"]
     root.mkdir(parents=True, exist_ok=True)
     restrict_mode(root, 0o700)
     (root / "files").mkdir(exist_ok=True)
@@ -247,6 +263,9 @@ def create_app(data_dir=None, password=None, build_manifest=None):
     legal_files.mkdir(exist_ok=True)
     restrict_mode(legal_files, 0o700)
     store = Store(root / "app.sqlite")
+    from .upgrade import prepare_upgrade
+    startup_identity = runtime_identity("api", build_manifest)
+    prepare_upgrade(store, startup_identity)
     service.initialize(store)
     password = password or os.getenv("LEX_LOCAL_PASSWORD", "")
     if not password:
@@ -262,11 +281,15 @@ def create_app(data_dir=None, password=None, build_manifest=None):
     app = FastAPI(title="LexAegis", docs_url=None, redoc_url=None)
     app.state.store = store
     app.state.root = root
-    app.state.runtime_identity = runtime_identity("api", build_manifest)
+    app.state.runtime_profile = startup_profile
+    app.state.runtime_identity = startup_identity
+    write_runtime_identity(root / "api-runtime-identity.json", app.state.runtime_identity)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "testserver", "api"])
 
     @app.middleware("http")
     async def guard(request: Request, call_next):
+        if current_profile() != startup_profile:
+            return JSONResponse({"detail": "运行环境已改变，拒绝继续服务"}, 503)
         actor_token = current_actor.set("system")
         if request.url.path.startswith("/api/"):
             if request.method not in ("GET", "HEAD"):
@@ -324,6 +347,7 @@ def create_app(data_dir=None, password=None, build_manifest=None):
         return {
             "status": "ok",
             "version": __version__,
+            "runtime_profile": startup_profile,
             "runtime_identity": app.state.runtime_identity.public(),
         }
 
@@ -359,6 +383,18 @@ def create_app(data_dir=None, password=None, build_manifest=None):
         if identity["role"] not in roles and identity["role"] != "admin":
             raise HTTPException(403, "当前本地角色无权执行该操作")
         return identity
+
+    def require_exact_role(request: Request, role: str):
+        identity = principal(request)
+        if identity["role"] != role:
+            raise HTTPException(403, f"仅 {role} 可执行此动作，管理员不能代行")
+        return {**identity, "actor_role": identity["role"], "display_name": identity["actor"]}
+
+    if startup_profile == "production":
+        from .release_api import register_release_routes
+        register_release_routes(app, store, root, require_role, require_exact_role, build_manifest)
+        from .runtime_pack_api import register_runtime_pack_routes
+        register_runtime_pack_routes(app, store, root, require_role, require_exact_role)
 
     @app.get("/api/v1/me")
     def me(request: Request):
@@ -420,7 +456,8 @@ def create_app(data_dir=None, password=None, build_manifest=None):
     @app.get("/api/v1/bootstrap")
     def bootstrap():
         with store.read() as repo:
-            return {"cases": repo.list("case"), "packs": repo.list("pack"), "tasks": [t.model_dump() for t in TASKS],
+            return {"runtime_profile": startup_profile, "runtime_config": {**profile_config(startup_profile), "external_calls_allowed": startup_profile != "demo", "mock_responses": startup_profile == "demo"},
+                    "cases": repo.list("case"), "packs": repo.list("pack"), "tasks": [t.model_dump() for t in TASKS],
                     "task_definitions": task_definitions(), "providers": repo.list("provider"), "risk_protocols": repo.list("risk_protocol"),
                     "settings": public_settings(repo.get("settings"))}
 
@@ -428,6 +465,10 @@ def create_app(data_dir=None, password=None, build_manifest=None):
     def capabilities():
         with store.read() as repo:
             settings = repo.get("settings")
+        if startup_profile == "demo":
+            return {"runtime_profile": "demo", "edge": {"status": "simulation", "detail": "离线模拟，不发起模型请求"},
+                    "cloud": {"status": "disabled", "detail": "离线演示禁止外部调用"},
+                    "validation": {"status": "not_verified", "formal_dispatch": "blocked"}}
         edge = EdgeClient(settings["edge_url"], settings["edge_model"]).health()
         try:
             signature = sign({"op": "health"}, os.getenv("LEX_GATEWAY_SECRET", ""))
@@ -616,7 +657,7 @@ def create_app(data_dir=None, password=None, build_manifest=None):
     def create_case(body: CaseInput, request: Request):
         require_role(request, "case_operator")
         with store.transaction() as repo:
-            return service.create_case(repo, body.name, body.domain)
+            return service.create_case(repo, body.name, body.domain, reference_code=body.reference_code)
 
     @app.post("/api/v1/demos")
     def demo(body: DemoInput, request: Request):
@@ -630,7 +671,7 @@ def create_app(data_dir=None, password=None, build_manifest=None):
         with store.read() as repo:
             case = service.get_case(repo, case_id)
             docs = [{k: v for k, v in d.items() if k != "path"} for d in repo.list("document", case_id)]
-            return {"case": case, "documents": docs, "facts": repo.list("fact", case_id), "tasks": repo.list("task", case_id), "jobs": repo.list("job", case_id), "audit": repo.list("audit", case_id), "ledger": repo.list("disclosure", case_id)}
+            return {"case": case, "documents": docs, "facts": repo.list("fact", case_id), "tasks": [service.task_view(repo, t) for t in repo.list("task", case_id)], "jobs": repo.list("job", case_id), "audit": repo.list("audit", case_id), "ledger": repo.list("disclosure", case_id)}
 
     @app.get("/api/v1/cases/{case_id}/legal-evidence")
     def legal_evidence_list(case_id: str, request: Request):
@@ -752,6 +793,26 @@ def create_app(data_dir=None, password=None, build_manifest=None):
             raise HTTPException(404)
         return FileResponse(root / "files" / doc["path"], filename=doc["name"])
 
+    @app.post("/api/v1/cases/{case_id}/documents/{document_id}/retry")
+    def retry_document(case_id: str, document_id: str, request: Request):
+        require_role(request, "case_operator")
+        with store.transaction() as repo:
+            case = service.get_case(repo, case_id)
+            service.assert_editable(repo, case_id)
+            doc = repo.get(document_id, "document")
+            if doc.get("case_id") != case_id:
+                raise HTTPException(404, "材料不存在")
+            if case["mode"] == "demo" or doc.get("status") != "failed" or not doc.get("path"):
+                raise service.DomainError("仅可重试已失败且保留原件的正式材料")
+            if not (root / "files" / doc["path"]).is_file():
+                raise service.DomainError("原件缺失，请恢复原件后重试")
+            if any(j.get("kind") == "parse" and j.get("payload", {}).get("document_id") == document_id
+                   and j.get("status") in {"pending", "running"} for j in repo.list("job", case_id)):
+                raise service.DomainError("此材料已有解析作业")
+            doc.update(status="pending", error=None)
+            repo.put("document", doc, case_id)
+            return service.queue_job(repo, case_id, "parse", {"document_id": document_id})
+
     @app.get("/api/v1/cases/{case_id}/documents/{document_id}/page/{page_number}")
     def render_page(case_id: str, document_id: str, page_number: int):
         with store.read() as repo:
@@ -846,7 +907,7 @@ def create_app(data_dir=None, password=None, build_manifest=None):
     def task(case_id: str, body: TaskInput, request: Request):
         require_role(request, "case_operator")
         with store.transaction() as repo:
-            return service.create_task(repo, case_id, body.transport, body.task_type, body.pack_id, body.sub_purpose)
+            return service.create_task(repo, case_id, body.transport, body.task_type, body.pack_id, body.sub_purpose, body.parent_task_id)
 
     @app.post("/api/v1/cases/{case_id}/followups/{todo_id}/dismiss")
     def dismiss_followup(case_id: str, todo_id: str, request: Request):
@@ -869,8 +930,9 @@ def create_app(data_dir=None, password=None, build_manifest=None):
     @app.post("/api/v1/tasks/{task_id}/evaluate")
     def evaluate(task_id: str, request: Request):
         require_role(request, "case_operator")
+        context = release_service.collect_context(store, root, build_manifest=build_manifest)
         with store.transaction() as repo:
-            return service.evaluate_task(repo, task_id)
+            return service.evaluate_task(repo, task_id, release_context=context)
 
     @app.get("/api/v1/tasks/{task_id}/attacks")
     def task_attacks(task_id: str):
@@ -886,33 +948,35 @@ def create_app(data_dir=None, password=None, build_manifest=None):
 
     @app.post("/api/v1/tasks/{task_id}/approve")
     def approve(task_id: str, body: ApprovalInput, request: Request):
-        identity = require_role(request, "approver")
+        identity = require_exact_role(request, "approver")
+        context = release_service.collect_context(store, root, build_manifest=build_manifest)
         with store.transaction() as repo:
-            return service.approve_task(repo, task_id, body.request_hash, identity["actor"], "approver")
+            return service.approve_task(repo, task_id, body.request_hash, identity["actor"], "approver", identity["user_id"], release_context=context)
 
     @app.post("/api/v1/tasks/{task_id}/legal-review")
     def legal_review(task_id: str, body: LegalReviewInput, request: Request):
-        identity = require_role(request, "legal_reviewer", "approver")
+        identity = require_exact_role(request, "legal_reviewer")
         with store.transaction() as repo:
-            return service.record_legal_review(repo, task_id, body.model_dump(), identity["actor"])
+            return service.record_legal_review(repo, task_id, body.model_dump(), identity)
+
+    @app.post("/api/v1/tasks/{task_id}/review-issues")
+    def review_issue(task_id: str, body: ReviewIssueInput, request: Request):
+        identity = require_exact_role(request, "technical_reviewer")
+        with store.transaction() as repo:
+            return service.submit_review_issue(repo, task_id, body.model_dump(), identity)
 
     @app.post("/api/v1/tasks/{task_id}/send")
     def send(task_id: str, request: Request):
         require_role(request, "case_operator")
+        context = release_service.collect_context(store, root, build_manifest=build_manifest)
         with store.transaction() as repo:
-            return service.reserve_send(repo, task_id)
+            return service.reserve_send(repo, task_id, release_context=context)
 
     @app.post("/api/v1/tasks/{task_id}/stop")
     def stop(task_id: str, request: Request):
         require_role(request, "case_operator")
         with store.transaction() as repo:
-            task = repo.get(task_id, "task")
-            if task["status"] in ("queued", "sending", "unknown", "complete"):
-                raise service.DomainError("不能撤回已进入发送阶段的请求")
-            task.update(status="stopped", approval=None)
-            repo.put("task", task, task["case_id"])
-            audit(repo, task["case_id"], "task.stopped", task_id=task_id)
-            return task
+            return service.stop_task(repo, task_id)
 
     @app.post("/api/v1/tasks/{task_id}/reconcile")
     def reconcile(task_id: str, request: Request):
@@ -1004,6 +1068,7 @@ def create_app(data_dir=None, password=None, build_manifest=None):
                 claim.pop("anchors", None)
         mode = task["request"]["mode"] if task.get("request") else "local"
         body = {"task_id": task_id, "view": view,
+                "runtime_profile": startup_profile, "data_origin": task.get("data_origin"),
                 "bundle_type": "cloud_view" if view == "cloud" else "local_review_bundle",
                 "mode": mode, "stale": task["stale"], "artifact": artifact,
                 "request_hash": task.get("request_hash"), "pack": task["pack_id"]}

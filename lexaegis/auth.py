@@ -11,7 +11,7 @@ from .util import now
 
 
 USERNAME = re.compile(r"^[a-z][a-z0-9_.-]{2,31}$")
-ROLES = {"admin", "case_operator", "legal_reviewer", "approver"}
+ROLES = {"admin", "case_operator", "technical_reviewer", "legal_reviewer", "approver"}
 current_actor = ContextVar("lexaegis_actor", default="system")
 
 

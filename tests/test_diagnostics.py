@@ -83,8 +83,8 @@ def test_native_check_isolation_does_not_record_verified(tmp_path, monkeypatch, 
         record_calls.append(cmd)
         raise AssertionError("check-isolation must not record when probes fail")
 
-    monkeypatch.setattr(subprocess, "run", spy_run)
     store = Store(tmp_path / "app" / "app.sqlite")
+    monkeypatch.setattr(subprocess, "run", spy_run)
     with store.transaction() as repo:
         repo.put("settings", {"id": "settings", "isolation_verified": False, "deployment_mode": "native"})
     monkeypatch.setattr(sys, "argv", ["lexaegis", "check-isolation"])

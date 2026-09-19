@@ -4,7 +4,7 @@
 
 ## 怎么跑
 
-`python -m pip install -e ".[test]"` → `cd frontend && pnpm install --frozen-lockfile && pnpm build` → `lexaegis start`。工作台 **http://127.0.0.1:8765**（不要用 `localhost`）。演示只接受内置合成材料。口令看终端。
+`python -m pip install -e ".[test]"` → `cd frontend && pnpm install --frozen-lockfile && pnpm build` → 回仓库根目录运行 `lexaegis start --profile demo`。演示工作台 **http://127.0.0.1:48765**；`production` 为 38765、`integration` 为 58765（以实际启动输出为准）。演示只接受内置合成材料。口令看终端。
 
 ## 技术栈
 
@@ -22,7 +22,7 @@ Python 3.12+ / FastAPI / SQLAlchemy；前端 React + Vite（`frontend/`）；隔
 | 代码 / 测试 / 包 | `lexaegis/`、`tests/`、`packs/`（无一 published） |
 | 运行库、真案、交付包 | `.data/`（不入库）。交付包：`.data/outbound_packets/` |
 
-改 `frontend/src` 先读 `.cursor/skills/lexaegis-workbench-ui`。仓库包 `2.0.0-draft.3`，`dispatch_allowed=false`。
+改 `frontend/src` 先读 `.cursor/skills/lexaegis-workbench-ui`。仓库首案包 `2.0.0-draft.3` 与产品包 `3.0.0-product-draft.1` 均为草稿，`dispatch_allowed=false`。本轮三环境、人审否决与常规逐请求放行见 `docs/DUAL_TRACK_ACCEPTANCE.md`；真实验收仍须真实证据，代码测试不代填通过。
 
 ## 当前状态（2026-09-14）
 

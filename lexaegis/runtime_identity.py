@@ -103,6 +103,7 @@ def _load_manifest(
     try:
         if isinstance(candidate, ReleaseBuildManifest):
             return candidate, candidate.status
-        return ReleaseBuildManifest.model_validate(candidate), "verified"
+        loaded = ReleaseBuildManifest.model_validate(candidate)
+        return loaded, loaded.status
     except (TypeError, ValidationError):
         return None, "invalid"

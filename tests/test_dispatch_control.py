@@ -20,7 +20,8 @@ def _cloud_settings(client, standby=None, primary_provider=None):
     assert client.put("/api/v1/settings", json=body).status_code == 200
 
 
-def test_unreviewed_standby_is_not_an_approved_target(env):
+def test_unreviewed_standby_is_not_an_approved_target(integration_env):
+    env = integration_env
     client = env["client"]
     payload = provider_payload()
     payload["id"] = "provider_standby"
@@ -39,7 +40,8 @@ def test_unreviewed_standby_is_not_an_approved_target(env):
     assert all(item.get("slot") != "standby" for item in evaluated["request"]["dependencies"]["authorized_recipients"])
 
 
-def test_reviewed_standby_is_bound_into_approved_targets(env):
+def test_reviewed_standby_is_bound_into_approved_targets(integration_env):
+    env = integration_env
     client = env["client"]
     payload = provider_payload()
     payload["id"] = "provider_standby"
@@ -61,7 +63,8 @@ def test_reviewed_standby_is_bound_into_approved_targets(env):
     assert any(item.get("slot") == "standby" for item in evaluated["request"]["dependencies"]["authorized_recipients"])
 
 
-def test_queued_send_is_rejected_after_pack_retirement(env):
+def test_queued_send_is_rejected_after_pack_retirement(demo_env):
+    env = demo_env
     case, task = demo_task(env)
     task = approve(env, task)
     assert env["client"].post(f"/api/v1/tasks/{task['id']}/send").status_code == 200

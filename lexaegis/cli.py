@@ -9,7 +9,12 @@ from contextlib import contextmanager
 from pathlib import Path
 from .registry import import_pack
 from .storage import Store
-from .util import app_dir, exclusive_lock, restrict_mode
+from .util import exclusive_lock, restrict_mode
+
+
+def _profile_app_dir():
+    from .runtime_profile import profile_config
+    return profile_config()["app_dir"]
 
 
 @contextmanager
@@ -20,9 +25,13 @@ def exclusive_worker_lock(root):
         yield
 
 
-def backup(root, gateway, destination):
+def backup(root, gateway, destination, profile=None):
     """Offline backup; SQLite backup API includes committed WAL contents."""
     root, gateway, destination = Path(root), Path(gateway), Path(destination)
+    from .runtime_profile import backup_bindings
+    # Bind before the lock file is created, so a new empty runtime can be
+    # initialized while populated legacy directories still require migration.
+    bindings = backup_bindings(root, gateway, profile)
     with exclusive_worker_lock(root), tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp:
         entries = {}
         for label, folder, db in [("app", root, "app.sqlite"), ("gateway", gateway, "gateway.sqlite")]:
@@ -42,10 +51,28 @@ def backup(root, gateway, destination):
                 entries[f"{label}/{db}"] = copied.read_bytes()
                 for leftover in (copied, Path(str(copied) + "-wal"), Path(str(copied) + "-shm")):
                     leftover.unlink(missing_ok=True)
-        for file in (root / "files").glob("*"):
-            if file.is_file() and not file.is_symlink():
-                entries[f"app/files/{file.name}"] = file.read_bytes()
-        manifest = {"version": 1, "files": {k: hashlib.sha256(v).hexdigest() for k, v in entries.items()}}
+        for folder in ("files", "legal-evidence", "release-evidence"):
+            source_root = root / folder
+            if not source_root.exists():
+                continue
+            if source_root.is_symlink() or not source_root.is_dir():
+                raise ValueError(f"受控证据目录无效：{folder}")
+            for file in source_root.rglob("*"):
+                if file.is_symlink():
+                    raise ValueError(f"受控证据目录含符号链接：{file.relative_to(root)}")
+                if file.is_file():
+                    relative = file.relative_to(root).as_posix()
+                    entries[f"app/{relative}"] = file.read_bytes()
+        for filename in ("api-runtime-identity.json", "worker-runtime-identity.json", "release-build-manifest.json"):
+            file = root / filename
+            if file.is_symlink():
+                raise ValueError("运行身份元数据不能是符号链接")
+            if file.is_file():
+                entries[f"app/{filename}"] = file.read_bytes()
+        manifest = {"version": 2, "runtime_bindings": bindings,
+                    "release_image": os.environ.get("LEX_RELEASE_IMAGE"),
+                    "route_image": os.environ.get("LEX_ROUTE_IMAGE"),
+                    "files": {k: hashlib.sha256(v).hexdigest() for k, v in entries.items()}}
         with zipfile.ZipFile(destination, "x", zipfile.ZIP_DEFLATED) as archive:
             archive.writestr("manifest.json", json.dumps(manifest))
             for name, data in entries.items():
@@ -53,26 +80,68 @@ def backup(root, gateway, destination):
         restrict_mode(destination, 0o600)
 
 
-def restore(archive_path, root, gateway):
+def restore(archive_path, root, gateway, profile=None):
     root, gateway = Path(root), Path(gateway)
-    if (root / "app.sqlite").exists() or (gateway / "gateway.sqlite").exists() or any((root / "files").glob("*")):
+    app_payloads = ("app.sqlite", "files", "legal-evidence", "release-evidence",
+                    "api-runtime-identity.json", "worker-runtime-identity.json", "release-build-manifest.json")
+    gateway_payloads = ("gateway.sqlite", "gateway-runtime-identity.json")
+    if (any((root / name).exists() for name in app_payloads)
+            or any((gateway / name).exists() for name in gateway_payloads)):
         raise ValueError("恢复仅支持空目标目录；不会覆盖现有案件")
     with zipfile.ZipFile(archive_path) as archive:
         infos = archive.infolist()
-        if sum(i.file_size for i in infos) > 2*1024**3:
+        if len(infos) > 100000 or sum(i.file_size for i in infos) > 2*1024**3:
             raise ValueError("备份解压内容超出限制")
         manifest = json.loads(archive.read("manifest.json"))
-        if manifest.get("version") != 1:
+        if manifest.get("version") not in (1, 2):
             raise ValueError("不支持的备份版本")
+        from .runtime_profile import bind_runtime, selected_profile, validate_backup_bindings
+        chosen = selected_profile(profile)
+        if manifest.get("version") == 1:
+            raise ValueError("旧版备份缺少运行环境标记；需先按原数据归属执行显式迁移")
+        validate_backup_bindings(manifest.get("runtime_bindings") or {}, chosen)
+        bind_runtime(root, "app", chosen)
+        bind_runtime(gateway, "gateway", chosen)
         files = {}
-        for name, checksum in manifest["files"].items():
-            parts = Path(name).parts
-            if name.startswith("/") or ".." in parts or not (name in ("app/app.sqlite", "gateway/gateway.sqlite") or (len(parts)==3 and parts[:2]==("app", "files"))):
-                raise ValueError("备份含不允许的路径")
-            content = archive.read(name)
-            if hashlib.sha256(content).hexdigest() != checksum:
-                raise ValueError("备份校验失败")
-            files[name] = content
+        if len({item.filename for item in infos}) != len(infos):
+            raise ValueError("备份含重复路径")
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as validation_dir:
+            validation_root = Path(validation_dir)
+            staged = {}
+            for name, checksum in manifest["files"].items():
+                parts = Path(name).parts
+                allowed = (
+                    name in ("app/app.sqlite", "gateway/gateway.sqlite")
+                    or (len(parts) >= 3 and parts[:2] == ("app", "files"))
+                    or (len(parts) >= 3 and parts[:2] == ("app", "legal-evidence"))
+                    or (len(parts) >= 3 and parts[:2] == ("app", "release-evidence"))
+                    or (len(parts) == 2 and parts[0] == "app" and parts[1] in ("api-runtime-identity.json", "worker-runtime-identity.json", "release-build-manifest.json"))
+                )
+                if name.startswith(("/", "\\")) or ".." in parts or not allowed:
+                    raise ValueError("备份含不允许的路径")
+                content = archive.read(name)
+                if hashlib.sha256(content).hexdigest() != checksum:
+                    raise ValueError("备份校验失败")
+                files[name] = content
+                staged[name] = content
+            listed = set(manifest.get("files") or {})
+            actual = {item.filename for item in infos if item.filename != "manifest.json"}
+            if actual != listed:
+                raise ValueError("备份目录与清单不一致")
+            for dbname in ("app/app.sqlite", "gateway/gateway.sqlite"):
+                if dbname in staged:
+                    check = validation_root / dbname.replace("/", "_")
+                    check.write_bytes(staged[dbname])
+                    conn = sqlite3.connect(check)
+                    try:
+                        if conn.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+                            raise ValueError("备份数据库完整性校验失败")
+                    finally:
+                        conn.close()
+    from .runtime_profile import restore_in_progress
+    from .upgrade import prepare_restore
+    restore_state = {"review_required": True}
+    with restore_in_progress(root, gateway, chosen):
         for name, content in files.items():
             parts = Path(name).parts
             target = (root if parts[0] == "app" else gateway).joinpath(*parts[1:])
@@ -80,6 +149,13 @@ def restore(archive_path, root, gateway):
             with target.open("xb") as file:
                 file.write(content)
             restrict_mode(target, 0o600)
+        # Revoke the gateway copy first so a crash cannot leave restored gateway
+        # grants usable while the application still contains old approvals.
+        if (gateway / "gateway.sqlite").is_file():
+            restore_state["gateway"] = prepare_restore(Store(gateway / "gateway.sqlite"), role="gateway")
+        if (root / "app.sqlite").is_file():
+            restore_state["app"] = prepare_restore(Store(root / "app.sqlite"), role="app")
+    return restore_state
 
 
 def main():
@@ -115,12 +191,21 @@ def main():
     p.add_argument("--reference", type=Path, help="已冻结build manifest；用于报告漂移字段")
     p = commands.add_parser("backup")
     p.add_argument("destination", type=Path)
+    p.add_argument("--profile", choices=["production", "demo", "integration"])
     p.add_argument("--offline-confirm", action="store_true", required=True, help="Confirm API, worker and gateway are stopped")
     p = commands.add_parser("restore")
     p.add_argument("archive", type=Path)
     p.add_argument("--target", type=Path, required=True)
     p.add_argument("--gateway-target", type=Path, required=True)
-    commands.add_parser("start", help="启动本机 API、worker 和独立网关")
+    p.add_argument("--profile", choices=["production", "demo", "integration"])
+    p = commands.add_parser("migrate-runtime", help="显式标记已有运行目录；只用于确认归属的旧数据")
+    p.add_argument("--root", type=Path, required=True)
+    p.add_argument("--role", choices=["app", "gateway"], required=True)
+    p.add_argument("--profile", choices=["production", "demo", "integration"], required=True)
+    p.add_argument("--declared-legacy-profile", choices=["production", "demo", "integration"], required=True)
+    p.add_argument("--confirm-existing-data-is-this-profile", action="store_true", required=True)
+    p = commands.add_parser("start", help="启动本机 API、worker 和独立网关")
+    p.add_argument("--profile", choices=["production", "demo", "integration"])
     p = commands.add_parser("edge", help="探测或拉起本机边侧 llama-server")
     p.add_argument("--start", action="store_true", help="端口未监听时尝试启动本机 llama-server")
     commands.add_parser("doctor", help="检查平台、目录、前端和可选能力")
@@ -180,13 +265,13 @@ def main():
     p.add_argument("--output", type=Path)
     args = parser.parse_args()
     if args.command == "import-pack":
-        store = Store(app_dir()/"app.sqlite")
+        store = Store(_profile_app_dir()/"app.sqlite")
         with store.transaction() as repo:
             pack = import_pack(repo, json.loads(args.file.read_text(encoding="utf-8")))
         print("Imported:", pack["id"])
     elif args.command == "runtime-pack":
         from .runtime_pack import create_runtime_pack_draft
-        store = Store(app_dir()/"app.sqlite")
+        store = Store(_profile_app_dir()/"app.sqlite")
         with store.transaction() as repo:
             runtime_pack = create_runtime_pack_draft(repo, args.source, args.import_report)
         print(json.dumps({
@@ -228,14 +313,20 @@ def main():
             print("未验收：发布候选未形成可验证基线，正式外发保持 blocked")
         raise SystemExit(0 if report.build_baseline_verified else 1)
     elif args.command == "backup":
-        backup(app_dir(), Path(os.getenv("LEX_GATEWAY_DIR", ".data/gateway")), args.destination)
+        from .runtime_profile import profile_config
+        config = profile_config(args.profile)
+        backup(config["app_dir"], config["gateway_dir"], args.destination, config["runtime_profile"])
         print("Backup created:", args.destination)
     elif args.command == "restore":
-        restore(args.archive, args.target, args.gateway_target)
-        print("Restored. Local account password hashes are included; gateway/cloud secrets are not. Reconfigure secrets and restart services.")
+        result = restore(args.archive, args.target, args.gateway_target, args.profile)
+        print("Restored in review-required state. Unstarted approvals and jobs were invalidated; sending/unknown tasks require reconciliation. Local account password hashes are included; gateway/cloud secrets are not. Reconfigure secrets and restart services.")
+    elif args.command == "migrate-runtime":
+        from .runtime_profile import migrate_legacy_runtime
+        result = migrate_legacy_runtime(args.root, args.role, args.profile, args.declared_legacy_profile)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
     elif args.command == "start":
         from .launcher import run
-        run()
+        run(args.profile)
     elif args.command == "edge":
         from .edge_runtime import edge_status, start_edge
         if args.start:
@@ -279,7 +370,7 @@ def main():
         if not report["ok"]:
             print(json.dumps(report, ensure_ascii=False, indent=2))
             raise SystemExit(2)
-        store = Store(app_dir()/"app.sqlite")
+        store = Store(_profile_app_dir()/"app.sqlite")
         with store.transaction() as repo:
             settings = repo.get("settings")
             settings.update(isolation_verified=True, deployment_mode="isolated", isolation_checked_at=now())

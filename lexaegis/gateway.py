@@ -6,8 +6,11 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Header
 from pydantic import BaseModel
 from .cloud import DualSlotProvider, cloud_endpoint_allowed, wire_contract_error
-from .contracts import ApprovedRequest
-from .runtime_identity import runtime_identity
+from .contracts import (ApprovedRequest, FormalReleasePolicy, FrozenFormalRequest,
+                        OneTimeDispatchGrant, ReleaseBuildManifest)
+from .formal_release import FIRST_RELEASE_TUPLE, FormalReleaseError, complete_gateway_claim, gateway_claim
+from .runtime_identity import runtime_identity, _load_manifest
+from .runtime_profile import bind_runtime, dispatch_scope
 from .storage import Store
 from .util import digest, now, restrict_mode, sign
 
@@ -15,19 +18,24 @@ from .util import digest, now, restrict_mode, sign
 class Envelope(BaseModel):
     request: ApprovedRequest
     approval: dict
+    formal_release: dict | None = None
     signature: str
 
 
 def create_gateway(data_dir=None, secret=None, provider=None, build_manifest=None):
     root = Path(data_dir or os.getenv("LEX_GATEWAY_DIR", ".data/gateway"))
-    root.mkdir(parents=True, exist_ok=True)
+    runtime = bind_runtime(root, "gateway")
+    startup_profile = runtime["runtime_profile"]
     restrict_mode(root, 0o700)
     store = Store(root / "gateway.sqlite")
     secret = secret or os.getenv("LEX_GATEWAY_SECRET", "")
     provider = provider or DualSlotProvider.from_env()
     app = FastAPI(title="LexAegis Egress Gateway", docs_url=None, redoc_url=None)
     app.state.store = store
+    app.state.runtime_profile = startup_profile
     app.state.runtime_identity = runtime_identity("gateway", build_manifest)
+    configured_manifest, _manifest_failure = _load_manifest(build_manifest, None)
+    app.state.build_manifest = configured_manifest
 
     def auth(value, signature):
         if not secret or not hmac.compare_digest(sign(value, secret), signature):
@@ -69,7 +77,19 @@ def create_gateway(data_dir=None, secret=None, provider=None, build_manifest=Non
     def dispatch(envelope: Envelope):
         request = envelope.request.model_dump()
         approval = envelope.approval
-        auth({"request": request, "approval": approval}, envelope.signature)
+        signed = {"request": request, "approval": approval}
+        if envelope.formal_release is not None:
+            signed["formal_release"] = envelope.formal_release
+        auth(signed, envelope.signature)
+        if request.get("transport") == "cloud" and not cloud_endpoint_allowed(request.get("target", "")):
+            raise HTTPException(403, "Cloud endpoint is outside gateway allowlist")
+        try:
+            dispatch_scope(request)
+            if startup_profile in {"demo", "integration"}:
+                from .synthetic_scope import validate_synthetic_request
+                validate_synthetic_request(request)
+        except ValueError as error:
+            raise HTTPException(403, str(error)) from error
         if digest(request) != approval.get("request_hash"):
             raise HTTPException(403, "Approval hash mismatch")
         if approval.get("actor_role") != "approver" or not approval.get("actor"):
@@ -90,6 +110,17 @@ def create_gateway(data_dir=None, secret=None, provider=None, build_manifest=Non
             raise HTTPException(403, "Formal dispatch gates are incomplete")
         if request["mode"] == "demo" and not request["policy"].get("demo_exception"):
             raise HTTPException(403, "Missing synthetic demonstration scope")
+        formal = envelope.formal_release
+        if startup_profile == "production" and request["transport"] == "cloud" and formal is None:
+            raise HTTPException(403, "Formal production cloud dispatch requires a scoped one-time grant")
+        if startup_profile == "integration" and formal is not None:
+            raise HTTPException(403, "Synthetic integration cannot consume a formal release grant")
+        if startup_profile == "demo" and formal is not None:
+            raise HTTPException(403, "Offline demo cannot consume a formal release grant")
+        if request["transport"] not in {"cloud", "mock"}:
+            raise HTTPException(403, "Gateway only accepts cloud dispatch or offline mock requests")
+        if request["transport"] == "mock" and startup_profile != "demo":
+            raise HTTPException(403, "Mock dispatch is restricted to the offline demo profile")
         dual_slot = (request.get("dependencies") or {}).get("dual_slot") if request["transport"] == "cloud" else None
         if request["transport"] == "cloud":
             slots = dual_slot if isinstance(dual_slot, dict) else {}
@@ -108,8 +139,11 @@ def create_gateway(data_dir=None, secret=None, provider=None, build_manifest=Non
                 raise HTTPException(403, "No approved cloud recipient")
             if request["target"] not in approved_targets:
                 raise HTTPException(403, "Request target is not an approved recipient")
-            if not cloud_ready():
-                raise HTTPException(409, "Cloud credential is not configured")
+            if formal is not None:
+                if slots.get("standby"):
+                    raise HTTPException(403, "Formal first release permits only the primary slot")
+                if not slots.get("primary") or slots["primary"].get("target") != request["target"]:
+                    raise HTTPException(403, "Formal request target must match its primary slot")
         with store.transaction() as repo:
             try:
                 old = repo.get(request["request_id"], "send")
@@ -118,8 +152,16 @@ def create_gateway(data_dir=None, secret=None, provider=None, build_manifest=Non
                 return old
             except KeyError:
                 pass
+            if request["transport"] == "cloud" and not cloud_ready():
+                raise HTTPException(409, "Cloud credential is not configured")
+            formal_claim = None
+            if startup_profile == "production" and request["transport"] == "cloud":
+                formal_claim = _persist_and_claim_formal(repo, formal, request, approval,
+                                                         app.state.runtime_identity,
+                                                         app.state.build_manifest)
             record = {"id": request["request_id"], "request_hash": digest(request), "status": "sending",
-                      "at": now(), "result": None, "attempts": [], "authorized_recipients": []}
+                      "at": now(), "result": None, "attempts": [], "authorized_recipients": [],
+                      "formal_claim_id": formal_claim["id"] if formal_claim else None}
             repo.put("send", record)
 
         def persist_attempt(attempts, authorized):
@@ -151,6 +193,71 @@ def create_gateway(data_dir=None, secret=None, provider=None, build_manifest=Non
             record.update(status="unknown", error="调用后结果不明；禁止自动重发，请核对服务商记录")
         with store.transaction() as repo:
             repo.put("send", record)
+            if record.get("formal_claim_id"):
+                outcome = {"status": record["status"],
+                           "error_code": "gateway_unknown" if record["status"] == "unknown" else ""}
+                complete_gateway_claim(repo, record["formal_claim_id"], outcome)
         return record
 
     return app
+
+
+def _persist_and_claim_formal(repo, bundle, request, approval, identity, manifest):
+    """Persist the signed, minimal grant projection locally, then claim once.
+
+    This endpoint is reached only after HMAC verification of the whole envelope.
+    The gateway never accepts a client-supplied build manifest as authority.
+    """
+    if not isinstance(bundle, dict) or bundle.get("version") != 1:
+        raise HTTPException(403, "Invalid formal release bundle")
+    if manifest is None or identity.status != "verified":
+        raise HTTPException(403, "Gateway has no verified local release build identity")
+    try:
+        frozen = FrozenFormalRequest.model_validate(bundle.get("frozen_request"))
+        policy = FormalReleasePolicy.model_validate(bundle.get("policy"))
+        grant = OneTimeDispatchGrant.model_validate(bundle.get("grant"))
+        projection = bundle.get("projection")
+        if not isinstance(projection, dict):
+            raise FormalReleaseError("signed formal projection is missing")
+        if frozen.request_hash != digest(request) or frozen.request_id != request.get("request_id"):
+            raise FormalReleaseError("frozen formal request does not match signed dispatch request")
+        if policy.status != "armed_once" or policy.consumed_dispatches != 0:
+            raise FormalReleaseError("release policy is not an available single-use policy")
+        if (policy.scope_kind == "request" and policy.bound_request_hash != frozen.request_hash
+                or policy.scope_kind == "first_acceptance" and frozen.tuple != FIRST_RELEASE_TUPLE):
+            raise FormalReleaseError("release policy is bound to another request scope")
+        if (policy.build_manifest_hash != identity.runtime_identity_hash
+                or frozen.build_manifest_hash != identity.runtime_identity_hash
+                or policy.tuple != frozen.tuple or policy.allowed_target != frozen.target
+                or policy.allowed_model != frozen.model):
+            raise FormalReleaseError("signed policy is outside local gateway build or request scope")
+        if (grant.release_policy_id != policy.id or grant.request_hash != frozen.request_hash
+                or grant.build_manifest_hash != frozen.build_manifest_hash
+                or grant.tuple != frozen.tuple or grant.state not in {"issued", "reserved"}):
+            raise FormalReleaseError("signed one-time grant is outside frozen request scope")
+        expected_projection = {
+            "request_hash": frozen.request_hash,
+            "target": frozen.target,
+            "model": frozen.model,
+            "provider_profile_hash": frozen.provider_profile_hash,
+        }
+        if projection != expected_projection:
+            raise FormalReleaseError("signed projection does not match frozen request")
+        for kind, item, contract in (
+            ("formal_release_policy", policy, FormalReleasePolicy),
+            ("one_time_dispatch_grant", grant, OneTimeDispatchGrant),
+        ):
+            try:
+                prior = contract.model_validate(repo.get(item.id, kind))
+            except KeyError:
+                repo.put(kind, item.model_dump(mode="json"))
+            else:
+                if prior != item:
+                    # Never let a later client projection overwrite a consumed,
+                    # claimed, or otherwise changed local record.
+                    raise FormalReleaseError(f"local {kind} record already differs from signed projection")
+        return gateway_claim(repo, frozen=frozen, approval=approval, grant_id=grant.id,
+                             gateway_request_id=request["request_id"], projection=projection,
+                             runtime_identity=identity, build_manifest=manifest)
+    except (FormalReleaseError, ValueError, TypeError) as error:
+        raise HTTPException(403, str(error)) from error

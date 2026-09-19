@@ -1,0 +1,10 @@
+services:
+  api:
+    environment:
+      LEX_RUN_PROFILE: integration
+  worker:
+    environment:
+      LEX_RUN_PROFILE: integration
+  gateway:
+    environment:
+      LEX_RUN_PROFILE: integration

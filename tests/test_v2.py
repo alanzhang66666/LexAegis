@@ -116,7 +116,11 @@ def test_local_issue_extraction_groups_by_field_without_dispatch(env):
             json={"task_type": "issue_extraction", "transport": transport},
         )
         assert rejected.status_code == 409
-        assert rejected.json()["detail"] == "任务不支持所选传输方式"
+        assert rejected.json()["detail"] in (
+            "任务不支持所选传输方式",
+            "production profile rejects mock transport",
+            "production profile permits local or cloud transport only",
+        )
     assert env["client"].get(f"/api/v1/cases/{case['id']}").json()["ledger"] == []
 
 
@@ -158,7 +162,7 @@ def test_create_task_uses_v2_matrix_or_conservative_default(env):
         repo.put("pack",pack)
     block=document["ir"]["blocks"][0]
     env["client"].post(f"/api/v1/cases/{case['id']}/facts",json={"field":"day_nature","value":"工作日","source_ids":[block["id"]],"confirmed":True,"day_nature":"weekday"})
-    task=env["client"].post(f"/api/v1/cases/{case['id']}/tasks",json={"transport":"cloud"}).json()
+    task=env["client"].post(f"/api/v1/cases/{case['id']}/tasks",json={"transport":"cloud", "pack_id":pack["id"]}).json()
     by_field={item["field"]:item for item in task["decisions"]}
     assert by_field["event"]["necessity"]=="required"
     assert by_field["day_nature"]["necessity"]=="uncertain" and by_field["day_nature"]["transform"]=="delete"
@@ -167,11 +171,12 @@ def test_create_task_uses_v2_matrix_or_conservative_default(env):
         pack["task_field_matrix"]=[]
         pack["disclosure_rules"]=[]
         repo.put("pack",pack)
-    empty=env["client"].post(f"/api/v1/cases/{case['id']}/tasks",json={"transport":"cloud"}).json()
+    empty=env["client"].post(f"/api/v1/cases/{case['id']}/tasks",json={"transport":"cloud", "pack_id":pack["id"]}).json()
     assert all(item["necessity"]=="uncertain" and item["transform"]=="delete" for item in empty["decisions"])
 
 
-def test_wire_payload_excludes_local_only_data(env):
+def test_wire_payload_excludes_local_only_data(demo_env):
+    env = demo_env
     case=env["client"].post("/api/v1/demos",json={"scenario":"success"}).json()
     task=env["client"].post(f"/api/v1/cases/{case['id']}/tasks",json={"transport":"mock"}).json()
     evaluated=env["client"].post(f"/api/v1/tasks/{task['id']}/evaluate").json()

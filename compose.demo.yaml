@@ -1,0 +1,94 @@
+name: ${LEX_COMPOSE_PROJECT:-lexaegis-demo}
+x-runtime: &runtime
+  image: ${LEX_RELEASE_IMAGE:-lexaegis:local}
+  pull_policy: never
+  build: .
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  tmpfs: [/tmp]
+  restart: unless-stopped
+services:
+  api:
+    <<: *runtime
+    ports: ["127.0.0.1:${LEX_COMPOSE_API_PORT:-48765}:8765"]
+    environment:
+      LEX_RUN_PROFILE: demo
+      LEX_DATA_DIR: /data
+      LEX_LOCAL_PASSWORD: ${LEX_LOCAL_PASSWORD:?Set a demo local password}
+      LEX_GATEWAY_SECRET: ${LEX_GATEWAY_SECRET:?Set a demo signing secret}
+      LEX_GATEWAY_URL: http://gateway:8766
+      LEX_GATEWAY_PORT: 8766
+      LEX_DEPLOYMENT_MODE: isolated
+      LEX_ISOLATED: "1"
+      LEX_RUNTIME_ROLE: api
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes: ["${LEX_APP_DATA_PATH:-./.data/demo/app}:/data"]
+    networks: [internal, publish, redteam]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/api/v1/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+  isolate-api-route:
+    image: ${LEX_ROUTE_IMAGE:-alpine:3.20}
+    pull_policy: never
+    network_mode: service:api
+    depends_on:
+      api: {condition: service_started}
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    command: ["sh", "-c", "ip route del default || true; exec sleep infinity"]
+    restart: unless-stopped
+  worker:
+    <<: *runtime
+    command: [python, -m, lexaegis.worker]
+    depends_on:
+      api: {condition: service_healthy}
+    environment:
+      LEX_RUN_PROFILE: demo
+      LEX_DATA_DIR: /data
+      LEX_GATEWAY_URL: http://gateway:8766
+      LEX_GATEWAY_SECRET: ${LEX_GATEWAY_SECRET:?Set a demo signing secret}
+      LEX_REDTEAM_SECRET: ${LEX_REDTEAM_SECRET:?Set a separate demo red-team secret}
+      LEX_REDTEAM_URL: http://redteam:8767
+      LEX_DEPLOYMENT_MODE: isolated
+      LEX_ISOLATED: "1"
+      LEX_RUNTIME_ROLE: worker
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes: ["${LEX_APP_DATA_PATH:-./.data/demo/app}:/data"]
+    networks: [internal]
+  gateway:
+    <<: *runtime
+    command: [python, -m, uvicorn, "lexaegis.gateway:create_gateway", --factory, --host, 0.0.0.0, --port, "8766", --no-access-log]
+    environment:
+      LEX_RUN_PROFILE: demo
+      LEX_GATEWAY_DIR: /data
+      LEX_GATEWAY_SECRET: ${LEX_GATEWAY_SECRET:?Set a demo signing secret}
+      LEX_CLOUD_API_KEY: ""
+      LEX_CLOUD_PRIMARY_KEY: ""
+      LEX_CLOUD_STANDBY_KEY: ""
+      LEX_RUNTIME_ROLE: gateway
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes: ["${LEX_GATEWAY_DATA_PATH:-./.data/demo/gateway}:/data"]
+    networks: [internal]
+  redteam:
+    <<: *runtime
+    command: [python, -m, uvicorn, "lexaegis.redteam:app", --host, 0.0.0.0, --port, "8767", --no-access-log]
+    environment:
+      LEX_REDTEAM_SECRET: ${LEX_REDTEAM_SECRET:?Set a separate demo red-team secret}
+      LEX_RUNTIME_ROLE: redteam
+      PYTHONDONTWRITEBYTECODE: "1"
+    networks: [internal]
+    # No volumes and no gateway credentials.
+networks:
+  internal:
+    internal: true
+  redteam:
+    internal: true
+  publish:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.enable_ip_masquerade: "false"
