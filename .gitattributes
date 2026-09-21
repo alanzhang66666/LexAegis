@@ -1,0 +1,3 @@
+# Byte-exact checkout for hash-verified fixtures and packs.
+data/** -text
+packs/** -text

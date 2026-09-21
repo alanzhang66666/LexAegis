@@ -24,3 +24,10 @@ data/真实案件/
 # Keep these if a packet is dropped at repo root by mistake.
 LA001_D_外发交付包_*/
 LA001_D_外发交付包_*.zip
+# Delivery artifacts (submission packages, screenshots, reference repos).
+# Rebuild via scripts/build_submission.py; see deliverables/README.md.
+deliverables/*
+!deliverables/README.md
+# Local pytest scratch dirs (tests run with --basetemp)
+pytest-*/
+_demo_*.py

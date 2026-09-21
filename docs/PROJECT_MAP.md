@@ -88,7 +88,7 @@ flowchart LR
 
 法学只走 [legal/README.md](legal/README.md)。Agent 边界见根目录 [AGENTS.md](../AGENTS.md)。
 
-Stub 路径（只跳转，不当规格）：[PLAN.md](../PLAN.md)、[案隐盾_项目核心共识与系统架构.md](../案隐盾_项目核心共识与系统架构.md)、根目录两份法学跳转、[PLAN_STATUS.md](PLAN_STATUS.md)、[IMPLEMENTATION_V2.md](IMPLEMENTATION_V2.md)、[THIRD_PARTY.md](THIRD_PARTY.md)。索引见 [README.md](README.md)。
+Stub 路径（只跳转，不当规格）：[PLAN_STATUS.md](PLAN_STATUS.md)、[IMPLEMENTATION_V2.md](IMPLEMENTATION_V2.md)、[THIRD_PARTY.md](THIRD_PARTY.md)。根目录中文跳转文件已于 2026-09-21 移除，旧路径对照见 [README.md](README.md)「原根目录文件归位对照」。交付物与比赛包在 `deliverables/`（不入库）。
 
 本机复现（按需，本批不跑全量 pytest）：
 

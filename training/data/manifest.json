@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "dataset": "lexaegis_grpo_synthetic",
+  "record_count": 8,
+  "sha256": "78d2cd5e295eee19944fa000d01655ea854b8f3cebc75bdf9265b230ac455b3e",
+  "source": "data/mock_labor_v1/records.jsonl",
+  "source_kind": "fully_synthetic",
+  "training_scope": "output_contract_and_evidence_grounding_only",
+  "legal_annotation_status": "pending",
+  "checkpoint_status": "not_generated",
+  "formal_dispatch_effect": "none"
+}

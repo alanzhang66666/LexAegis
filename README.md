@@ -16,6 +16,14 @@
 
 本轮双线实现与操作入口：[三环境与 Windows 交付](docs/DUAL_TRACK_DEPLOY.md)、[人工否决、常规逐请求放行及验收](docs/DUAL_TRACK_ACCEPTANCE.md)、[产品规则草稿准备](docs/legal/PRODUCT_RULE_PREPARATION.md)。产品版可对不同案件和后续新请求分别审批；规则、请求、证据、许可各自绑定版本，不再以全库一次试点额度代替常规授权。
 
+交付物分为[比赛版与生产版](docs/DELIVERY_EDITIONS.md)：比赛版参照竞赛材料分组，端侧模型采用
+固定提交的 `unsloth/Qwen3-4B-Base` 与 `Qwen3_(4B)-GRPO.ipynb`，并保留完整基座权重、
+LexAegis 专用训练投影/奖励器、逐文件 SHA-256 和复现清单；当前 checkpoint 状态为
+`not_generated`，不得把基座冒充成已训练成品。生产版先生成失败关闭的待签封结构，只有取得
+核验构建、固定镜像、wheel、依赖清单和目标环境证据后，才能用 `scripts/package_delivery.py`
+封成正式离线包。两种形态可用 `python scripts/build_submission.py --edition both
+--competition-model-dir <固定模型快照>` 一次生成。
+
 ---
 
 ## 1. 现在能做什么、还缺什么
@@ -154,7 +162,7 @@ flowchart LR
 
 ## 4. 目录
 
-根目录中文文件只做跳转。东西放哪：
+根目录只留代码与构建文件（中文文档已归入 docs/legal/archive，对照见 `docs/README.md`）。东西放哪：
 
 | 找什么 | 去哪 |
 | --- | --- |
@@ -165,6 +173,7 @@ flowchart LR
 | 代码 / 测试 / 包 | `lexaegis/`、`tests/`、`packs/` |
 | 仓库评测语料 | `data/`（当前仅 `mock_labor_v1` 8 条全合成，`dispatch_allowed=false`） |
 | 运行库、真案、交付包 | `.data/`（不入库）。交付包：`.data/outbound_packets/` |
+| 比赛交付物 / 截图 / 案例包 | `deliverables/`（不入库，README 除外）；`build_submission.py` 默认输出 |
 | 边侧声明（无权重） | `models/catalog/` |
 
 仓库不分发模型权重、真实案件或效果数字。

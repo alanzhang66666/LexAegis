@@ -1,5 +1,7 @@
 # 边侧模型、云端与 OCR
 
+> 比赛版随包模型说明（2026-09-20）：`deliverables/competition_submission/1-智能体作品及其完整材料/` 的 bundled 交付以 `Qwen3-4B-GRPO.Q4_K_M.gguf` 为默认本地运行权重，并附带规范命名的 Qwen3 Transformers 分片、tokenizer/config、最终可选 LoRA 与 Windows `llama-server`。该比赛包的启动优先级由 `docs/EDGE_MODEL_INTERFACE.md` 和 `models/edge/qwen3-4b-grpo/ASSET_MANIFEST.json` 规定；本页以下 MiniCPM 内容是主仓库旧部署回退说明，不覆盖比赛包。模型资产的来源与许可证证据边界以比赛包内 `THIRD_PARTY_NOTICES.md` 为准，未据此宣称模型效果已经验收。
+
 将 `.env.example` 复制为 `.env` 后按需填写。真实密钥只放在被忽略的目录中。未配置边侧模型时，正式案件仍可人工录入事实。
 
 ## 边侧小模型

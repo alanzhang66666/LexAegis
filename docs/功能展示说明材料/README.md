@@ -13,5 +13,6 @@
 | [README.docx](README.docx) | 本页 Word 副本 |
 | [第4项-功能展示与说明材料.md](第4项-功能展示与说明材料.md) | 可改底稿；改完用 pandoc 重出 Word |
 | `01-login.png` … `14-users.png` | 与正文第二节同名 |
+| [drafts/](drafts/) | 底稿 R1 与补交清单（自根目录移入），非成稿 |
 
-索引入口：[../README.md](../README.md)。根目录 [功能展示说明材料.md](../../功能展示说明材料.md) 只跳转。
+索引入口：[../README.md](../README.md)。根目录旧跳转 `功能展示说明材料.md` 已移除。

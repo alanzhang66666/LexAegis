@@ -12,7 +12,7 @@ Python 3.12+ / FastAPI / SQLAlchemy；前端 React + Vite（`frontend/`）；隔
 
 ## 目录与约定
 
-根目录中文文件只做跳转。东西放哪：
+根目录只留代码与构建文件；中文文档已归入 docs/legal/archive，旧路径对照见 `docs/README.md`「原根目录文件归位对照」。东西放哪：
 
 | 找什么 | 去哪 |
 | --- | --- |
@@ -21,6 +21,7 @@ Python 3.12+ / FastAPI / SQLAlchemy；前端 React + Vite（`frontend/`）；隔
 | 法源表、标注 xlsx/docx | `legal/sources/`、`legal/templates/` |
 | 代码 / 测试 / 包 | `lexaegis/`、`tests/`、`packs/`（无一 published） |
 | 运行库、真案、交付包 | `.data/`（不入库）。交付包：`.data/outbound_packets/` |
+| 比赛交付物 / 截图 / 案例包 | `deliverables/`（不入库）；`build_submission.py` 默认输出 |
 
 改 `frontend/src` 先读 `.cursor/skills/lexaegis-workbench-ui`。仓库首案包 `2.0.0-draft.3` 与产品包 `3.0.0-product-draft.1` 均为草稿，`dispatch_allowed=false`。本轮三环境、人审否决与常规逐请求放行见 `docs/DUAL_TRACK_ACCEPTANCE.md`；真实验收仍须真实证据，代码测试不代填通过。
 
