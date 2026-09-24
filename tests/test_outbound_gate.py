@@ -1,16 +1,20 @@
 from lexaegis.d_path import LAYER_B_CLOSED, UNJUDGED_COMBINATION, combination_input_hash
 from lexaegis.governance import pack_content_hash, publish_pack_record, validate_formal_gate
 from lexaegis.outbound_gate import (
+    G0,
     G2,
     G3,
     G5,
     G7,
     G8,
     G9,
+    EDGE_REVIEW_BLOCKED_PREFIX,
+    KIND_VERIFICATION,
     PACK_LEGAL_UNFROZEN,
     PACK_UNPUBLISHED,
     WEIGHTS_UNFROZEN,
     collect_outbound_blockers,
+    edge_review_hits,
     product_dispatch_state,
 )
 from lexaegis.policy import assess
@@ -139,3 +143,13 @@ def test_validate_formal_gate_wrapper_single_unpublished_line():
     assert PACK_UNPUBLISHED in blockers
     assert blockers.count(PACK_UNPUBLISHED) == 1
     assert pack_content_hash(published) != published["content_hash"]
+
+
+def test_edge_review_block_is_g0_not_vendor_g3():
+    assert edge_review_hits({"decision": "allow_human_review", "reason": "可复核"}) == []
+    hits = edge_review_hits({"decision": "block_external", "reason": "组合线索仍可能重新识别主体"})
+    assert len(hits) == 1
+    assert hits[0]["id"] == G0
+    assert hits[0]["id"] != G3
+    assert hits[0]["message"].startswith(EDGE_REVIEW_BLOCKED_PREFIX)
+    assert hits[0]["kind"] == KIND_VERIFICATION

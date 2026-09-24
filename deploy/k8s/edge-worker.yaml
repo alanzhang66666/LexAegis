@@ -1,0 +1,60 @@
+# Edge domain: worker. Runs parse/extract/redteam/send jobs; holds no cloud
+# API keys. Mirrors compose.yaml service `worker`.
+# UNVERIFIED on a real cluster — see README.md.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lexaegis-worker
+  namespace: lexaegis
+  labels:
+    app.kubernetes.io/name: lexaegis
+    app.kubernetes.io/component: edge-worker
+spec:
+  replicas: 1                        # file lock also prevents a second worker
+  strategy: {type: Recreate}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: edge-worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: lexaegis
+        app.kubernetes.io/component: edge-worker
+    spec:
+      nodeSelector:
+        lexaegis.io/domain: edge
+      tolerations:
+        - key: node-role.kubernetes.io/edge
+          operator: Exists
+          effect: NoSchedule
+      securityContext:
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: worker
+          image: lexaegis:local
+          imagePullPolicy: IfNotPresent
+          command: [python, -m, lexaegis.worker]
+          envFrom:
+            - configMapRef: {name: lexaegis-config}
+          env:
+            - name: LEX_GATEWAY_SECRET
+              valueFrom: {secretKeyRef: {name: lexaegis-secrets, key: LEX_GATEWAY_SECRET}}
+            - name: LEX_REDTEAM_SECRET
+              valueFrom: {secretKeyRef: {name: lexaegis-secrets, key: LEX_REDTEAM_SECRET}}
+            - name: LEX_RUNTIME_ROLE
+              value: worker
+            - name: LEX_EDGE_ALLOWED_HOSTS
+              value: lexaegis-edge-model
+            - name: LEX_EDGE_NODE_ID
+              valueFrom: {fieldRef: {fieldPath: spec.nodeName}}
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: app-data, mountPath: /data}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: app-data
+          persistentVolumeClaim: {claimName: lexaegis-app-data}
+        - {name: tmp, emptyDir: {}}

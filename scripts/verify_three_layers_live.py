@@ -1,8 +1,10 @@
-"""Verify the three progressive review layers against a running demo workbench.
+"""Verify the three progressive review layers against a running integration workbench.
 
-The script uses only bundled synthetic scenarios and mock execution.  It requires
-LEX_DEMO_LIVE_EDGE_REVIEW=1 on the running workbench and refuses to count a fixed
-fixture as model evidence.
+Layers 1 and 2 stop before any send. Layer 3 succeeds only when the approved
+request is a cloud dispatch (`transport=cloud`, `provenance=cloud`). Demo cannot
+do this: that profile rejects cloud transport. The script uses bundled synthetic
+scenarios, requires a live edge model, and refuses an offline mock as layer-3
+evidence. `formal_dispatch` stays `blocked`.
 """
 from __future__ import annotations
 
@@ -60,11 +62,11 @@ class ThreeLayerVerifier:
             "/api/v1/login", json={"username": username, "password": password}
         ))
 
-    def create_task(self, scenario: str):
+    def create_task(self, scenario: str, transport: str = "mock"):
         self.login_admin()
         case = require(self.client.post("/api/v1/demos", json={"scenario": scenario}))
         task = require(self.client.post(
-            f"/api/v1/cases/{case['id']}/tasks", json={"transport": "mock"}
+            f"/api/v1/cases/{case['id']}/tasks", json={"transport": transport}
         ))
         evaluated = require(self.client.post(f"/api/v1/tasks/{task['id']}/evaluate"))
         review = evaluated.get("edge_review") or {}
@@ -94,7 +96,7 @@ class ThreeLayerVerifier:
             "reason": (
                 "组合线索仍可识别特定主体，人工否决本次合成请求。"
                 if conclusion == "reject_current_request" else
-                "已核对合成事实和最小化范围，允许本次离线模拟处理。"
+                "已核对合成事实和最小化范围，允许本次请求进入审批。审批后按 cloud 真实发送。"
             ),
             "evidence_ids": [task["fact_snapshot"][0]["id"]],
             "reviewed_condition_ids": [conditions[0]["id"]],
@@ -103,7 +105,11 @@ class ThreeLayerVerifier:
             "scope_note": "仅适用于当前合成请求，不授予正式发送权。",
             "fact_premise": "材料为随包合成场景。",
             "authority_judgment": "人工复核结论仅约束当前请求。",
-            "external_processing_note": "只执行本地 mock，不调用外部服务。",
+            "external_processing_note": (
+                "本次请求不外发。"
+                if conclusion == "reject_current_request" else
+                "审批通过后，这一次请求按 cloud 发往已配置的云端槽位。"
+            ),
             "minimization_note": "原文留在本地，仅处理最小化候选事实。",
             "final_basis": "结合当前材料版本、模型审核及所选合成证据判断。",
         }
@@ -124,10 +130,12 @@ class ThreeLayerVerifier:
             "human_review": human,
             "final_state": final,
             "request_hash": task.get("request_hash"),
+            "transport": task.get("transport"),
+            "provenance": (task.get("artifact") or {}).get("provenance"),
         }
 
     def layer_one(self):
-        _case, task = self.create_task("linkage")
+        _case, task = self.create_task("linkage", "cloud")
         review = task["edge_review"]
         if review["decision"] != "block_external":
             raise RuntimeError("layer 1: final edge review did not block")
@@ -140,7 +148,7 @@ class ThreeLayerVerifier:
         ))
 
     def layer_two(self):
-        case, task = self.create_task("human_veto")
+        case, task = self.create_task("human_veto", "cloud")
         if task["edge_review"]["decision"] != "allow_human_review":
             raise RuntimeError("layer 2: live edge model did not allow human review")
         self.login_as("legal_reviewer")
@@ -167,7 +175,9 @@ class ThreeLayerVerifier:
         ))
 
     def layer_three(self):
-        case, task = self.create_task("success")
+        case, task = self.create_task("success", "cloud")
+        if task.get("transport") != "cloud":
+            raise RuntimeError("layer 3: task is not a cloud dispatch")
         if task["edge_review"]["decision"] != "allow_human_review":
             raise RuntimeError("layer 3: live edge model did not allow human review")
         self.login_as("legal_reviewer")
@@ -190,9 +200,9 @@ class ThreeLayerVerifier:
                 break
             time.sleep(0.5)
         if not final or final["status"] != "complete":
-            raise RuntimeError(f"layer 3: offline result did not complete: {final}")
-        if (final.get("artifact") or {}).get("provenance") != "simulation":
-            raise RuntimeError("layer 3: result is not the expected offline simulation")
+            raise RuntimeError(f"layer 3: cloud dispatch did not complete: {final}")
+        if final.get("transport") != "cloud" or (final.get("artifact") or {}).get("provenance") != "cloud":
+            raise RuntimeError(f"layer 3: result is not a cloud dispatch: {final}")
         final["edge_review"] = task["edge_review"]
         final["request_hash"] = task["request_hash"]
         self.results.append(self.evidence(
@@ -201,9 +211,17 @@ class ThreeLayerVerifier:
         ))
 
 
+def require_real_send_profile(profile: str | None) -> None:
+    if profile != "integration":
+        raise RuntimeError(
+            "第三条真发要求 runtime_profile=integration（http://127.0.0.1:58765）。"
+            f"当前是 {profile or 'unknown'}。demo 禁止 cloud，不能把第三条记成发送。"
+        )
+
+
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="验证真实边侧模型驱动的三层比赛流程")
-    parser.add_argument("--base-url", default="http://127.0.0.1:48765")
+    parser = argparse.ArgumentParser(description="验证真实边侧模型驱动的三层流程；第三条为云端真实发送")
+    parser.add_argument("--base-url", default="http://127.0.0.1:58765")
     parser.add_argument("--password", required=True)
     parser.add_argument("--timeout", type=float, default=240)
     parser.add_argument("--output", type=Path)
@@ -211,6 +229,7 @@ def main(argv=None):
     verifier = ThreeLayerVerifier(args.base_url, args.password, args.timeout)
     try:
         health = require(verifier.client.get("/api/v1/health"))
+        require_real_send_profile(health.get("runtime_profile") or health.get("profile"))
         for role in ("legal_reviewer", "approver"):
             verifier.ensure_user(role)
         verifier.layer_one()

@@ -398,6 +398,8 @@ def activate_runtime_pack(repo, runtime_pack_id: str, *, actor: str) -> dict:
         "actor_user_id": actor, "activated_at": now(),
     })
     audit(repo, "", "runtime_pack.activated", pack_id=pack_id, runtime_pack_id=runtime_pack_id, actor=actor)
+    from . import support_registry
+    support_registry.extend_packs(repo, source["id"], pack_id)
     return value
 
 
@@ -612,7 +614,7 @@ def retire_runtime_pack(
     # Active workbench requests reference the materialized pack, not the
     # draft aggregate. Invalidate those concrete dependencies in this same
     # transaction while preserving already-sending/rejected task history.
-    from . import release_service, review
+    from . import orchestrator, release_service, review
     for activation in repo.list("runtime_pack_activation"):
         if activation.get("runtime_pack_id") != runtime_pack_id:
             continue
@@ -624,7 +626,8 @@ def retire_runtime_pack(
                 continue
             review._stop_unstarted_sends(repo, task, reason="runtime_pack_retired")
             release_service.revoke(repo, task, reason, actor)
-            task.update(stale=True, status="stale", approval=None)
+            orchestrator.transition_task(repo, task, "stale", "STATE_TRANSITION",
+                                         stale=True, approval=None, actor=actor)
             repo.put("task", task, task["case_id"])
             audit(repo, task["case_id"], "task.rules_invalidated", task_id=task["id"], actor=actor)
     audit(

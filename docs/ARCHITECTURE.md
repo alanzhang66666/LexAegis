@@ -1,5 +1,7 @@
 # 架构与接口约定
 
+> 本文是**字段级工程详本**：契约字段、执行位置、状态机、API 与限额。分层架构总览、设计动机与取舍见根目录 [README.md](../README.md) / [README_EN.md](../README_EN.md)。
+
 LexAegis V1.0（`1.0.0`）使用模块化单体和独立外发网关。所有敏感原文留在边侧；云端仅负责经过批准的假名化事实摘要生成。劳动争议 V2 包仍为 `draft`：没有经审核服务商、四类真实攻击 `resisted`、隔离验收与具名审批时，正式外发保持失败关闭。这不是缺省“安全”。当前四类攻击执行器是工程基线，不是正式攻击结论，也不能作为法学背书。非正式发行。
 
 ## V1.0 范围
@@ -37,6 +39,16 @@ LexAegis V1.0（`1.0.0`）使用模块化单体和独立外发网关。所有敏
 | `lexaegis/experiments.py` | 隔离实验的 DP/RDP、掩码、投影和 MIA 输入门槛 |
 | `lexaegis/redteam.py` | 无原件/映射/真值访问的四类攻击接口（工程基线执行器） |
 | `packs/` | 版本化声明式案由知识包 |
+| `lexaegis/domain_runtime.py` | V2.2 运行时绑定：`CaseDomainBinding` / `CaseContextVersion` / `DomainRuntimeSnapshot`（内容寻址）/ `TaskStep` + resolver + `CloudTaskEnvelope` 构建 |
+| `lexaegis/domain_packages.py` | DomainPackageSet 拆分器 + 八类包生命周期（draft→validated→signed→published→deprecated→revoked）+ 签名 + 撤销传播 |
+| `lexaegis/support_registry.py` | Support Registry：`supported_cause` 聚合，包可加载 ≠ 案由已支持 |
+| `lexaegis/capability_registry.py` | Capability Registry：从 task_engine 登记能力，binding 三重断言（task_type/capability_id/provider_profile） |
+| `lexaegis/spi.py` | Domain SPI：`DomainPackageSPI` 只读适配（MappingProxy），包的**唯一**合法消费面 |
+| `lexaegis/orchestrator.py` | 通用编排器：transition 漏斗 + `derive_status` + `LEX_ORCHESTRATOR_AUTHORITY` 一致性开关（默认关，双写） |
+| `lexaegis/return_pipeline.py` | 返回管道九阶段（envelope→…→human_decision），`waiting-cloud` 断连挂起，mock 不可冒充 cloud provenance |
+| `lexaegis/domain_mapper.py` | 声明式 mapper 引擎：cause_pack.mapper 配置 → 字段改名/值归一/默认/必填断言，fail-closed |
+| `lexaegis/package_controller.py` | 包下发控制面：edge_node 注册 / assignment 期望态 / receipt 回执 / reconcile 对账，传输无关 |
+| `lexaegis/acceptance_suite.py` | DomainAcceptanceSuite 运行器：10 项包内断言 + 8 项 test_mapped + 1 项 manual_gate |
 
 业务聚合保存在 `records(id, kind, scope, body)` 中。本地会话绑定具名角色；SQLite 只支持单实例，不可置于网络共享盘。当前迁移是 `0002_v2_contracts`，从 0001 升级前生成并校验备份，失败保持旧版本。
 
@@ -57,9 +69,13 @@ LexAegis V1.0（`1.0.0`）使用模块化单体和独立外发网关。所有敏
 
 ## 主状态转换
 
-`draft → review / blocked → approved → queued → sending → complete / unknown / failed`
+`draft → review / blocked → approved → queued → sending → complete / unknown / failed`，另有 `rejected`（法学否决，对当次请求为终态）、`stopped`（主动停止）、`review_blocked`（法学复核阻断）。
+
+V2.2 对齐层（P1–P8 已落地，详见 [V2_2_ALIGNMENT.md](V2_2_ALIGNMENT.md)）：建案写 `case_domain_binding`，建任务解析 `domain_runtime_snapshot`（manifest 优先、无 manifest 走单体分节哈希过渡）+ `case_context_version`，任务迁移双写 `task_step`；快照绑定任务 evaluate 时构建 `cloud_task_envelope` 并由网关强制校验；返回路径走 `return_pipeline` 九阶段，TCP 连接失败挂起 `waiting-cloud` 退避而非 `unknown`；`supported_cause` 决定能否进入闭环，`capability`/`domain_package*`/`cloud_task_envelope`/`cloud_result_envelope`/`human_decision`/`task_step` 均为通用 records 聚合，无数据库迁移。消费侧（disclosure/gate）仍读单体 pack；任务状态写点已全部收敛到 `orchestrator.transition_task`（`VALIDATION`/`CLOUD` 步骤为观察通道不参与状态推导），`LEX_ORCHESTRATOR_AUTHORITY=1` 时漂移即 409 fail-closed；`product_dispatch_state()` 恒 blocked 未变。
 
 尚未发送的任务可停止。内容修改回到 draft 并清除审批；材料或配置修改标记旧任务 stale。queued/sending 时拒绝案件编辑。完成任务不可重发。
+
+门禁命中经 `outbound_gate.derive_disposition` 拆成两个正交结果：法律处置 `disposition`（`prohibited` > `needs_verification` > `needs_minimization` > `allowed`，由 prohibition/verification/minimization 三类命中决定）与系统就绪度 `readiness`（任何 `engineering` 命中即 `not_ready`，不产生法律结论）。
 
 发送意图与队列在同一业务事务中写入，然后由工作进程调用网关。网关先持久化 sending 再调用服务商。请求 ID 去重；超时后不主动重复调用。reconcile 只读取网关已有记录。
 
@@ -80,6 +96,7 @@ LexAegis V1.0（`1.0.0`）使用模块化单体和独立外发网关。所有敏
 - 任务：`/cases/{id}/tasks`、`/tasks/{id}/decisions/{fact}`、`evaluate`、`approve`、`send`、`stop`、`reconcile`、`attacks/run`。
 - 校核：`/tasks/{id}/claims/{claim}/review`、`confirm`、`restoration`、`export?view=cloud|local`。
 - 扩展与治理：`/domains`、`/task-definitions`、`/packs/import`、`validate`、`transition`、`publish`、`/providers`、`/risk-protocols`。
+- V2.2 观测：`/cases/{id}/domain-binding`、`/cases/{id}/context-versions`、`/tasks/{id}/runtime-snapshot`、`/tasks/{id}/cloud-result-envelopes`、`/tasks/{id}/human-decisions`、`/supported-causes`、`/domain-packages`、`/domain-package-manifests`（含 transition、bundle 导出、import-bundle）、`/edge-nodes`、`/package-assignments`（含 deliver/receipts/revoke）、`/package-distribution/reconcile`。
 - 配置与状态：`/bootstrap`、`/settings`、`/capabilities`、`/cases/{id}/events`。
 
 业务接口需要本地会话。写操作校验 Origin，Host 白名单。浏览器会话 8 小时；重启 API 后需重新登录。
@@ -97,7 +114,7 @@ LexAegis V1.0（`1.0.0`）使用模块化单体和独立外发网关。所有敏
 正式任务先做确定性风险检验，生成由线协议载荷、任务版本、材料版本和累计披露版本构成的 `attack_input_hash`。Worker 只把假名化 `wire_payload`、受预算限制的既往披露和声明为攻击者可见的辅助数据发给 redteam。使用独立的 `LEX_REDTEAM_SECRET`，不得与网关 HMAC 密钥复用。
 
 ```bash
-LEX_REDTEAM_SECRET=replace-with-a-separate-random-secret docker compose --profile redteam up -d
+LEX_REDTEAM_SECRET="replace-with-a-separate-random-secret" docker compose --profile redteam up -d
 ```
 
 每类结果以 `AttackRun` 持久化。只有四类均为 `resisted` 才消除红队阻断；超时、契约错误、中断或内容变化记为 `error` 或拒绝写入。`attacks.evaluate` 把攻击器与评分器分开：攻击器只产出候选、排序、属性预测和检索证据，评分器独立对照真值或披露依据。无候选记为 `uncertain`，不得直接 `resisted`。已知泄漏的合成阳性对照必须让身份恢复为 `succeeded`。这是工程基线，不是正式攻击结论。

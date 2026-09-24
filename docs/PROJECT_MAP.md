@@ -17,7 +17,7 @@
 1. **native**：`lexaegis start` = launcher 拉起 API + worker + gateway。工作台 **8765**，网关 **8766**。约 2 分钟。
 2. **Playwright / `_ui_walk`**：**18765**（`LEX_API_PORT`）。口令与 Playwright 相同：`local-acceptance-only`。walker 截图进 `.data/ui-walk/`。`cd frontend && pnpm walk:ui` 约 3 分钟（须已有 18765 栈）。**未进 CI**。
 3. **Compose**：容器内仍是 8765；宿主机默认 `LEX_COMPOSE_API_PORT` 或 **38765**（避开 native 8765）。另有 profile：`redteam` / `benchmark` / `edge`。先停 native。
-4. 本机 pytest：2026-09-14 **283 过 / 3 跳过**（工作树含 D 路径）。`desktop-1280` e2e 仍以 2026-09-08 记录为准，本轮未重跑。远端 CI 本轮未取，不写成已通过。
+4. 本机 pytest：2026-09-24 **656 过 / 5 跳过**（含 V2.2 P1–P8 及权威化/控制面/mapper 新增项）；`LEX_ORCHESTRATOR_AUTHORITY=1` 全量同绿。`desktop-1280` e2e 仍以 2026-09-08 记录为准，本轮未重跑。远端 CI 本轮未取，不写成已通过。
 5. Compose 隔离探测过 ≠ 浏览器已通，≠ 法学条件已满足。`formal_dispatch=blocked`。
 
 ```mermaid
@@ -44,6 +44,7 @@ flowchart LR
 3. **门禁**：`policy.py`、`governance.py`、`detection.py`、`d_path.py`（D 试点；evaluate ≠ 发送）
 4. **外发**：`gateway.py`、`cloud.py`、`worker.py`、`providers.py`
 5. **评测**：`experiments.py`、`redteam.py`；本地确定性任务只在 `task_engine.py` 内置（`lexaegis.tasks` entry point **未**在 `pyproject.toml` 声明）
+6. **V2.2 对齐层**（P1–P8 已落地，均为通用 records 聚合，无迁移）：`domain_runtime.py`（binding/快照/上下文/TaskStep/云信封）、`domain_packages.py`（八类包拆分 + 生命周期 + 签名/撤销 + bundle 导出导入）、`support_registry.py`（可加载 ≠ 已支持）、`capability_registry.py` + `spi.py`（能力注册与包只读消费面）、`orchestrator.py`（状态写点全收敛；`LEX_ORCHESTRATOR_AUTHORITY=1` 时漂移即 409，默认仍关）、`return_pipeline.py`（九阶段 + `waiting-cloud` 断连挂起）、`domain_mapper.py`（cause_pack 声明式 mapper 真执行）、`package_controller.py`（包下发控制面：edge_node/assignment/receipt/reconcile）、`acceptance_suite.py`（19 基线：10 断言 / 8 映射 / 1 人工门禁）。回包与采纳契约：`cloud_result_envelope`（pending_human/rejected 收据，绑 request_hash+result_hash）、`human_decision`（confirm 采纳时落 adopted+actor+artifact_hash）；`LEX_GATEWAY_ROLE` 启动断言（edge 禁持凭据/cloud 必须持凭据）。消费侧仍读单体 pack；正式外发仍 blocked
 
 前端五个表面：
 
@@ -92,7 +93,7 @@ Stub 路径（只跳转，不当规格）：[PLAN_STATUS.md](PLAN_STATUS.md)、[
 
 本机复现（按需，本批不跑全量 pytest）：
 
-1. `python -m pytest -q` — 2026-09-14：283 过 / 3 跳过，约 1 分钟
+1. `python -m pytest -q` — 2026-09-24：656 过 / 5 跳过（authority=1 同绿），约 2.6–6.3 分钟
 2. `python -m lexaegis.cli dataset validate` — 约 1 分钟
 3. `cd frontend && pnpm exec tsc --noEmit && pnpm build` — 约 2 分钟
 4. `pnpm test:e2e -- --project=desktop-1280 --grep-invert five-viewport` — 约 8 分钟；五视口本轮未跑

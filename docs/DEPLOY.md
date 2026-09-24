@@ -40,6 +40,10 @@ lexaegis check-isolation
 
 当前交付环境若未安装 Docker，**不能把 Compose 文件当成隔离已通过的证据**。
 
+## Kubernetes / KubeEdge（草拟，未验证）
+
+`deploy/k8s/` 提供 V2.2 云边拓扑的 manifests：边域 `edge-api` / `edge-worker`（KubeEdge EdgeCore 节点，`lexaegis.io/domain: edge`），云域 `lexaegis-cgw`（唯一持有云凭据、唯一可出网）。原件与身份映射只落边侧 PVC；边域 Pod 经 NetworkPolicy 只能到达 CGW。**未在真实集群验证**——部署与断连/包下发/撤包演练是独立验收门禁，无演练收据不得宣称通过。详见 `deploy/k8s/README.md`。
+
 ## 启动排障
 
 若 `lexaegis start` 报端口占用（Windows `10048`）或 `worker.lock` 权限错误，说明旧 API/网关/worker 仍在运行。结束占用 `127.0.0.1:8765` 与 `8766` 的进程后再启动。请使用 **http://127.0.0.1:8765**，不要用 `localhost`。

@@ -25,12 +25,14 @@ def prepare_upgrade(store, identity):
         tasks = repo.list("task")
         if any(t.get("status") in {"sending", "unknown"} for t in tasks):
             raise ValueError("存在进行中或结果不明的调用；请使用原构建核对状态后升级")
+        from . import orchestrator
+        from .release_service import revoke
         for task in tasks:
             if task.get("status") in {"complete", "failed", "stopped", "rejected"}:
                 continue
-            from .release_service import revoke
             revoke(repo, task, "应用构建升级，原批准失效")
-            task.update(approval=None, stale=True, status="stale")
+            orchestrator.transition_task(repo, task, "stale", "STATE_TRANSITION",
+                                         approval=None, stale=True, actor="system:upgrade")
             repo.put("task", task, task["case_id"])
             for job in repo.list("job", task["case_id"]):
                 if job.get("payload", {}).get("task_id") == task["id"] and job.get("status") in {"pending", "running"}:
@@ -80,6 +82,7 @@ def prepare_restore(store, *, role="app"):
         uncertain_task_ids = set()
         uncertain_previous_status = {}
         if role == "app":
+            from . import orchestrator
             for task in repo.list("task"):
                 state = task.get("status")
                 if state in _RESTORE_TERMINAL_TASK_STATES:
@@ -88,12 +91,16 @@ def prepare_restore(store, *, role="app"):
                 task["stale"] = True
                 if state in {"sending", "unknown"}:
                     uncertain_previous_status[task["id"]] = state
-                    task["status"] = "unknown"
+                    orchestrator.transition_task(
+                        repo, task, "unknown", "STATE_TRANSITION",
+                        actor="system:restore")
                     task["restore_reconciliation_required"] = True
                     task["error"] = "恢复的备份含发送中或结果不明请求；需核对网关与服务商记录，禁止自动重发。"
                     uncertain_task_ids.add(task["id"])
                 else:
-                    task["status"] = "stale"
+                    orchestrator.transition_task(
+                        repo, task, "stale", "STATE_TRANSITION",
+                        actor="system:restore")
                     stale_task_ids.add(task["id"])
 
                 formal = task.get("formal_release") or {}

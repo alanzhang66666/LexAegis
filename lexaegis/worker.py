@@ -2,7 +2,7 @@ import os
 import time
 from pathlib import Path
 import httpx
-from . import service, release_service
+from . import domain_runtime, orchestrator, return_pipeline, service, release_service
 from .contracts import AttackRun
 from .diagnostics import resolve_redteam_url
 from .governance import protocol_content_hash
@@ -13,8 +13,7 @@ from .providers import EdgeClient, ExtractTruncatedError, merge_extract_facts
 from .runtime_identity import runtime_identity, write_runtime_identity
 from .runtime_profile import bind_runtime, current_profile
 from .storage import Store
-from .task_engine import validate_cloud_result
-from .util import app_dir, audit, digest, exclusive_lock, now, sign, uid
+from .util import app_dir, audit, digest, edge_node_id, exclusive_lock, now, sign, uid
 
 EXTRACT_CHUNK_CHARS = 14000
 EXTRACT_CHUNK_BLOCKS = 8
@@ -45,57 +44,29 @@ def chunk_extract_blocks(blocks, max_chars=EXTRACT_CHUNK_CHARS, max_blocks=EXTRA
 
 def finish_response(repo, task, record):
     status = record["status"]
+    entry_status = task.get("status")
+    orchestrator.assert_consistent(repo, task)
+    domain_runtime.record_task_step(repo, task, "VALIDATION", status, from_status=task.get("status"))
     release_service.mirror_outcome(repo, task, record)
     disclosure = repo.get(task["request"]["request_id"], "disclosure")
     if status == "complete":
         try:
-            validated = validate_cloud_result(task["type"], record["result"], task, task["fact_snapshot"])
-            case = service.get_case(repo, task["case_id"])
-            if task["transport"] == "mock":
-                provenance = "simulation"
-            elif task["transport"] == "local":
-                provenance = "local_deterministic"
-            else:
-                provenance = "cloud"
-            claims = validated.get("claims") if isinstance(validated, dict) else validated
-            if isinstance(claims, list):
-                all_anchors = service.anchor_index(repo, task["case_id"], current_only=False)
-                current_anchors = service.anchor_index(repo, task["case_id"], current_only=True)
-                for claim in claims:
-                    display = claim["text"]
-                    entries = case.get("mapping_entries", [])
-                    if entries:
-                        for entry in entries:
-                            display = display.replace(entry["wire_token"], entry["original_value"])
-                    else:
-                        for original, alias in case.get("mapping", {}).items():
-                            display = display.replace(alias, original)
-                    claim["local_text"] = display
-                    anchor_ids = claim["anchors"]
-                    claim["anchors"] = [all_anchors[anchor_id] for anchor_id in anchor_ids if anchor_id in all_anchors]
-                    if any(anchor_id not in current_anchors for anchor_id in anchor_ids):
-                        claim["issues"].append("引用包含历史材料版本锚点，确认前须显式核对")
-                        claim["status"] = "needs_review"
-                extra = validated if isinstance(validated, dict) else {}
-                task["artifact"] = {
-                    "schema_version": 2, "claims": claims, "provenance": provenance, "confirmed": False,
-                    "unused_fact_ids": list(extra.get("unused_fact_ids") or []),
-                    "gaps": list(extra.get("gaps") or []),
-                    "feedback_issues": list(extra.get("feedback_issues") or []),
-                }
-            else:
-                task["artifact"] = {"schema_version": 2, "result": validated, "provenance": provenance, "confirmed": False}
-            task["status"] = "complete"
-            if isinstance(task.get("artifact"), dict) and "claims" in task["artifact"]:
-                service.seed_followups(repo, case, task)
+            return_pipeline.execute(repo, task, record)
         except ValueError as error:
-            task.update(status="failed", error=str(error))
+            # V2.2 invalid_cloud_result: return payload failed schema/anchor
+            # validation -> failed closed, never adopted.
+            task.update(status="failed", error=str(error), failure_code="invalid_cloud_result")
+            return_pipeline.record_result_envelope(
+                repo, task, record, "rejected", failure_code="invalid_cloud_result")
         disclosure["status"] = "sent"
     elif status in ("unknown", "sending"):
-        task.update(status="unknown", error="发送结果不明。仅可查询网关记录，不会重新提交。")
+        task.update(status="unknown", error="发送结果不明。仅可查询网关记录，不会重新提交。",
+                    failure_code="unknown")
         disclosure["status"] = "unknown"
     else:
-        task.update(status="failed", error=record.get("error") or "网关未接受该请求")
+        # V2.2 failed_before_send: the gateway provably never accepted it.
+        task.update(status="failed", error=record.get("error") or "网关未接受该请求",
+                    failure_code="failed_before_send")
         disclosure["status"] = "rejected"
     for key in ("attempts", "authorized_recipients", "selected_slot", "failover_reason",
                 "generation_started", "generation_state", "transmission_state", "disclosure_state"):
@@ -104,7 +75,14 @@ def finish_response(repo, task, record):
             task[key] = record[key]
     repo.put("disclosure", disclosure, task["case_id"])
     repo.put("task", task, task["case_id"])
-    audit(repo, task["case_id"], "send."+task["status"], task_id=task["id"])
+    orchestrator.transition_task(repo, task, step_type="STATE_TRANSITION",
+                                 from_status=entry_status)
+    audit(repo, task["case_id"], "send."+task["status"], task_id=task["id"],
+          failure_code=task.get("failure_code"),
+          result_hash=digest(record["result"]) if "result" in record else None,
+          cloud_envelope_id=(task.get("cloud_envelope") or {}).get("id"),
+          domain_runtime_snapshot_id=task.get("domain_runtime_snapshot_id"),
+          edge_node_id=edge_node_id())
 
 
 def recover(store):
@@ -120,8 +98,14 @@ def recover(store):
                     # The durable sending boundary was never crossed.
                     job.update(status="pending", error=None)
                 else:
-                    finish_response(repo, task, {"status": "unknown"})
-                    job.update(status="failed", error="工作进程中断；查询网关记录，不自动重发")
+                    try:
+                        finish_response(repo, task, {"status": "unknown"})
+                        job.update(status="failed", error="工作进程中断；查询网关记录，不自动重发")
+                    except domain_runtime.DomainRuntimeError as error:
+                        # Authority-mode drift: fail closed — the task stays
+                        # untouched for manual reconciliation and recovery
+                        # continues with the remaining jobs.
+                        job.update(status="failed", error=f"orchestrator 状态漂移：{error}")
             elif job["kind"] == "redteam":
                 task = repo.get(job["payload"]["task_id"], "task")
                 for protocol_id in job["payload"].get("protocol_ids", []):
@@ -155,7 +139,15 @@ def recover(store):
 def process_one(store, root, gateway_client=None, redteam_client=None):
     bind_runtime(root, "app")
     with store.transaction() as repo:
-        pending = [j for j in repo.list("job") if j["status"] == "pending"]
+        for pending_job in repo.list("job"):
+            if pending_job["status"] == "pending" and pending_job.get("not_before"):
+                if pending_job["not_before"] > 1:
+                    pending_job["not_before"] -= 1
+                else:
+                    pending_job.pop("not_before", None)
+                repo.put("job", pending_job, pending_job["case_id"])
+        pending = [j for j in repo.list("job")
+                   if j["status"] == "pending" and not j.get("not_before")]
         if not pending:
             return False
         job = pending[0]
@@ -314,16 +306,19 @@ def process_one(store, root, gateway_client=None, redteam_client=None):
                 if job["kind"] == "send":
                     service.authorize_dispatch(repo, task, phase="send", release_context=context)
                     release_service.mark_sending(repo, task)
-                    task["status"] = "sending"
+                    orchestrator.transition_task(repo, task, "sending", "STATE_TRANSITION")
                     repo.put("task", task, task["case_id"])
             secret = os.getenv("LEX_GATEWAY_SECRET", "")
             base = os.getenv("LEX_GATEWAY_URL", "http://127.0.0.1:8766")
             client = gateway_client or httpx.Client(timeout=100, trust_env=False)
+            suspended = False
             try:
                 if job["kind"] == "send":
                     content = {"request": task["request"], "approval": task["approval"]}
                     if task.get("formal_release"):
                         content["formal_release"] = task["formal_release"]
+                    if task.get("cloud_envelope"):
+                        content["cloud_envelope"] = task["cloud_envelope"]
                     response = client.post(base+"/dispatch", json={**content, "signature": sign(content, secret)})
                 else:
                     ident = task["request"]["request_id"]
@@ -335,11 +330,22 @@ def process_one(store, root, gateway_client=None, redteam_client=None):
                 else:
                     response.raise_for_status()
                     record = response.json()
-            except Exception:
-                record = {"status": "unknown"}
+            except Exception as error:
+                # Edge autonomy: a connect failure means nothing crossed the
+                # send boundary — suspend waiting-cloud instead of 'unknown'.
+                if job["kind"] == "send" and return_pipeline.is_connect_error(error):
+                    suspended = True
+                else:
+                    record = {"status": "unknown"}
             finally:
                 if gateway_client is None:
                     client.close()
+            if suspended:
+                with store.transaction() as repo:
+                    task = repo.get(job["payload"]["task_id"], "task")
+                    job = repo.get(job["id"], "job")
+                    return_pipeline.mark_waiting_cloud(repo, task, job)
+                return True
             with store.transaction() as repo:
                 task = repo.get(task["id"], "task")
                 finish_response(repo, task, record)

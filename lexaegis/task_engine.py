@@ -13,7 +13,7 @@ TASK_DEFINITIONS = [
      "input_schema": {"type": "object", "required": ["facts"], "properties": {"facts": {"type": "array"}}},
      "output_schema": {"type": "object", "required": ["claims"], "properties": {
          "claims": {"type": "array"}, "unused_fact_ids": {}, "gaps": {}}},
-     "prompt_template": "根据已批准事实生成事实摘要，每条陈述必须给出 source_ids。同时返回 unused_fact_ids（未被任何陈述引用的外发事实 id）和 gaps（{code, detail, fact_ids}，code 仅为 missing_field、insufficient_support、ambiguous_reference、other）。不得改写身份 token，不得补充真实身份。",
+     "prompt_template": "根据已批准事实生成事实摘要。顶层字段必须是 claims，禁止使用 statements。claims 的每一项必须给出 text 和 source_ids。同时返回 unused_fact_ids（未被任何 claims 项引用的外发事实 id）和 gaps（{code, detail, fact_ids}，code 仅为 missing_field、insufficient_support、ambiguous_reference、other）。不得改写身份 token，不得补充真实身份。",
      "validator": "claims_v2", "transports": ["local", "mock", "cloud"], "ui_renderer": "claims", "max_payload_chars": 50000},
     {"schema_version": 2, "id": "timeline", "name": "时间线", "version": "2.0", "status": "available", "execution_type": "local_deterministic",
      "input_schema": {"type": "object", "required": ["facts"], "properties": {"facts": {"type": "array"}}},

@@ -1,12 +1,19 @@
 import { defineConfig } from "@playwright/test";
+import { existsSync } from "node:fs";
 
 const apiPort = process.env.LEX_API_PORT || "28785";
 const gatewayPort = process.env.LEX_GATEWAY_PORT || "28786";
+const liveEdge = process.env.LEX_DEMO_LIVE_EDGE_REVIEW === "1";
+const venvPython = process.platform === "win32"
+  ? "..\\.venv\\Scripts\\python.exe"
+  : "../.venv/bin/python";
+const python = process.env.PYTHON || (existsSync(venvPython) ? venvPython : "python");
 
 export default defineConfig({
   metadata: { runtimeProfile: "demo" },
   testDir: "./e2e",
-  timeout: 45000,
+  timeout: liveEdge ? 240000 : 45000,
+  expect: { timeout: liveEdge ? 180000 : 5000 },
   workers: 1,
   grepInvert: /technical reviewer can prepare a production rule draft|formal DOCX upload/,
   use: {
@@ -18,7 +25,7 @@ export default defineConfig({
       : {},
   },
   webServer: {
-    command: "python ../scripts/dev.py",
+    command: `${python} ../scripts/dev.py`,
     url: `http://127.0.0.1:${apiPort}/api/v1/health`,
     reuseExistingServer: false,
     gracefulShutdown: { signal: "SIGTERM", timeout: 15000 },

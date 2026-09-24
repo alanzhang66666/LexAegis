@@ -305,6 +305,9 @@ class DomainPackV2(Contract):
     legal_sources: list[LegalSourceRef] = Field(default_factory=list)
     immutable_relations: list[ImmutableRelation] = Field(default_factory=list)
     disclosure_rules: list[ConditionalDisclosureRule] = Field(default_factory=list)
+    # Declarative return-pipeline mapper config (see lexaegis/domain_mapper.py).
+    # Data only — packages never carry executable code.
+    mapper: dict[str, Any] = Field(default_factory=dict)
 
 
 class TaskDefinition(Contract):
@@ -854,3 +857,268 @@ class OneTimeDispatchGrant(Contract):
     ] = "pending"
     claimed_at: str | None = None
     gateway_attempt_id: str | None = None
+
+
+# --- V2.2 runtime binding objects (P1) ---
+# These records are written alongside the legacy aggregates; the legacy path
+# stays authoritative until the orchestration cut-over in a later phase.
+
+PLATFORM_API_VERSION = "v2"
+
+
+class CaseDomainBinding(Contract):
+    schema_version: Literal[1] = 1
+    id: str = Field(min_length=1)
+    case_id: str = Field(min_length=1)
+    cause_id: str = Field(min_length=1)
+    cause_pack_id: str | None = None
+    cause_pack_version: str | None = None
+    legal_rule_pack_id: str | None = None
+    legal_rule_pack_version: str | None = None
+    jurisdiction: str | None = None
+    domain_package_manifest_id: str | None = None
+    binding_status: Literal["active", "superseded"] = "active"
+    bound_at: str
+    bound_by: str = Field(min_length=1)
+
+
+class DomainRuntimeSnapshot(Contract):
+    schema_version: Literal[1] = 1
+    id: str = Field(min_length=1)
+    cause_pack_hash: str = Field(min_length=1)
+    legal_rule_pack_hash: str = Field(min_length=1)
+    capability_binding_hash: str | None = None
+    review_schema_hash: str = Field(min_length=1)
+    artifact_schema_hash: str = Field(min_length=1)
+    minimization_profile_hash: str = Field(min_length=1)
+    gate_profile_hash: str = Field(min_length=1)
+    platform_api_version: str = Field(min_length=1)
+    # provenance of the interim section-hash derivation over a monolithic pack
+    pack_id: str | None = None
+    pack_version: str | None = None
+    pack_content_hash: str | None = None
+    # provenance when resolved through a DomainPackageManifest (P2)
+    domain_package_manifest_id: str | None = None
+    capability_binding_id: str | None = None
+    runtime_environment: str = ""
+    created_at: str
+
+
+PACKAGE_TYPES = (
+    "cause_pack", "legal_rule_pack", "capability_binding", "review_schema",
+    "artifact_schema", "minimization_profile", "gate_profile",
+    "domain_acceptance_suite",
+)
+
+PACKAGE_LIFECYCLE = (
+    "draft", "validated", "signed", "published", "deprecated", "revoked",
+)
+
+_PACKAGE_TYPE = Literal[
+    "cause_pack", "legal_rule_pack", "capability_binding", "review_schema",
+    "artifact_schema", "minimization_profile", "gate_profile",
+    "domain_acceptance_suite",
+]
+
+_PACKAGE_STATUS = Literal[
+    "draft", "validated", "signed", "published", "deprecated", "revoked",
+]
+
+
+class DomainPackage(Contract):
+    schema_version: Literal[1] = 1
+    id: str = Field(min_length=1)
+    package_type: _PACKAGE_TYPE
+    package_id: str = Field(min_length=1)
+    cause_id: str | None = None
+    version: str = Field(min_length=1)
+    status: _PACKAGE_STATUS = "draft"
+    platform_api: str | None = None
+    compatibility: dict[str, str] = Field(default_factory=dict)
+    jurisdiction: str | None = None
+    effective_from: str | None = None
+    effective_to: str | None = None
+    publisher: str | None = None
+    supersedes: str | None = None
+    signature: str | None = None
+    signed_by: str | None = None
+    signed_at: str | None = None
+    provenance: dict[str, Any] = Field(default_factory=dict)
+    content: dict[str, Any] = Field(default_factory=dict)
+    content_hash: str = Field(min_length=1)
+    created_at: str
+    deprecated_at: str | None = None
+    revoked_at: str | None = None
+    revoked_by: str | None = None
+    revocation_reason: str | None = None
+
+
+class DomainPackageManifest(Contract):
+    schema_version: Literal[1] = 1
+    id: str = Field(min_length=1)
+    cause_id: str = Field(min_length=1)
+    version: str = Field(min_length=1)
+    status: _PACKAGE_STATUS = "draft"
+    package_refs: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    platform_api_version: str | None = None
+    publisher: str | None = None
+    signature: str | None = None
+    signed_by: str | None = None
+    signed_at: str | None = None
+    provenance: dict[str, Any] = Field(default_factory=dict)
+    content_hash: str = Field(min_length=1)
+    created_at: str
+    deprecated_at: str | None = None
+    revoked_at: str | None = None
+    revoked_by: str | None = None
+    revocation_reason: str | None = None
+
+
+class CaseContextVersion(Contract):
+    schema_version: Literal[1] = 1
+    id: str = Field(min_length=1)
+    context_version_id: str = Field(min_length=1)
+    case_id: str = Field(min_length=1)
+    domain_runtime_snapshot_id: str = Field(min_length=1)
+    verified_fact_set_hash: str = Field(min_length=1)
+    source_material_set_hash: str = Field(min_length=1)
+    identity_mapping_version: int = Field(ge=1)
+    cumulative_disclosure_state: int = Field(ge=0)
+    case_revision: int = Field(ge=1)
+    status: Literal["current", "superseded"] = "current"
+    superseded_by: str | None = None
+    created_at: str
+
+
+TASK_STEP_TYPES = (
+    "LOCAL", "CONTROL", "CLOUD", "VALIDATION", "HUMAN", "STATE_TRANSITION",
+)
+
+
+class TaskStep(Contract):
+    schema_version: Literal[1] = 1
+    id: str = Field(min_length=1)
+    task_id: str = Field(min_length=1)
+    case_id: str = Field(min_length=1)
+    step_type: Literal[
+        "LOCAL", "CONTROL", "CLOUD", "VALIDATION", "HUMAN", "STATE_TRANSITION"
+    ]
+    from_status: str | None = None
+    to_status: str = Field(min_length=1)
+    actor: str | None = None
+    at: str
+
+
+SUPPORT_STATUSES = (
+    "supported", "validation", "integration_only", "unsupported", "suspended",
+)
+
+
+class SupportedCause(Contract):
+    """V2.2 §8 Support Registry record: which causes the product supports.
+
+    Separate from the Package Registry — a loadable/validated package does
+    not make its cause supported. Support only gates entry into the product
+    loop (case/task creation); formal dispatch stays gated elsewhere.
+    """
+    schema_version: Literal[1] = 1
+    id: str = Field(min_length=1)
+    cause_id: str = Field(min_length=1)
+    status: Literal[
+        "supported", "validation", "integration_only", "unsupported", "suspended",
+    ] = "validation"
+    environments: list[str] = Field(default_factory=list)
+    pack_ids: list[str] = Field(default_factory=list)
+    manifest_ids: list[str] = Field(default_factory=list)
+    capabilities: list[str] = Field(default_factory=list)
+    jurisdiction: str | None = None
+    notes: str | None = None
+    version: int = Field(ge=1, default=1)
+    created_at: str
+    updated_at: str | None = None
+    updated_by: str | None = None
+
+
+FAILURE_CODES = (
+    "package_resolution_failed", "platform_api_mismatch",
+    "invalid_cloud_result", "failed_before_send", "unknown",
+)
+
+
+class CloudTaskEnvelope(Contract):
+    """V2.2 CloudContext Envelope: the minimized, approved context a task is
+    allowed to send cloud-side. case_ref is an opaque reference — the raw
+    case id never crosses the envelope boundary."""
+    schema_version: Literal[1] = 1
+    id: str = Field(min_length=1)
+    task_id: str = Field(min_length=1)
+    case_ref: str = Field(min_length=1)
+    cause_id: str = Field(min_length=1)
+    capability_id: str | None = None
+    capability_binding_id: str | None = None
+    context_version_id: str = Field(min_length=1)
+    domain_runtime_snapshot_id: str = Field(min_length=1)
+    request_hash: str = Field(min_length=1)
+    contract_version: int = Field(ge=1)
+    facts: list[dict[str, Any]] = Field(default_factory=list)
+    created_at: str
+
+
+class CloudResultEnvelope(Contract):
+    """V2.2 Cloud Result Envelope: the edge-side receipt binding a returned
+    result to the approved request. Cloud results are candidate outputs —
+    pipeline_status stays 'pending_human' until a human adopts the artifact
+    (see HumanDecision); a failed return validation records 'rejected'.
+    Written for any transport so the receipt trail is complete; provenance
+    records what the result actually is — a simulation can never read
+    'cloud'."""
+    schema_version: Literal[1] = 1
+    id: str = Field(min_length=1)
+    task_id: str = Field(min_length=1)
+    case_id: str = Field(min_length=1)
+    cloud_task_envelope_id: str | None = None
+    request_hash: str | None = None
+    result_hash: str = Field(min_length=1)
+    provenance: str = Field(min_length=1)
+    pipeline_status: Literal["pending_human", "rejected"]
+    failure_code: str | None = None
+    created_at: str
+
+
+class HumanDecision(Contract):
+    """V2.2 HumanDecision: the named human adoption of a candidate artifact.
+    Until this record exists the artifact is a candidate output, not a
+    decision. The decision binds actor, role and the exact artifact hash
+    reviewed."""
+    schema_version: Literal[1] = 1
+    id: str = Field(min_length=1)
+    task_id: str = Field(min_length=1)
+    case_id: str = Field(min_length=1)
+    artifact_hash: str = Field(min_length=1)
+    request_hash: str | None = None
+    decision: Literal["adopted"] = "adopted"
+    actor: str = Field(min_length=1)
+    actor_role: str = Field(min_length=1)
+    created_at: str
+
+
+class Capability(Contract):
+    """V2.2 Capability Registry record: what the platform can execute.
+
+    Registered from task_engine definitions (built-in or entrypoint-loaded).
+    A capability must exist and be available before any binding may point
+    at it — an unregistered capability call is rejected."""
+    schema_version: Literal[1] = 1
+    id: str = Field(min_length=1)
+    capability_id: str = Field(min_length=1)
+    task_type: str = Field(min_length=1)
+    api_version: str = Field(min_length=1)
+    name: str = ""
+    execution_type: str = ""
+    transports: list[str] = Field(default_factory=list)
+    input_schema: dict[str, Any] = Field(default_factory=dict)
+    output_schema: dict[str, Any] = Field(default_factory=dict)
+    privacy_contract: dict[str, Any] = Field(default_factory=dict)
+    status: Literal["available", "disabled"] = "available"
+    registered_by: str = "system"
+    created_at: str

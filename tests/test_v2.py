@@ -148,6 +148,12 @@ def test_entrypoint_task_executes_without_service_state_machine_change(env, monk
         pack["task_ids"].append("custom_timeline")
         pack["task_field_matrix"].append({"task_id":"custom_timeline","field":"event","necessity":"uncertain","rationale":"测试"})
         repo.put("pack",pack)
+        # P3: a new capability must be declared in the Support Registry
+        from lexaegis import support_registry
+        record = support_registry.support_for(repo, "labor")
+        support_registry.upsert_support(repo, {
+            **record, "capabilities": record["capabilities"] + ["R_custom_timeline"]},
+            actor="test")
     result=env["client"].post(f"/api/v1/cases/{case['id']}/tasks",
                               json={"task_type":"custom_timeline","transport":"local","pack_id":pack["id"]})
     assert result.status_code==200,result.text

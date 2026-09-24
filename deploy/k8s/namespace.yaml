@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: lexaegis
+  labels:
+    app.kubernetes.io/name: lexaegis
+    app.kubernetes.io/part-of: lexaegis

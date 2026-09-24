@@ -70,9 +70,9 @@ def test_bundle_refuses_mismatched_release_inputs(tmp_path, mutation, match):
     elif mutation == "wheel":
         args["wheel"].write_bytes(b"changed wheel")
     else:
-        inventory = json.loads(args["dependencies"].read_text())
+        inventory = json.loads(args["dependencies"].read_text(encoding="utf-8"))
         inventory["runtime_image_id"] = "sha256:" + "f" * 64
-        args["dependencies"].write_text(json.dumps(inventory))
+        args["dependencies"].write_text(json.dumps(inventory), encoding="utf-8")
     with pytest.raises(ValueError, match=match):
         package(**args)
     assert not args["output"].exists()

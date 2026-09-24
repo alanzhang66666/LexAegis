@@ -19,6 +19,7 @@ class Envelope(BaseModel):
     request: ApprovedRequest
     approval: dict
     formal_release: dict | None = None
+    cloud_envelope: dict | None = None
     signature: str
 
 
@@ -30,6 +31,21 @@ def create_gateway(data_dir=None, secret=None, provider=None, build_manifest=Non
     store = Store(root / "gateway.sqlite")
     secret = secret or os.getenv("LEX_GATEWAY_SECRET", "")
     provider = provider or DualSlotProvider.from_env()
+    # V2.2 云侧角色: "unified" runs both surfaces in one process (default,
+    # single-node dev). "edge" may serve the claim surface but must not hold
+    # cloud credentials — only the cloud-domain gateway owns provider keys.
+    # "cloud" refuses to start without a credential so a misdeployed
+    # credential-less cloud gateway fails closed instead of 409ing at send
+    # time. The claim/queue split across roles is a deployment step; in one
+    # process both surfaces still share this app.
+    gateway_role = (os.getenv("LEX_GATEWAY_ROLE") or "unified").strip().lower()
+    if gateway_role not in {"unified", "edge", "cloud"}:
+        raise ValueError("LEX_GATEWAY_ROLE must be unified, edge or cloud")
+    _has_key = bool(getattr(provider, "api_key", None) or getattr(provider, "primary_key", None))
+    if gateway_role == "edge" and _has_key:
+        raise ValueError("LEX_GATEWAY_ROLE=edge forbids holding cloud credentials")
+    if gateway_role == "cloud" and not _has_key:
+        raise ValueError("LEX_GATEWAY_ROLE=cloud requires a configured cloud credential")
     app = FastAPI(title="LexAegis Egress Gateway", docs_url=None, redoc_url=None)
     app.state.store = store
     app.state.runtime_profile = startup_profile
@@ -57,6 +73,7 @@ def create_gateway(data_dir=None, secret=None, provider=None, build_manifest=Non
             detail = "云端密钥未配置"
         return {
             "status": "available" if primary else "unconfigured",
+            "gateway_role": gateway_role,
             "primary": "available" if primary else "unconfigured",
             "standby": "available" if standby else "unconfigured",
             "detail": detail,
@@ -80,9 +97,12 @@ def create_gateway(data_dir=None, secret=None, provider=None, build_manifest=Non
         signed = {"request": request, "approval": approval}
         if envelope.formal_release is not None:
             signed["formal_release"] = envelope.formal_release
+        if envelope.cloud_envelope is not None:
+            signed["cloud_envelope"] = envelope.cloud_envelope
         auth(signed, envelope.signature)
         if request.get("transport") == "cloud" and not cloud_endpoint_allowed(request.get("target", "")):
             raise HTTPException(403, "Cloud endpoint is outside gateway allowlist")
+        _validate_cloud_envelope(envelope.cloud_envelope, request)
         try:
             dispatch_scope(request)
             if startup_profile in {"demo", "integration"}:
@@ -200,6 +220,42 @@ def create_gateway(data_dir=None, secret=None, provider=None, build_manifest=Non
         return record
 
     return app
+
+
+_ENVELOPE_REQUIRED_KEYS = (
+    "case_ref", "task_id", "cause_id", "context_version_id",
+    "domain_runtime_snapshot_id", "request_hash", "contract_version", "facts",
+)
+
+
+def _validate_cloud_envelope(cloud_envelope, request):
+    """V2.2 CloudContext check: snapshot-bound cloud tasks must carry a
+    consistent envelope. Fail-closed on missing or drifting fields. Legacy
+    requests without a snapshot dependency are unaffected."""
+    if request.get("transport") != "cloud":
+        return
+    snapshot_dep = (request.get("dependencies") or {}).get("domain_runtime_snapshot_id")
+    if not snapshot_dep:
+        return
+    if not isinstance(cloud_envelope, dict):
+        raise HTTPException(403, "Cloud task envelope required for snapshot-bound requests")
+    missing = [key for key in _ENVELOPE_REQUIRED_KEYS
+               if cloud_envelope.get(key) in (None, "", [])]
+    if missing:
+        raise HTTPException(403, f"Cloud task envelope missing fields: {', '.join(missing)}")
+    if cloud_envelope["task_id"] != request.get("task_id"):
+        raise HTTPException(403, "Cloud task envelope task mismatch")
+    if cloud_envelope["domain_runtime_snapshot_id"] != snapshot_dep:
+        raise HTTPException(403, "Cloud task envelope snapshot mismatch")
+    if cloud_envelope["request_hash"] != digest(request):
+        raise HTTPException(403, "Cloud task envelope request hash mismatch")
+    if cloud_envelope["context_version_id"] != (request.get("dependencies") or {}).get("context_version_id"):
+        raise HTTPException(403, "Cloud task envelope context version mismatch")
+    wire_facts = (request.get("wire_payload") or {}).get("facts")
+    if wire_facts is not None and cloud_envelope["facts"] != wire_facts:
+        raise HTTPException(403, "Cloud task envelope facts drift from wire payload")
+    if cloud_envelope.get("case_ref") == request.get("case_id"):
+        raise HTTPException(403, "Cloud task envelope leaks the raw case id")
 
 
 def _persist_and_claim_formal(repo, bundle, request, approval, identity, manifest):

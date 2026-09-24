@@ -77,6 +77,8 @@ test('recording Word can be imported from list and material panel', async ({ pag
   await page.getByRole('button', { name: '阅读全文', exact: true }).click();
   await expect(page.getByLabel('完整材料正文')).toContainText('诉讼时间线');
   await expect(page.getByLabel('完整材料正文')).toContainText('工作年限');
+  const workTab = page.getByRole('button', { name: '案件工作区', exact: true });
+  if (await workTab.isVisible()) await workTab.click();
   await page.getByRole('button', { name: '查看原文依据', exact: true }).first().click();
   await expect(page.getByLabel('完整材料正文')).toHaveCount(0);
   await expect(page.locator('.source-label')).toContainText('段落');

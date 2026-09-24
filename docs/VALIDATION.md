@@ -2,6 +2,92 @@
 
 产品版本现为 **V1.0**（`1.0.0`），非正式发行。下文 2026-09-08/09 条目仍是 0.2.0 周期的本机证据，未因改号重跑。
 
+## 2026-09-24 V2.2 CloudResultEnvelope / HumanDecision / 网关角色标志验证
+
+| 项 | 结果 |
+| --- | --- |
+| `tests/test_result_envelope.py` | **5 项通过**：complete 回包写 `pending_human` 信封（provenance/result_hash/request_hash/case 绑定正确）；schema 拒绝回包写 `rejected`+`invalid_cloud_result` 且 result_hash 绑定回包字节；unknown/无结果不写信封；`/tasks/{id}/confirm` 落 `human_decision`（adopted+actor+artifact_hash+request_hash）且审计带 `human_decision_id`；`LEX_GATEWAY_ROLE` 三态断言（edge 持凭据拒启动 / edge 无凭据可起 / cloud 无凭据拒启动 / unified 兼容） |
+| 契约 | `contracts.py` 增 `CloudResultEnvelope`（云回包边侧收据：candidate→pending_human→human adopted 链路）与 `HumanDecision`（具名采纳记录），对齐设计书 §34.3 固化名录——该名录 14 项 schema 至此全部有契约或聚合 |
+| 记录面 | `return_pipeline.execute` 成功落 pending_human；`finish_response` ValueError 分支落 rejected；`send.*` 审计补 `result_hash`；`artifact.confirmed` 审计补 `human_decision_id`；只读端点 `/tasks/{id}/cloud-result-envelopes`、`/tasks/{id}/human-decisions` |
+| 网关角色 | `LEX_GATEWAY_ROLE`（unified 默认/edge/cloud）启动期断言：edge 禁持云凭据（云域 CGW 唯一持凭据）、cloud 必须持凭据；`/health` 回 `gateway_role`。**claim/queue 跨角色拆分未做**——同进程双角色仍是当前拓扑 |
+| Python 全量测试 | `pytest -q`：**661 passed、5 skipped、1 warning** |
+| 边界 | CloudResultEnvelope 是边侧收据，不代表回包已被人工采纳；信封不携带 provider_request_id（provider 账本未暴露该字段）；角色标志只管凭据不变量，不拆分调度语义 |
+
+## 2026-09-24 V2.2 orchestrator 权威化 / 包下发控制面 / domain_mapper 真语义验证
+
+| 项 | 结果 |
+| --- | --- |
+| `tests/test_orchestrator.py` | **12 项通过**：VALIDATION/CLOUD 步骤不污染 `derive_status`；authority 模式下决策入口（authorize_dispatch）对漂移任务 409 `orchestrator_inconsistent`；authority 下 approve→enqueue 正常流程一致 |
+| `tests/test_package_controller.py` | **11 项通过**：注册/分配/投递/verified→activated 正路径；未注册节点/draft manifest/错节点/错哈希/错序回执全拒；撤销等 `revoked` 回执才终态；失败回执重试至上限后 failed；reconcile 分桶；`edge_apply`/`edge_revoke` 边侧往返 |
+| `tests/test_domain_mapper.py` | **11 项通过**：field_map/value_map/defaults/required_fields 引擎单测；labor cause_pack mapper 真执行（claims 获 `domain` 字段 + artifact 记包 id/content_hash）；`applies_to` 不匹配/无快照/demo V1 无 manifest 分别 skipped/skipped/unbound；必填缺失 → `invalid_cloud_result` fail-closed |
+| 收敛点 | `service`/`worker`/`review`/`upgrade`/`runtime_pack`/`support_registry`/`domain_packages` 的全部任务状态写点走 `orchestrator.transition_task`；`authorize_dispatch` 与 `finish_response` 入口接 `assert_consistent`；`recover` 对漂移任务 fail-closed 且不阻塞其他 job 恢复 |
+| 语义修正 | 包撤销/支持暂停传播原先只置 stale 标志却记 `to_status="stale"` 步骤（自相矛盾），现真正置 `status="stale"`，与 touch_case/upgrade/runtime_pack 三条既有 stale 路径一致 |
+| 测试修正 | `test_restart_recovers_inflight_send_as_unknown` 原以裸写模拟崩溃现场——真实代码中 step 与 task 同事务原子提交，该状态不可达；改为走漏斗写 `sending` 模拟真实可达崩溃态 |
+| Python 全量测试 | `pytest -q`：**656 passed、5 skipped、1 warning**；`LEX_ORCHESTRATOR_AUTHORITY=1 pytest -q`：**656 passed、5 skipped**——权威开关下全绿 |
+| 边界 | authority 开关仍默认关，转默认需真实环境观察期；控制器是记录层控制面，真实 KubeEdge 通道演练未做；mapper 为声明式数据配置，不虚构法律语义 |
+
+## 2026-09-24 V2.2 包下发 bundle 与审计字段回填验证
+
+| 本轮检查 | 实际结果与边界 |
+| --- | --- |
+| `tests/test_package_bundle.py` | **6 项通过**：导出含 manifest+全部引用包+bundle_hash；无签名导入一律降 `draft`；签名往返保留 `signed`；篡改内容/`platform_api` 不符 fail-closed；端点 admin 强制 |
+| audit 扩展字段 | `task.created`/`risk.evaluated`/`request.approved`/`send.reserved`/worker `send.*` 回填 `cause_id`/`domain_runtime_snapshot_id`/`capability_id`/`edge_node_id`；`edge_node_id` 由 `LEX_EDGE_NODE_ID` 注入，native 为空不造假 |
+| 边界 | bundle 通道是代码层落地，不等于集群下发已演练；`published` 状态不导入（发布是本地独立取证决定） |
+| Python 全量测试 | `pytest -q`：**631 passed、5 skipped、1 warning**（约 157 秒） |
+
+## 2026-09-24 V2.2 编排器/云信封/能力注册/SPI/返回管道/KubeEdge manifests/验收套件（P4–P8）落地验证
+
+本轮设备为 Windows / AMD64，Python 3.13（仓库 `.venv`）。按 `docs/V2_2_ALIGNMENT.md` P4–P8 落地，不改门禁、审批、发布链语义。
+
+| 本轮检查 | 实际结果与边界 |
+| --- | --- |
+| P4 `tests/test_orchestrator.py` | **9 项通过**：快照绑定任务建 `CloudTaskEnvelope`（case_ref 不透明）、信封入 `cloud_task_envelope` 聚合与 request 依赖、网关缺信封/信封不一致拒绝、orchestrator 双写 `from_status` 真实、`LEX_ORCHESTRATOR_AUTHORITY` 开关、`invalid_cloud_result`/`failed_before_send` 故障码落 task |
+| P5 `tests/test_capability_registry.py` | **6 项通过**：种子注册 4+ 能力、task 记 `capability_id`+`capability_binding_id`、disabled 能力建任务 409、未注册 task_type 仍 409、binding `provider_profile` 悬空 409、SPI 只读面（content 不可写、非包记录拒绝附着） |
+| P6 `tests/test_return_pipeline.py` | **5 项通过**：九阶段管道逐步落 `return:*` task_step、mock→simulation/local→local_deterministic/cloud→cloud 严格映射（未知 transport 拒绝）、`ConnectError`→`waiting-cloud` 挂起+`not_before` 退避不推进不伪造、`ReadTimeout` 仍 `unknown` 不重发、信封 request_hash 篡改→`invalid_cloud_result`+`return:envelope:failed` |
+| P8 `tests/test_acceptance_suite.py` | **3 项通过**：种子 labor 10 项 `package_asserted` 全过、8 项 `test_mapped` 带 `covered_by` 映射、G10 `manual_gate` 永不自动标过、包漂移 fail-closed、空包集非空洞为真 |
+| P7 `deploy/k8s/` | manifests 8 文件按 compose 拓扑映射（边域 api/worker 钉 `lexaegis.io/domain: edge`、云域 CGW 唯一持凭据出网、NetworkPolicy 复刻隔离）；`docs/DEPLOY.md` 增 KubeEdge 章节。**未在真实集群验证** |
+| Python 全量测试 | `pytest -q`：625 passed、5 skipped（P4–P8 时点）；含 bundle 与审计回填后为 **631 passed、5 skipped**（见上一节） |
+
+边界如实声明：① `domain_mapper` 阶段目前是只读 SPI 挂接钩子（attached/unbound/skipped），不改行为；② orchestrator 权威开关默认关，TaskStep 双写不接管状态机；③ KubeEdge manifests 未经集群演练，不宣称部署通过；④ 验收套件的 `test_mapped`/`manual_gate` 基线不在进程内执行，不替代真实验收；⑤ `product_dispatch_state()` 恒 blocked、G 门与 `dispatch_allowed` 零改动。
+
+## 2026-09-24 V2.2 Support Registry（P3）落地验证
+
+本轮设备为 Windows / AMD64，Python 3.13（仓库 `.venv`）。按 `docs/V2_2_ALIGNMENT.md` P3 落地与 Package Registry 分离的支持状态注册表：包可加载 ≠ 案由已支持。不改门禁、审批、发布链语义。
+
+| 本轮检查 | 实际结果与边界 |
+| --- | --- |
+| 新增测试 `tests/test_support_registry.py` | **8 项通过**：种子 labor supported（三 profile 环境）、contract_test 可加载但建案 409、悬空引用注册拒绝、pack_ids 收窄后建任务 409、capabilities 收窄后指定能力 409、suspend 阻断新建并使在途任务 stale（`system:support_suspended` task_step）、integration_only 在 production 环境建案 409、端点角色强制 |
+| 既有测试随新语义更新 3 处 | `test_domain_pack_extends…`：新案由导入后须显式注册支持才能建案（断言先 409 再注册后 200）；`test_entrypoint_task…`：插件新能力须登记 `R_custom_timeline`；`test_freeze_accepts_real_create_task…`：直接注入的 fixture pack 须登记 pack_id |
+| 自动并入规则 | 对已 supported 案由，pack 经 `registry.publish_pack` 或 `runtime_pack.activate_runtime_pack` 发布后自动并入 `pack_ids`（发布即 vetting 事件）；未注册案由不受影响。`evaluate_task` 增加支持状态软校验：失支持 → risk blocker + `approval_allowed=false`，不新增 G 门编号 |
+| Python 全量测试 | `pytest -q`：**602 passed、5 skipped、1 warning**（约 21 分钟） |
+
+边界如实声明：支持状态只决定"能否进入产品闭环"（建案/建任务/批准），**不授予外发**——`product_dispatch_state()` 恒 blocked、G 门与 `dispatch_allowed` 语义零改动；种子仅声明 labor 为 supported，`contract_test` 保持可加载未支持以证明两表分层。
+
+## 2026-09-24 V2.2 Domain Package Set 拆分（P2）落地验证
+
+本轮设备为 Windows / AMD64，Python 3.13（仓库 `.venv`）。按 `docs/V2_2_ALIGNMENT.md` P2 把单体 `DomainPackV2` 拆分为八类 package 聚合 + manifest，快照改走真实分包内容哈希，不改门禁、审批、发布链语义。
+
+| 本轮检查 | 实际结果与边界 |
+| --- | --- |
+| 新增测试 `tests/test_domain_packages.py` | **8 项通过**：确定性拆分、八类 package_type、哈希稳定、manifest 引用、源 pack 关联、按 task_type 匹配 capability_binding、真实包哈希入快照、P1 回落、生命周期转换、缺签名密钥 fail-closed、撤销阻断新建并使在途任务 stale、API 角色强制 |
+| 既有测试 `tests/test_domain_runtime.py` | 一处断言随 P2 语义更新：快照含按 task_type 匹配的 capability_binding_hash，不同 task_type 产不同快照（内容寻址仍成立）；`platform_api` 不匹配仍 fail-closed（manifest 路径同时校验单体 pack 声明） |
+| Python 全量测试 | `pytest -q`：**594 passed、5 skipped、1 warning**（约 251 秒）。期间发现一项语义裁决：manifest 生成后插件向 pack 追加的 task_type 无 binding 记录——裁决为"未绑定不阻断"（`capability_binding_id=None`，其余分包哈希仍钉死），而非 fail-closed；已撤销 manifest 则 fail-closed 不回落 |
+| 门禁/发布回归 | `outbound_gate.py`/`policy.py`/`formal_release.py` 本轮零改动；正式外发仍 fail-closed |
+
+边界如实声明：仓库种子 manifest 止于 `validated`，无 `LEX_PACKAGE_SIGNING_KEY` 不提供签名、不标记 published；`deprecated` 包仍可解析、`draft`/`revoked` 包拒绝解析；包拆分仅进快照/绑定层，`disclosure.py`、`outbound_gate.py` 消费侧仍读单体 pack——SPI 消费切换属后续阶段。
+
+## 2026-09-22 V2.2 运行时绑定模型（P1）落地验证
+
+本轮设备为 Windows / AMD64，Python 3.13（仓库 `.venv`）。按 `docs/V2_2_ALIGNMENT.md` P1 落地运行时绑定对象，绿地并行双写，不改门禁、审批、发布链语义。
+
+| 本轮检查 | 实际结果与边界 |
+| --- | --- |
+| 新增测试 `tests/test_domain_runtime.py` | **10 项通过**：绑定创建、快照内容寻址去重、包变更产新快照且旧任务不回改、上下文 supersede 链、request_hash 并入快照、老任务哈希公式不变、platform_api 不匹配 fail-closed、缺包 fail-closed、TaskStep 生命周期记录 |
+| Python 全量测试 | `pytest -q`：**586 passed、5 skipped**（约 117 秒）。期间发现两项既有失败：`test_adapted_recording.py::test_three_adapted_workflows` 中录音改编案 `la002/la003` 在既有未提交的边侧复核层 `_synthetic_edge_review` 落入 block_external 分支——本轮顺手补齐三个录音场景 id 的分支映射（la001_edge_block→阻断，la002/la003→可入人审，语义与场景名一致），修复后全绿 |
+| 门禁/发布回归 | `test_outbound_gate`、`test_formal_release_*`、`test_runtime_pack*`、`test_workflow` 等全部通过；`outbound_gate.py`/`policy.py`/`formal_release.py` 本轮零改动 |
+
+新对象为双写观测层：`domain_runtime_snapshot`、`case_context_version`、`case_domain_binding`、`task_step` 四个聚合 kind 走通用 records 存储，无数据库迁移。旧任务无快照字段时 request_hash 依赖公式逐字节不变。
+
 ## 2026-09-19 双线开发验证
 
 本轮设备为 macOS，Python 3.12；浏览器使用本机 Google Chrome。分支为 `feat/production-demo-dual-track`。本机未安装 Docker Desktop 或 PowerShell，未持有本轮获准真实案件和云端密钥，不把下列代码及合成测试作为 Windows 或真实外发验收。

@@ -1547,6 +1547,9 @@ nav button:not(.active):hover {
   padding: 10px 0;
   border-top: 1px solid var(--border, #e4e7dc);
 }
+.legal-review .review-blocks details > .secondary {
+  margin: 8px 0;
+}
 .legal-review .review-blocks p,
 .legal-review .review-blocks small,
 .legal-review .review-blocks li {

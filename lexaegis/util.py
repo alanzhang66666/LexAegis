@@ -31,6 +31,12 @@ def sign(value, secret):
     return hmac.new(secret.encode(), canonical(value).encode(), hashlib.sha256).hexdigest()
 
 
+def edge_node_id():
+    """V2.2 audit field: Kubernetes downward API injects spec.nodeName;
+    unset on native runs — absent means no claim, not a failure."""
+    return os.getenv("LEX_EDGE_NODE_ID") or None
+
+
 def app_dir():
     return Path(os.getenv("LEX_DATA_DIR", ".data/app")).resolve()
 

@@ -1,6 +1,7 @@
 import json
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from lexaegis import launcher
@@ -317,6 +318,61 @@ def test_launcher_strips_cloud_keys_from_api_env():
     assert "LEX_CLOUD_API_KEY" not in stripped
     assert "LEX_CLOUD_PRIMARY_KEY" not in stripped
     assert "LEX_CLOUD_STANDBY_KEY" not in stripped
+
+
+def test_launcher_strips_local_password_from_gateway_env():
+    env = {
+        "PATH": "/bin", "LEX_LOCAL_PASSWORD": "local", "LEX_EDGE_MODEL": "edge-small",
+        "LEX_EDGE_URL": "http://127.0.0.1:8080/v1", "LEX_CLOUD_PRIMARY_KEY": "primary",
+    }
+    gateway_env = {key: value for key, value in env.items()
+                   if key not in ("LEX_LOCAL_PASSWORD", "LEX_EDGE_MODEL", "LEX_EDGE_URL")}
+    assert "LEX_LOCAL_PASSWORD" not in gateway_env
+    assert gateway_env["LEX_CLOUD_PRIMARY_KEY"] == "primary"
+
+
+def test_api_bind_host_defaults_to_loopback(monkeypatch):
+    monkeypatch.delenv("LEX_BIND_HOST", raising=False)
+    assert launcher.api_bind_host() == "127.0.0.1"
+    monkeypatch.setenv("LEX_BIND_HOST", "   ")
+    assert launcher.api_bind_host() == "127.0.0.1"
+
+
+def test_api_bind_host_accepts_ip_literals(monkeypatch):
+    monkeypatch.setenv("LEX_BIND_HOST", "0.0.0.0")
+    assert launcher.api_bind_host() == "0.0.0.0"
+    monkeypatch.setenv("LEX_BIND_HOST", " 127.0.0.1 ")
+    assert launcher.api_bind_host() == "127.0.0.1"
+
+
+def test_api_bind_host_rejects_hostnames(monkeypatch):
+    for value in ("localhost", "0.0.0.0:8765", "example.com", "not-an-ip"):
+        monkeypatch.setenv("LEX_BIND_HOST", value)
+        with pytest.raises(SystemExit):
+            launcher.api_bind_host()
+
+
+def test_bind_host_is_loopback():
+    assert launcher.bind_host_is_loopback("127.0.0.1")
+    assert launcher.bind_host_is_loopback("::1")
+    assert not launcher.bind_host_is_loopback("0.0.0.0")
+    assert not launcher.bind_host_is_loopback("localhost")
+
+
+def test_service_commands_keep_gateway_on_loopback():
+    gateway_command, api_command = launcher.service_commands("8765", "8766", "0.0.0.0")
+    assert gateway_command[gateway_command.index("--host") + 1] == "127.0.0.1"
+    assert gateway_command[gateway_command.index("--port") + 1] == "8766"
+    assert "lexaegis.gateway:create_gateway" in gateway_command
+    assert api_command[api_command.index("--host") + 1] == "0.0.0.0"
+    assert api_command[api_command.index("--port") + 1] == "8765"
+    assert "lexaegis.api:create_app" in api_command
+
+
+def test_service_commands_default_bind_host_is_loopback():
+    gateway_command, api_command = launcher.service_commands("18765", "18766", launcher.DEFAULT_BIND_HOST)
+    assert gateway_command[gateway_command.index("--host") + 1] == "127.0.0.1"
+    assert api_command[api_command.index("--host") + 1] == "127.0.0.1"
 
 
 def provider_slot():

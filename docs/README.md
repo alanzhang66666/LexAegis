@@ -6,8 +6,10 @@
 | --- | --- |
 | [PROJECT_MAP.md](PROJECT_MAP.md) | 现行入口地图：下一步、运行时、代码与门禁 |
 | [../AGENTS.md](../AGENTS.md) | Agent 边界：怎么跑、禁写口径、当前状态。不是规格 |
-| [../README.md](../README.md) | 完整入口：现状、十门缺口、安装与合成演示 |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | 模块、契约、状态机、API、红队/实验附录 |
+| [../README.md](../README.md) | 产品架构书（中文）：设计动机、信任边界、领域模型、门禁、状态机、证据链、威胁模型与现状边界 |
+| [proposalv1.0.md](proposalv1.0.md) | 理想运行状态提案。不是当前验收，不是发送授权 |
+| [../README_EN.md](../README_EN.md) | Product architecture book in English (chapter-for-chapter with ../README.md) |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | 字段级工程详本：模块、契约字段、状态机、API、限额、红队/实验附录 |
 | [DEPLOY.md](DEPLOY.md) | 数据目录、备份恢复、Compose 隔离 |
 | [DUAL_TRACK_DEPLOY.md](DUAL_TRACK_DEPLOY.md) | 三种运行环境、Windows 维护与隔离目录 |
 | [DUAL_TRACK_ACCEPTANCE.md](DUAL_TRACK_ACCEPTANCE.md) | 人工否决录制路径、正式单次放行与交付验收边界 |
@@ -22,6 +24,8 @@
 | [DESIGN.md](DESIGN.md) | 界面 Token 与信息原则 |
 | [legal/README.md](legal/README.md) | 法学现行入口：规则正文、审核、一对一、攻击实跑 |
 | [../legal/](../legal/) | 法源对照表与标注示范模板；不是规格，也不是评测主库 |
+| [V2_2_ALIGNMENT.md](V2_2_ALIGNMENT.md) | V2.2 目标架构对齐：差距分析与分阶段计划。目标不是现状，不是规格，不是发送授权 |
+| [DOMAIN_ONBOARDING.md](DOMAIN_ONBOARDING.md) | 新案由接入流程：写包 → 生命周期 → manifest → 验收套件 → 部署 → Support Registry 激活 |
 
 ## 原根目录文件归位对照
 
@@ -43,6 +47,7 @@
 | `总法源目录（补充版）.xlsx` | `../legal/sources/总法源目录_v0.2.xlsx`（字节级同件） |
 | `硬性禁止、人工复核情形及冲突处理回答（修订版）.docx` | `../legal/sources/硬性禁止、人工复核情形及冲突处理回答_v0.2.docx`（字节级同件） |
 | `第4项-V1.0完整修改建议与技术资料补交清单.docx`、`第4项-功能展示与说明材料_V1.0修订底稿R1.docx` | [功能展示说明材料/drafts/](功能展示说明材料/drafts/) |
+| `LexAegis_系统架构设计书_V2.2_KubeEdge_多案由可扩展平台.md` | [LexAegis_系统架构设计书_V2.2_KubeEdge_多案由可扩展平台.md](LexAegis_系统架构设计书_V2.2_KubeEdge_多案由可扩展平台.md)；对齐状态见 [V2_2_ALIGNMENT.md](V2_2_ALIGNMENT.md) |
 
 ## Stub 路径（docs 内）
 

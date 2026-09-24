@@ -1,0 +1,17 @@
+# Non-secret runtime configuration. Secrets (LEX_GATEWAY_SECRET,
+# LEX_LOCAL_PASSWORD, cloud API keys) are NEVER committed — see
+# secret.example.yaml.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lexaegis-config
+  namespace: lexaegis
+data:
+  LEX_RUN_PROFILE: "production"
+  LEX_DATA_DIR: /data
+  LEX_GATEWAY_URL: http://lexaegis-cgw.lexaegis.svc.cluster.local:8766
+  LEX_EDGE_URL: http://lexaegis-edge-model.lexaegis.svc.cluster.local:8080/v1
+  LEX_CLOUD_ALLOWED_HOSTS: api.deepseek.com,dashscope.aliyuncs.com,dashscope-intl.aliyuncs.com,api.openai.com
+  LEX_ISOLATED: "1"
+  LEX_DEPLOYMENT_MODE: isolated
+  PYTHONDONTWRITEBYTECODE: "1"

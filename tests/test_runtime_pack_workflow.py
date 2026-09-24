@@ -11,7 +11,7 @@ BASE = "/api/v1/formal-release/runtime-packs"
 
 
 def prepare(env):
-    source = json.loads(SOURCE_PACK.read_text())
+    source = json.loads(SOURCE_PACK.read_text(encoding="utf-8"))
     source["version"] = "2.1.0-product-draft"
     response = env["client"].post(BASE, json={
         "source_pack": source, "import_report": {"status": "pending_review"},

@@ -53,6 +53,9 @@ def default_llama_bin() -> Path:
     configured = os.getenv("LEX_EDGE_BIN")
     if configured:
         return Path(configured)
+    bundled = repo_root() / "container" / "edge-runtime" / "windows" / name
+    if bundled.is_file():
+        return bundled
     return repo_root() / ".artifacts" / "llama-server" / name
 
 
@@ -60,6 +63,9 @@ def default_gguf() -> Path:
     configured = os.getenv("LEX_EDGE_GGUF")
     if configured:
         return Path(configured)
+    bundled = repo_root() / "models" / "edge" / "qwen3-4b-grpo" / "runtime" / "Qwen3-4B-GRPO.Q4_K_M.gguf"
+    if bundled.is_file():
+        return bundled
     return repo_root() / "models" / "MiniCPM5-2B-Q4_K_M.gguf"
 
 
@@ -67,7 +73,7 @@ def edge_pid_path() -> Path:
     configured = os.getenv("LEX_EDGE_PID_FILE")
     if configured:
         return Path(configured)
-    return repo_root() / ".artifacts" / "llama-server" / "llama-server.pid"
+    return repo_root() / ".data" / "edge-runtime" / "llama-server.pid"
 
 
 def _int_env(name, default):
@@ -291,7 +297,9 @@ def _spawn_once(command, wait):
                 pass
 
 
-def start_edge(wait=30):
+def start_edge(wait=None):
+    if wait is None:
+        wait = _int_env("LEX_EDGE_START_WAIT", 30)
     status = edge_status()
     if status["listening"]:
         return {**status, "started": False, "detail": "边侧已在监听，未再次启动"}

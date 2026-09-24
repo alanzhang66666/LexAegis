@@ -11,6 +11,8 @@ import hashlib
 import json
 import uuid
 
+from . import orchestrator
+
 
 TERMINAL_TASK_STATES = {"sending", "unknown", "complete", "failed", "stopped", "rejected"}
 LEGAL_CONCLUSIONS = {
@@ -161,7 +163,8 @@ def _pause_case_siblings(repo, task, actor):
             continue
         _stop_unstarted_sends(repo, sibling)
         revoke(repo, sibling, "本案出现新的人工复核事项", actor["user_id"])
-        sibling.update(review_status="blocked", status="review_blocked")
+        orchestrator.transition_task(repo, sibling, "review_blocked", "HUMAN",
+                                     review_status="blocked", actor=actor["user_id"])
         sibling["inherited_review_issue_ids"] = sorted({
             *sibling.get("inherited_review_issue_ids", []),
             *(i["id"] for i in list_open_issues(repo, task["case_id"])),
@@ -197,7 +200,8 @@ def submit_issue(repo, task, body, actor):
     _pause_case_siblings(repo, task, actor)
     task.setdefault("inherited_review_issue_ids", []).append(issue["id"])
     task["review_status"] = "blocked"
-    task["status"] = "review_blocked"
+    orchestrator.transition_task(repo, task, "review_blocked", "HUMAN",
+                                 actor=actor["user_id"])
     task["approval"] = None
     _record_idempotent(repo, task, "technical_issue_submitted", actor, normalized, key)
     repo.put("task", task, case["id"])
@@ -303,7 +307,10 @@ def record_review(repo, task, body, actor):
         _pause_case_siblings(repo, task, actor)
         task.setdefault("inherited_review_issue_ids", []).append(issue["id"])
         task["review_status"] = "rejected" if conclusion in {"prohibit_external_processing", "reject_current_request"} else "blocked"
-        task["status"] = "rejected" if task["review_status"] == "rejected" else "review_blocked"
+        orchestrator.transition_task(
+            repo, task,
+            "rejected" if task["review_status"] == "rejected" else "review_blocked",
+            "HUMAN", actor=actor["user_id"])
         task["approval"] = None
     else:
         for issue_id in resolved_ids:
@@ -316,7 +323,10 @@ def record_review(repo, task, body, actor):
             repo.put("review_issue", issue, case["id"])
         task["review_status"] = "pending" if list_open_issues(repo, case["id"]) else "cleared"
         if task.get("status") == "review_blocked":
-            task["status"] = "review" if (task.get("risk") or {}).get("approval_allowed") else "blocked"
+            orchestrator.transition_task(
+                repo, task,
+                "review" if (task.get("risk") or {}).get("approval_allowed") else "blocked",
+                "HUMAN", actor=actor["user_id"])
     task["review_request_hash"] = task["request_hash"]
     task.setdefault("legal_review_history", []).append(record["id"])
     task["legal_review"] = deepcopy(record)

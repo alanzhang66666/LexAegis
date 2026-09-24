@@ -25,7 +25,7 @@ def collect_context(store, root, *, build_manifest=None, gateway_client=None):
     identities = []
     for process in ("api", "worker"):
         try:
-            identities.append(json.loads((root / f"{process}-runtime-identity.json").read_text()))
+            identities.append(json.loads((root / f"{process}-runtime-identity.json").read_text(encoding="utf-8")))
         except (OSError, ValueError):
             identities.append({"process": process, "status": "unconfigured"})
     client = gateway_client or httpx.Client(timeout=3, trust_env=False)

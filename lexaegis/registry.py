@@ -193,6 +193,8 @@ def publish_pack(repo, pack_id, actor):
     if pack.get("status") == "published":
         raise ValueError("已发布版本不可重复发布或覆盖")
     repo.put("pack", published)
+    from . import support_registry
+    support_registry.extend_packs(repo, pack.get("domain_id") or "", pack_id)
     return published
 
 

@@ -1,0 +1,25 @@
+# Edge-domain storage: originals, identity mappings and final case state
+# stay on the edge volume. Cloud pods must never mount this claim.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: lexaegis-app-data
+  namespace: lexaegis
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path   # KubeEdge edge nodes typically use local-path
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: lexaegis-gateway-data
+  namespace: lexaegis
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 5Gi

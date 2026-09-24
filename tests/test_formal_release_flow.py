@@ -165,6 +165,12 @@ def test_freeze_accepts_real_create_task_general_subpurpose(tmp_path, monkeypatc
                 "legal_status": "reviewed",
             }
             live.put("pack", pack)
+            # P3: fixture packs injected directly must be declared supported
+            from lexaegis import support_registry
+            record = support_registry.support_for(live, "labor")
+            support_registry.upsert_support(live, {
+                **record, "pack_ids": record["pack_ids"] + [pack["id"]]},
+                actor="test")
             profile = {"id": "deepseek-profile", "status": "reviewed",
                        "endpoint": "https://api.deepseek.com/v1/chat/completions", "model": "deepseek-chat"}
             live.put("provider", profile)

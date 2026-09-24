@@ -102,7 +102,7 @@ REVIEW_CONDITIONS = [
         "id": "rule_conflict", "trigger": "规则之间存在真实冲突",
         "why_machine_cannot": "不同规则可能约束不同主体或不同处理行为，不能机械从严。",
         "what_to_verify": ["各规范效力", "适用范围", "特别法关系", "能否通过最小化协调"],
-        "gate_id": "G7", "blocking": True,
+        "gate_id": "G0", "blocking": True,
     },
     {
         "id": "reidentification_unconfirmed", "trigger": "去标识化后能否重新识别无法确认",
@@ -126,7 +126,7 @@ REVIEW_CONDITIONS = [
         "id": "anonymization_unconfirmed", "trigger": "去标识化是否达到匿名化无法确认",
         "why_machine_cannot": "去标识化后仍可能属于个人信息；匿名化要求无法识别且不能复原。",
         "what_to_verify": ["是否达到无法识别且不能复原", "是否仍需适用个保法"],
-        "gate_id": "G7", "blocking": True,
+        "gate_id": "G0", "blocking": True,
     },
 ]
 

@@ -1249,7 +1249,7 @@ lexaegis start --profile demo
 
 ## 四个功能边界
 
-1. `01-完整披露流程`：模型初检允许、人工复核允许、独立审批，最后只执行离线模拟摘要与回链。
+1. `01-完整披露流程`：模型初检允许、人工复核允许、独立审批，第三条成功是这一次请求的云端真实发送（`transport=cloud`，`provenance=cloud`）。随包功能截图不是这次发送记录。产品闩仍是 `blocked`。
 2. `02-人工复核否决`：模型初检允许，但人工否决；批准与执行不可继续。
 3. `03-组合线索风险`：边侧模型审核识别组合线索风险并在人工批准前阻断。
 4. `04-主动停止`：停止后不可继续，刷新后状态保持。
@@ -1717,13 +1717,13 @@ docker run --rm -p 127.0.0.1:8765:8765 -v ${PWD}/models:/models:ro lexaegis-subm
 
 | 边界 | 结果 | 材料 |
 | --- | --- | --- |
-| 01 完整披露流程 | 边侧允许进入人工复核，人工允许，独立审批后仅生成离线摘要与回链 | `examples/four_boundary_demo/01-完整披露流程/` |
+| 01 完整披露流程 | 边侧允许进入人工复核，人工允许，独立审批后按 cloud 真实发送并回链。须在 integration 上跑，`provenance=cloud`。产品闩仍是 `blocked` | `examples/four_boundary_demo/01-完整披露流程/` |
 | 02 人工复核否决 | 边侧允许进入人工复核，人工否决，后续批准和执行均不可继续 | `examples/four_boundary_demo/02-人工复核否决/` |
 | 03 组合线索风险 | 边侧模型审核识别组合线索风险并阻断，不进入人工批准 | `examples/four_boundary_demo/03-组合线索风险/` |
 | 04 主动停止 | 停止后不可继续，刷新后状态保留 | `examples/four_boundary_demo/04-主动停止/` |
 
 独立启动脚本默认让三个递进层次实际调用随包边侧模型；只有显式传 `-FixedDemoReview` 才改用固定
-审核夹具。第三层“允许”仍不是正式外发许可。
+审核夹具。第三条成功是 integration 上这一次合成请求的 cloud 发送。`formal_dispatch` 仍是 `blocked`。
 
 ## 验证
 
@@ -1731,7 +1731,7 @@ docker run --rm -p 127.0.0.1:8765:8765 -v ${PWD}/models:/models:ro lexaegis-subm
 python scripts/verify_competition_delivery.py .
 powershell -ExecutionPolicy Bypass -File ./start-competition.ps1 -LocalPassword local-check-ok
 ./.runtime/venv/Scripts/python.exe scripts/verify_three_layers_live.py `
-  --base-url http://127.0.0.1:48765 --password local-check-ok
+  --base-url http://127.0.0.1:58765 --password local-check-ok
 ```
 
 `tests/` 排除项见 `SUBMISSION_MANIFEST.md`。
@@ -1798,7 +1798,8 @@ COMPETITION_VALIDATION_GUIDE = """# 比赛版验证口径
 ```powershell
 python scripts/verify_competition_delivery.py .
 powershell -ExecutionPolicy Bypass -File ./start-competition.ps1 -LocalPassword local-check-ok
-./.runtime/venv/Scripts/python.exe scripts/verify_three_layers_live.py --password local-check-ok
+# 上面启动的是 demo。第三条真发改在 integration（58765）上跑，且云端槽位已配置：
+./.runtime/venv/Scripts/python.exe scripts/verify_three_layers_live.py --base-url http://127.0.0.1:58765 --password local-check-ok
 ```
 
 四功能边界的浏览器回归和功能页面截图使用内置合成材料；每张 PNG 都有同名 TXT 说明。边侧模型的
@@ -2152,7 +2153,7 @@ def _write_delivery_status(target: Path, mode: str, validation: dict, self_check
         "demo_boundaries": [
             {"id": "linkage_risk", "edge_review": "block_external", "human_review": "not_reached"},
             {"id": "human_review_veto", "edge_review": "allow_human_review", "human_review": "reject_current_request"},
-            {"id": "complete_disclosure", "edge_review": "allow_human_review", "human_review": "allow_processing", "execution": "offline_mock_only"},
+            {"id": "complete_disclosure", "edge_review": "allow_human_review", "human_review": "allow_processing", "execution": "cloud"},
             {"id": "active_stop", "edge_review": "block_external", "state": "stopped_persists_after_refresh"},
         ],
         "validation": validation,

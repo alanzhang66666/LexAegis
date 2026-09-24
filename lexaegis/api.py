@@ -21,7 +21,7 @@ from .diagnostics import host_publish_capability, isolation_capability, legal_ca
 from .parsing import UPLOAD_EXTENSIONS, ocr_capability
 from .transcribe import whisper_capability
 from .providers import EdgeClient
-from .contracts import ProviderProfile, RiskProtocol
+from .contracts import HumanDecision, ProviderProfile, RiskProtocol
 from .governance import protocol_content_hash, publish_pack_record
 from .outbound_gate import product_dispatch_state
 from .registry import TASKS, import_pack, run_pack_regressions, task_definitions, validate_pack
@@ -576,6 +576,216 @@ def create_app(data_dir=None, password=None, build_manifest=None):
             audit(repo, "", "pack.transitioned", pack_id=pack_id, status=body.status, actor=identity["actor"])
             return pack
 
+    @app.get("/api/v1/domain-packages")
+    def domain_package_list(cause_id: str | None = None, package_type: str | None = None,
+                            status: str | None = None):
+        with store.read() as repo:
+            items = repo.list("domain_package")
+        if cause_id:
+            items = [i for i in items if i.get("cause_id") == cause_id]
+        if package_type:
+            items = [i for i in items if i.get("package_type") == package_type]
+        if status:
+            items = [i for i in items if i.get("status") == status]
+        return items
+
+    @app.get("/api/v1/domain-package-manifests")
+    def domain_package_manifest_list():
+        with store.read() as repo:
+            return repo.list("domain_package_manifest")
+
+    class DomainPackageTransitionInput(Input):
+        status: Literal["validated", "signed", "published", "deprecated", "revoked"]
+        reason: str | None = Field(default=None, max_length=500)
+
+    @app.post("/api/v1/domain-packages/{package_id}/transition")
+    def domain_package_transition(package_id: str, body: DomainPackageTransitionInput, request: Request):
+        from . import domain_packages
+        identity = require_role(request, "legal_reviewer" if body.status == "validated" else "admin")
+        with store.transaction() as repo:
+            record = domain_packages.transition(
+                repo, domain_packages.PACKAGE_KIND, package_id, body.status,
+                actor=identity["actor"])
+            if body.reason and body.status == "revoked":
+                record["revocation_reason"] = body.reason
+                repo.put(domain_packages.PACKAGE_KIND, record)
+            return record
+
+    @app.post("/api/v1/domain-package-manifests/{manifest_id}/transition")
+    def domain_manifest_transition(manifest_id: str, body: DomainPackageTransitionInput, request: Request):
+        from . import domain_packages
+        identity = require_role(request, "legal_reviewer" if body.status == "validated" else "admin")
+        with store.transaction() as repo:
+            record = domain_packages.transition(
+                repo, domain_packages.MANIFEST_KIND, manifest_id, body.status,
+                actor=identity["actor"])
+            if body.reason and body.status == "revoked":
+                record["revocation_reason"] = body.reason
+                repo.put(domain_packages.MANIFEST_KIND, record)
+            return record
+
+    @app.get("/api/v1/domain-package-manifests/{manifest_id}/bundle")
+    def domain_manifest_bundle(manifest_id: str, request: Request):
+        """Export a manifest + its packages as a portable bundle (the cloud ->
+        edge package-delivery artifact). Admin only."""
+        from . import domain_packages
+        require_role(request, "admin")
+        with store.read() as repo:
+            return domain_packages.export_bundle(repo, manifest_id)
+
+    class PackageBundleInput(Input):
+        bundle: dict
+
+    @app.post("/api/v1/domain-packages/import-bundle")
+    def domain_package_import_bundle(body: PackageBundleInput, request: Request):
+        """Import an exported bundle. Fail-closed: hashes/platform_api/refs are
+        verified; status survives only for verifiably signed records."""
+        from . import domain_packages
+        identity = require_role(request, "admin")
+        with store.transaction() as repo:
+            result = domain_packages.import_bundle(
+                repo, body.bundle, actor=identity["actor"])
+            audit(repo, "system", "domain_package.bundle_imported",
+                  manifest_id=result["manifest"], packages=result["packages"],
+                  downgraded=len(result["downgraded"]), actor=identity["actor"])
+            return result
+
+    # --- package distribution control plane (desired state + receipts) ------
+
+    class EdgeNodeInput(Input):
+        edge_node_id: str = Field(min_length=1, max_length=200)
+        labels: dict = Field(default_factory=dict)
+
+    @app.post("/api/v1/edge-nodes")
+    def edge_node_register(body: EdgeNodeInput, request: Request):
+        """Register an edge node identity. Only registered nodes can receive
+        package assignments."""
+        from . import package_controller
+        identity = require_role(request, "admin")
+        with store.transaction() as repo:
+            return package_controller.register_node(
+                repo, body.edge_node_id, identity["actor"], body.labels)
+
+    @app.get("/api/v1/edge-nodes")
+    def edge_node_list(request: Request):
+        from . import package_controller
+        require_role(request, "admin")
+        with store.read() as repo:
+            return package_controller.list_nodes(repo)
+
+    class PackageAssignmentInput(Input):
+        manifest_id: str = Field(min_length=1)
+        edge_node_id: str = Field(min_length=1, max_length=200)
+
+    @app.post("/api/v1/package-assignments")
+    def package_assignment_create(body: PackageAssignmentInput, request: Request):
+        """Desired state: this edge node should hold this manifest."""
+        from . import package_controller
+        identity = require_role(request, "admin")
+        with store.transaction() as repo:
+            return package_controller.assign(
+                repo, body.manifest_id, body.edge_node_id, identity["actor"])
+
+    @app.get("/api/v1/package-assignments")
+    def package_assignment_list(edge_node_id: str | None = None, request: Request = None):
+        from . import package_controller
+        require_role(request, "admin")
+        with store.read() as repo:
+            items = repo.list(package_controller.ASSIGNMENT_KIND)
+        if edge_node_id:
+            items = [i for i in items if i.get("edge_node_id") == edge_node_id]
+        return items
+
+    @app.post("/api/v1/package-assignments/{assignment_id}/deliver")
+    def package_assignment_deliver(assignment_id: str, request: Request):
+        """Produce the signed bundle for transport and mark delivered."""
+        from . import package_controller
+        identity = require_role(request, "admin")
+        with store.transaction() as repo:
+            return package_controller.deliver(
+                repo, assignment_id, identity["actor"])
+
+    class PackageReceiptInput(Input):
+        kind: Literal["verified", "activated", "revoked", "failed"]
+        edge_node_id: str = Field(min_length=1, max_length=200)
+        manifest_hash: str | None = Field(default=None, max_length=200)
+        detail: dict = Field(default_factory=dict)
+
+    @app.post("/api/v1/package-assignments/{assignment_id}/receipts")
+    def package_receipt_create(assignment_id: str, body: PackageReceiptInput,
+                               request: Request):
+        """Fold an edge acknowledgement into the assignment. Fail-closed on
+        wrong node, wrong hash, or out-of-order receipt."""
+        from . import package_controller
+        require_role(request, "admin")
+        with store.transaction() as repo:
+            return package_controller.record_receipt(
+                repo, assignment_id, body.kind, body.edge_node_id,
+                manifest_hash=body.manifest_hash, detail=body.detail)
+
+    class PackageRevocationInput(Input):
+        reason: str | None = Field(default=None, max_length=500)
+
+    @app.post("/api/v1/package-assignments/{assignment_id}/revoke")
+    def package_assignment_revoke(assignment_id: str, body: PackageRevocationInput,
+                                  request: Request):
+        """Flip desired state to absent; waits for the edge's revoked receipt."""
+        from . import package_controller
+        identity = require_role(request, "admin")
+        with store.transaction() as repo:
+            return package_controller.request_revocation(
+                repo, assignment_id, identity["actor"], body.reason)
+
+    @app.get("/api/v1/package-distribution/reconcile")
+    def package_distribution_reconcile(edge_node_id: str | None = None,
+                                       request: Request = None):
+        """Desired-vs-actual report for operators and controllers."""
+        from . import package_controller
+        require_role(request, "admin")
+        with store.read() as repo:
+            return package_controller.reconcile(repo, edge_node_id)
+
+    @app.get("/api/v1/supported-causes")
+    def supported_cause_list():
+        with store.read() as repo:
+            return repo.list("supported_cause")
+
+    class SupportedCauseInput(Input):
+        cause_id: str = Field(min_length=1, max_length=120)
+        status: Literal["supported", "validation", "integration_only",
+                        "unsupported", "suspended"] = "validation"
+        environments: list[str] = Field(default_factory=list)
+        pack_ids: list[str] = Field(default_factory=list)
+        manifest_ids: list[str] = Field(default_factory=list)
+        capabilities: list[str] = Field(default_factory=list)
+        jurisdiction: str | None = None
+        notes: str | None = Field(default=None, max_length=500)
+
+    @app.post("/api/v1/supported-causes")
+    def supported_cause_upsert(body: SupportedCauseInput, request: Request):
+        from . import support_registry
+        identity = require_role(request, "admin")
+        with store.transaction() as repo:
+            return support_registry.upsert_support(
+                repo, body.model_dump(), actor=identity["actor"])
+
+    class SupportedCauseTransitionInput(Input):
+        status: Literal["supported", "validation", "integration_only",
+                        "unsupported", "suspended"]
+
+    @app.post("/api/v1/supported-causes/{cause_id}/transition")
+    def supported_cause_transition(cause_id: str, body: SupportedCauseTransitionInput, request: Request):
+        from . import support_registry
+        identity = require_role(request, "admin")
+        with store.transaction() as repo:
+            if body.status == "suspended":
+                return support_registry.suspend(repo, cause_id, actor=identity["actor"])
+            record = support_registry.support_for(repo, cause_id)
+            if not record:
+                raise service.DomainError(f"案由 {cause_id} 无支持记录")
+            return support_registry.upsert_support(
+                repo, {**record, "status": body.status}, actor=identity["actor"])
+
     @app.get("/api/v1/providers")
     def providers():
         with store.read() as repo:
@@ -730,6 +940,27 @@ def create_app(data_dir=None, password=None, build_manifest=None):
                     and case.get("scenario") in {"la002_human_veto", "la003_review_release"}
                     and bool(case_stage_content(case, docs)),
                     "documents": docs, "facts": repo.list("fact", case_id), "tasks": [service.task_view(repo, t) for t in repo.list("task", case_id)], "jobs": repo.list("job", case_id), "audit": repo.list("audit", case_id), "ledger": repo.list("disclosure", case_id)}
+
+    @app.get("/api/v1/cases/{case_id}/domain-binding")
+    def case_domain_binding(case_id: str):
+        with store.read() as repo:
+            service.get_case(repo, case_id)
+            return repo.list("case_domain_binding", case_id)
+
+    @app.get("/api/v1/cases/{case_id}/context-versions")
+    def case_context_versions(case_id: str):
+        with store.read() as repo:
+            service.get_case(repo, case_id)
+            return repo.list("case_context_version", case_id)
+
+    @app.get("/api/v1/tasks/{task_id}/runtime-snapshot")
+    def task_runtime_snapshot(task_id: str):
+        with store.read() as repo:
+            task = repo.get(task_id, "task")
+            snapshot_id = task.get("domain_runtime_snapshot_id")
+            if not snapshot_id:
+                raise HTTPException(404, "task has no runtime snapshot")
+            return repo.get(snapshot_id, "domain_runtime_snapshot")
 
     @app.get("/api/v1/cases/{case_id}/legal-evidence")
     def legal_evidence_list(case_id: str, request: Request):
@@ -989,8 +1220,20 @@ def create_app(data_dir=None, password=None, build_manifest=None):
     def evaluate(task_id: str, request: Request):
         require_role(request, "case_operator")
         context = release_service.collect_context(store, root, build_manifest=build_manifest)
+        # Live edge inference may take tens of seconds on CPU. Capture a versioned
+        # read snapshot, release SQLite, call the model, then atomically apply only
+        # if the task, case and settings are unchanged.
+        with store.read() as repo:
+            snapshot = service.edge_review_snapshot(repo, task_id)
+        edge_review = service.edge_review_for_task(
+            snapshot["case"], snapshot["settings"], snapshot["facts"],
+            snapshot["transport"],
+        )
         with store.transaction() as repo:
-            return service.evaluate_task(repo, task_id, release_context=context)
+            return service.evaluate_task(
+                repo, task_id, release_context=context,
+                edge_review_override=edge_review, edge_snapshot=snapshot,
+            )
 
     @app.get("/api/v1/tasks/{task_id}/attacks")
     def task_attacks(task_id: str):
@@ -1010,6 +1253,14 @@ def create_app(data_dir=None, password=None, build_manifest=None):
         context = release_service.collect_context(store, root, build_manifest=build_manifest)
         with store.transaction() as repo:
             return service.approve_task(repo, task_id, body.request_hash, identity["actor"], "approver", identity["user_id"], release_context=context)
+
+    @app.post("/api/v1/tasks/{task_id}/review-draft")
+    def review_draft(task_id: str, request: Request):
+        """Local worksheet draft. It is not a legal-review record and does not authorize dispatch."""
+        require_exact_role(request, "legal_reviewer")
+        with store.read() as repo:
+            snapshot = service.review_draft_snapshot(repo, task_id)
+        return service.compose_review_draft(snapshot)
 
     @app.post("/api/v1/tasks/{task_id}/legal-review")
     def legal_review(task_id: str, body: LegalReviewInput, request: Request):
@@ -1034,6 +1285,13 @@ def create_app(data_dir=None, password=None, build_manifest=None):
               actor=identity["actor"], user_id=identity["user_id"],
               account_role=identity["role"], workflow_role=role, transport="mock")
         return {**identity, "actor_role": role, "display_name": identity["actor"]}
+
+    @app.post("/api/v1/demos/tasks/{task_id}/review-draft")
+    def recording_review_draft(task_id: str, request: Request):
+        with store.transaction() as repo:
+            recording_review_actor(repo, task_id, request, "legal_reviewer")
+            snapshot = service.review_draft_snapshot(repo, task_id)
+        return service.compose_review_draft(snapshot)
 
     @app.post("/api/v1/demos/tasks/{task_id}/legal-review")
     def recording_legal_review(task_id: str, body: LegalReviewInput, request: Request):
@@ -1107,9 +1365,30 @@ def create_app(data_dir=None, password=None, build_manifest=None):
             task["artifact"]["confirmed"] = True
             task["artifact"]["confirmed_by"] = identity["actor"]
             task["artifact"]["confirmed_at"] = now()
+            decision = HumanDecision(
+                id=uid("hdec"), task_id=task_id, case_id=task["case_id"],
+                artifact_hash=digest(task["artifact"]),
+                request_hash=task.get("request_hash"),
+                actor=identity["actor"], actor_role=identity["role"],
+                created_at=now(),
+            ).model_dump()
+            repo.put("human_decision", decision, task["case_id"])
             repo.put("task", task, task["case_id"])
-            audit(repo, task["case_id"], "artifact.confirmed", task_id=task_id)
+            audit(repo, task["case_id"], "artifact.confirmed", task_id=task_id,
+                  human_decision_id=decision["id"])
             return task
+
+    @app.get("/api/v1/tasks/{task_id}/cloud-result-envelopes")
+    def cloud_result_envelopes(task_id: str):
+        with store.read() as repo:
+            return [item for item in repo.list("cloud_result_envelope")
+                    if item["task_id"] == task_id]
+
+    @app.get("/api/v1/tasks/{task_id}/human-decisions")
+    def human_decisions(task_id: str):
+        with store.read() as repo:
+            return [item for item in repo.list("human_decision")
+                    if item["task_id"] == task_id]
 
     @app.get("/api/v1/tasks/{task_id}/restoration")
     def restoration(task_id: str):

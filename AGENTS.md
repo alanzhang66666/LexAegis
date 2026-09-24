@@ -31,6 +31,10 @@ Python 3.12+ / FastAPI / SQLAlchemy；前端 React + Vite（`frontend/`）；隔
 
 不要：发明合同/审批人；把口述当服务商 `reviewed`；发布仓库 pack；削弱 `validate_formal_gate` / `authorize_dispatch`；另编第二套门禁编号（执法只走 `outbound_gate` G 表）；把 409 当产品 bug；把工程攻击当法学 `resisted`；写「10 案已通过」或「外发已开通」。
 
+## V2.2 对齐层（2026-09-24 追加）
+
+P1–P8 已按 `docs/V2_2_ALIGNMENT.md` 落地为绿地并行层：`domain_runtime`（绑定/快照/上下文/TaskStep/云信封）、`domain_packages`（八类包 + manifest + 签名/撤销）、`support_registry`（可加载≠已支持）、`capability_registry`+`spi`、`orchestrator`（双写，权威开关默认关）、`return_pipeline`（九阶段 + waiting-cloud）、`acceptance_suite`（19 基线）、`deploy/k8s`（未验证）。消费侧仍读单体 pack；门禁/审批/发布链语义零改动。
+
 ## 下一步
 
 完成代码与合成流程回归后，仍须补齐真实构建、十门收据及目标环境证据，再批准 **一次** 哈希绑定的首案 D 发送。一案成功不扩到十案；常规生产后续请求也须分别取得完整授权。

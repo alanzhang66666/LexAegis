@@ -79,6 +79,16 @@ def test_published_domain_pack_supports_two_independent_service_created_releases
     monkeypatch.setenv("LEX_RUN_PROFILE", "production")
     monkeypatch.setenv("LEX_GATEWAY_SECRET", SECRET)
     monkeypatch.setenv("LEX_REDTEAM_SECRET", "local-redteam-test-secret-32-characters")
+    monkeypatch.setenv("LEX_EDGE_OUTBOUND_REVIEW", "1")
+    # This controlled integration fixture exercises request-scoped release
+    # evidence, not model quality.  Inject a local allow-to-review result so
+    # the new fail-closed edge-review prerequisite is present without making a
+    # network request.
+    monkeypatch.setattr(service.EdgeClient, "review_outbound", lambda self, facts: {
+        "decision": "allow_human_review", "reason": "controlled synthetic edge review",
+        "risk_codes": [], "evidence_fact_ids": [item["id"] for item in facts],
+        "response_hash": "sha256:" + "0" * 64, "model": self.model, "endpoint": self.url,
+    })
     app, client, store, root = env["app"], env["client"], env["app"].state.store, env["root"]
     provider = _provider()
     with store.transaction() as repo:
@@ -89,6 +99,7 @@ def test_published_domain_pack_supports_two_independent_service_created_releases
                         cloud_primary={"url": TARGET.rsplit("/chat/completions", 1)[0],
                                        "model": MODEL, "provider_id": provider["id"]},
                         cloud_standby={"url": "", "model": "", "provider_id": None},
+                        edge_url="http://127.0.0.1:18080/v1", edge_model="controlled-synthetic-edge",
                         isolation_verified=True)
         repo.put("settings", settings)
         cases = [_add_case_and_fact(repo, i) for i in (1, 2)]
@@ -97,7 +108,7 @@ def test_published_domain_pack_supports_two_independent_service_created_releases
     with store.transaction() as repo:
         for protocol in protocols:
             repo.put("risk_protocol", protocol)
-    source_pack = json.loads(Path(SOURCE_PACK).read_text())
+    source_pack = json.loads(Path(SOURCE_PACK).read_text(encoding="utf-8"))
     source_pack["risk_protocols"] = [{"id": item["id"], "version": item["version"]}
                                       for item in protocols]
     login_as(env, "technical_reviewer")

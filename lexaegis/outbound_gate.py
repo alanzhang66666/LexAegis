@@ -18,6 +18,7 @@ PROVIDER_INCOMPLETE = "服务商处理条件或影响评估不完整"
 ATTACKS_NOT_RESISTED = "四类冻结攻击未全部达到 resisted"
 ISOLATION_UNVERIFIED = "隔离部署自检未通过"
 CLOUD_SLOT_MISSING = "云端服务或模型未配置"
+EDGE_REVIEW_BLOCKED_PREFIX = "边侧模型审核未允许进入人工复核："
 
 FROZEN_WEIGHTS = frozenset({"entity", "density", "context", "combination", "cross_round"})
 DEMO_COMBINATION_TERMS = frozenset({"唯一", "公开获奖"})
@@ -77,6 +78,7 @@ _PREFIX_KIND = (
     ("组合线索仍含准标识：", KIND_MINIMIZATION),
     ("组合线索风险：", KIND_VERIFICATION),
     ("硬性禁止四要件未完成确认", KIND_VERIFICATION),
+    (EDGE_REVIEW_BLOCKED_PREFIX, KIND_VERIFICATION),
 )
 
 
@@ -130,6 +132,16 @@ def _pack_legal_unfrozen(pack):
         or not pack.get("dispatch_allowed")
         or not pack.get("published_scope")
     )
+
+
+def edge_review_hits(edge_review):
+    """Local edge review is G0 request hygiene, not G3 vendor/PIPIA evidence."""
+    if not isinstance(edge_review, dict) or edge_review.get("decision") != "block_external":
+        return []
+    reason = edge_review.get("reason")
+    if not isinstance(reason, str) or not reason.strip():
+        reason = "未允许进入人工复核"
+    return [_hit(G0, EDGE_REVIEW_BLOCKED_PREFIX + reason.strip())]
 
 
 def collect_outbound_blockers(

@@ -17,6 +17,22 @@ async function saveAcceptanceScreenshot(page: Page, name: string) {
   await page.screenshot({ path: path.join(directory, name), fullPage: true });
 }
 
+// Demo profile has no scenario cards; the bundled-scenario entry is POST /demos
+// (Word import is covered by recording-import.spec.ts).
+async function createDemoCase(page: Page, scenario: string) {
+  const caseData = await page.evaluate(async (sc) => {
+    const response = await fetch("/api/v1/demos", { method: "POST", credentials: "same-origin",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ scenario: sc }) });
+    if (!response.ok) throw new Error(await response.text());
+    return response.json();
+  }, scenario);
+  await page.goto("/");
+  const row = page.locator(".case-row").filter({ hasText: caseData.id });
+  await expect(row).toBeVisible();
+  await row.click();
+  return caseData;
+}
+
 test.beforeEach(async ({ page }) => {
   await page.goto("/");
   await page.getByLabel("本地访问口令").fill("local-acceptance-only");
@@ -50,10 +66,7 @@ test("human veto is visibly paused by a technical reviewer and rejected by legal
   };
 
   await login("flow.operator", "operator-password-123");
-  const created = page.waitForResponse(response => response.url().endsWith("/api/v1/demos") && response.request().method() === "POST");
-  await page.getByRole("button", { name: /人工复核否决/ }).click();
-  const caseResponse = await created;
-  const caseData = await caseResponse.json();
+  const caseData = await createDemoCase(page, "human_veto");
   await page.getByRole("button", { name: "生成披露方案", exact: true }).click();
   await page.getByRole("button", { name: "检验风险并冻结请求" }).click();
   await expect(page.getByText("系统初检结果")).toBeVisible();
@@ -110,9 +123,7 @@ test("incomplete materials can be actively stopped before legal review without a
   page.on("request", request => {
     if (/\/api\/v1\/tasks\/[^/]+\/send$/.test(request.url())) sends.push(request.url());
   });
-  const created = page.waitForResponse(response => response.url().endsWith("/api/v1/demos") && response.request().method() === "POST");
-  await page.getByRole("button", { name: /在必要时主动停止/ }).click();
-  const caseData = await (await created).json();
+  const caseData = await createDemoCase(page, "stop");
   await page.getByRole("button", { name: "生成披露方案", exact: true }).click();
   const evaluated = page.waitForResponse(response => /\/api\/v1\/tasks\/[^/]+\/evaluate$/.test(response.url()));
   await page.getByRole("button", { name: "检验风险并冻结请求" }).click();
@@ -191,9 +202,7 @@ test("synthetic case: disclosure, explicit approval, dispatch and source-linked 
     }});
     expect([200, 409]).toContain(response.status());
   }
-  const created = page.waitForResponse(response => response.url().endsWith("/api/v1/demos") && response.request().method() === "POST");
-  await page.getByRole("button", { name: /01 完整披露流程/ }).click();
-  const caseData = await (await created).json();
+  const caseData = await createDemoCase(page, "success");
   await expect(page.getByRole("heading", { name: "事实与证据" })).toBeVisible();
   await page.getByRole("button", { name: "生成披露方案", exact: true }).click();
   await page.getByRole("button", { name: "检验风险并冻结请求" }).click();
@@ -248,11 +257,19 @@ test("synthetic case: disclosure, explicit approval, dispatch and source-linked 
   await expect(
     page.getByRole("button", { name: "结果已确认", exact: true }),
   ).toBeDisabled();
-  if (!(await page.getByText("回写待办").isVisible())) {
-    await page.getByRole("button", { name: "依据与留痕" }).click();
+  const contextToggle = page.getByRole("button", { name: "依据与留痕", exact: true });
+  let contextOpened = false;
+  if (!(await page.getByText("回写待办").isVisible()) && await contextToggle.isVisible()) {
+    await contextToggle.click();
+    contextOpened = true;
   }
   await expect(page.getByText("回写待办")).toBeVisible();
   await expect(page.getByText("0 项未处理")).toBeVisible();
+  if (contextOpened) {
+    // The opened context panel overlays the pane tabs on narrow viewports;
+    // its own close button is the supported way back.
+    await page.getByRole("button", { name: "关闭依据面板", exact: true }).click();
+  }
   await page.getByRole("button", { name: "回到原文" }).first().click();
   await expect(page.locator(".source-text")).toContainText("乔安");
   await page.evaluate(() => window.scrollTo(0, 0));
@@ -264,7 +281,7 @@ test("synthetic case: disclosure, explicit approval, dispatch and source-linked 
 });
 
 test("restoration empty state before dispatch", async ({ page }) => {
-  await page.getByRole("button", { name: /01 完整披露流程/ }).click();
+  await createDemoCase(page, "success");
   await expect(page.getByRole("heading", { name: "事实与证据" })).toBeVisible();
   await page.getByRole("button", { name: "生成披露方案", exact: true }).click();
   await expect(page.getByRole("heading", { name: "逐项披露方案" })).toBeVisible();
@@ -274,7 +291,7 @@ test("restoration empty state before dispatch", async ({ page }) => {
 });
 
 test("demo keeps independent attack tools marked as planned", async ({ page }) => {
-  await page.getByRole("button", { name: /01 完整披露流程/ }).click();
+  await createDemoCase(page, "success");
   await page.getByRole("button", { name: "生成披露方案", exact: true }).click();
   await page.getByRole("button", { name: "检验风险并冻结请求" }).click();
   await expect(page.getByText("独立风险攻击与红队实验待开发。", { exact: false })).toBeVisible();
@@ -284,7 +301,7 @@ test("demo keeps independent attack tools marked as planned", async ({ page }) =
 test("combination clues block approval without faking a risk pass", async ({
   page,
 }) => {
-  await page.getByRole("button", { name: /看见组合线索风险/ }).click();
+  await createDemoCase(page, "linkage");
   await page.getByRole("button", { name: "生成披露方案", exact: true }).click();
   await page.getByRole("button", { name: "检验风险并冻结请求" }).click();
   await expect(
@@ -363,6 +380,8 @@ test("dialog keyboard behavior and accessible control names", async ({ page }) =
   const trigger=page.getByRole("button",{name:"新建案件",exact:true});
   await trigger.click();
   await expect(page.getByRole("dialog")).toBeFocused();
+  // Escape is intentionally ignored while a request is in flight; wait for idle first.
+  await expect(page.locator(".busy-bar")).toHaveCount(0);
   await page.keyboard.press("Escape");
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(trigger).toBeFocused();
@@ -385,7 +404,7 @@ test("five-viewport structural visual baseline", async ({page},testInfo)=>{
   const overflow=await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth);
   expect(overflow).toBe(false);
   if(viewport.width<=900){
-    await page.getByRole("button",{name:"01 完整披露流程"}).click();
+    await createDemoCase(page,"success");
     await page.getByRole("button",{name:"原始材料",exact:true}).click();
     await expect(page.locator(".source-panel")).toBeVisible();
     await expect(page.locator(".work-panel")).toBeHidden();

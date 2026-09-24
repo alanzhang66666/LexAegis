@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1] / 'data' / 'recording_adapted'
 @pytest.mark.parametrize('local_admin', [False, True])
 def test_three_adapted_workflows(demo_env, local_admin):
     e=demo_env; c=e['client']
-    for item in json.loads((ROOT/'manifest.json').read_text()):
+    for item in json.loads((ROOT/'manifest.json').read_text(encoding="utf-8")):
         login_admin(e)
         f=ROOT / item['path']
         r=c.post('/api/v1/demos/import', files={'file':(f.name,f.read_bytes())})
@@ -93,7 +93,7 @@ def test_local_review_cannot_be_used_in_other_profiles(request, fixture_name):
 
 
 def test_stage_content_requires_a_matching_upload(demo_env):
-    items = json.loads((ROOT / 'manifest.json').read_text())
+    items = json.loads((ROOT / 'manifest.json').read_text(encoding="utf-8"))
     selected = items[0]
     with demo_env['app'].state.store.transaction() as repo:
         case = service.create_case(repo, SCENARIOS[selected['scenario']]['name'],
@@ -143,7 +143,7 @@ def test_every_local_material_tool_uses_each_case_original(demo_env):
         'LA-003': {'timeline': '2024年7月14日', 'evidence_inventory': '平台收入账单', 'issue_extraction': '站点经营主体'},
     }
     artifact_keys = {'timeline': 'events', 'evidence_inventory': 'items', 'issue_extraction': 'issues'}
-    for item in json.loads((ROOT / 'manifest.json').read_text()):
+    for item in json.loads((ROOT / 'manifest.json').read_text(encoding="utf-8")):
         login_admin(demo_env)
         path = ROOT / item['path']
         case = client.post('/api/v1/demos/import', files={'file': (path.name, path.read_bytes())}).json()
@@ -201,7 +201,7 @@ def test_import_recognizes_resaved_and_original_body(demo_env):
                 dest.writestr(member,payload)
             dest.comment=b'resaved by word processor'
         return output.getvalue()
-    for item in json.loads((ROOT/'manifest.json').read_text()):
+    for item in json.loads((ROOT/'manifest.json').read_text(encoding="utf-8")):
         data=(ROOT / item['path']).read_bytes()
         for original in (False,True):
             saved=repack(data,original_only=original)

@@ -6691,5 +6691,11 @@
       "step": 6,
       "prompt": "最后判断能否通过删除无关信息、去除直接标识符、减少数据范围等方式同时满足不同规则。不能因为存在疑问就直接把疑问写成法律禁止。"
     }
-  ]
+  ],
+  "mapper": {
+    "applies_to": ["fact_summary"],
+    "claim_list_key": "claims",
+    "required_fields": ["text", "source_ids"],
+    "defaults": {"domain": "labor"}
+  }
 }

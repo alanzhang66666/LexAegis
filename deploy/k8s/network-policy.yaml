@@ -1,0 +1,42 @@
+# Mirrors the Compose isolation model: edge workloads reach only the CGW;
+# only the CGW may egress to allowed provider hosts (enforced at the CNI
+# level — NetworkPolicy alone cannot filter by FQDN, so egress is further
+# restricted inside gateway.py's allowlist).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: lexaegis-edge-egress
+  namespace: lexaegis
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [edge-api, edge-worker]
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: cloud-gateway
+      ports:
+        - {port: 8766, protocol: TCP}
+    - to:                              # DNS resolution only
+        - namespaceSelector: {}
+      ports:
+        - {port: 53, protocol: UDP}
+        - {port: 53, protocol: TCP}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: lexaegis-cgw-egress
+  namespace: lexaegis
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: cloud-gateway
+  policyTypes: [Egress]
+  egress:
+    - {}                               # provider egress; FQDN allowlist lives
+                                       # in the gateway (LEX_CLOUD_ALLOWED_HOSTS)

@@ -1,4 +1,5 @@
 """Cross-platform native process launcher."""
+import ipaddress
 import os
 import secrets
 import signal
@@ -11,6 +12,9 @@ from urllib.parse import urlparse, urlunparse
 from .util import app_dir, restrict_mode
 
 CLOUD_KEY_ENV = ("LEX_CLOUD_API_KEY", "LEX_CLOUD_PRIMARY_KEY", "LEX_CLOUD_STANDBY_KEY")
+DEFAULT_BIND_HOST = "127.0.0.1"
+# The gateway holds the cloud credentials; only the in-container worker may reach it.
+GATEWAY_BIND_HOST = "127.0.0.1"
 
 
 def app_process_env(base):
@@ -21,6 +25,38 @@ def service_ports():
     from .runtime_profile import profile_config
     config = profile_config()
     return str(config["api_port"]), str(config["gateway_port"])
+
+
+def api_bind_host():
+    """Workbench bind address. Container images set 0.0.0.0; native stays on loopback."""
+    raw = (os.getenv("LEX_BIND_HOST") or DEFAULT_BIND_HOST).strip()
+    if not raw:
+        return DEFAULT_BIND_HOST
+    try:
+        ipaddress.ip_address(raw)
+    except ValueError:
+        raise SystemExit(
+            f"LEX_BIND_HOST 必须是 IP 字面量（收到 {raw!r}）。"
+            f"本机运行用 {DEFAULT_BIND_HOST}；容器内用 0.0.0.0 并只发布到宿主机回环口。"
+        )
+    return raw
+
+
+def bind_host_is_loopback(host):
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def service_commands(api_port, gateway_port, bind_host):
+    """Gateway is never published. Only the API honours LEX_BIND_HOST."""
+    return [
+        [sys.executable, "-m", "uvicorn", "lexaegis.gateway:create_gateway", "--factory",
+         "--host", GATEWAY_BIND_HOST, "--port", str(gateway_port), "--no-access-log"],
+        [sys.executable, "-m", "uvicorn", "lexaegis.api:create_app", "--factory",
+         "--host", str(bind_host), "--port", str(api_port), "--no-access-log"],
+    ]
 
 
 def _is_loopback_host(host):
@@ -82,14 +118,17 @@ def run(profile=None):
         os.environ["LEX_GATEWAY_URL"] = gateway_url
         base["LEX_GATEWAY_URL"] = gateway_url
         app_env = app_process_env(base)
-    commands = [
-        ([sys.executable, "-m", "uvicorn", "lexaegis.gateway:create_gateway", "--factory", "--host", "127.0.0.1", "--port", gateway_port, "--no-access-log"], gateway_env),
-        ([sys.executable, "-m", "uvicorn", "lexaegis.api:create_app", "--factory", "--host", "127.0.0.1", "--port", api_port, "--no-access-log"], app_env),
-    ]
+    bind_host = api_bind_host()
+    gateway_command, api_command = service_commands(api_port, gateway_port, bind_host)
+    commands = [(gateway_command, gateway_env), (api_command, app_env)]
     processes = []
     print(f"LexAegis ({config['runtime_profile']}): http://127.0.0.1:{api_port}")
     print("本地访问口令:", os.environ["LEX_LOCAL_PASSWORD"])
     print("native 模式不具备可验证网络隔离；仅 Compose demo 配置提供无出口演示隔离。")
+    if not bind_host_is_loopback(bind_host):
+        print(f"工作台已绑定 {bind_host}：请只发布到宿主机回环口"
+              f"（docker run -p 127.0.0.1:{api_port}:{api_port}），不要暴露到局域网。")
+        print(f"宿主机端口若不是 {api_port}，须同步设置 LEX_API_PORT，否则写操作会被跨站校验拒绝。")
     from .edge_runtime import edge_port_open, start_hint
     if not edge_port_open():
         print(start_hint())

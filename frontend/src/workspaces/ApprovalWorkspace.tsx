@@ -60,9 +60,10 @@ function stableKey(keys: Map<string, string>, payload: Obj) {
   return keys.get(signature)!;
 }
 
-export function ApprovalWorkspace({ task, pack, busy, role, onSubmit, onTechnicalIssue }:{
+export function ApprovalWorkspace({ task, pack, busy, role, onSubmit, onTechnicalIssue, onDraft }:{
   task: Obj; pack?: Obj; busy: boolean; role?: string;
   onSubmit:(body:Obj)=>Promise<any>|void; onTechnicalIssue:(body:Obj)=>Promise<any>|void;
+  onDraft?:()=>Promise<any>|void;
 }) {
   const risk = task.risk || {};
   const gates: Obj[] = risk.gates || [];
@@ -87,6 +88,8 @@ export function ApprovalWorkspace({ task, pack, busy, role, onSubmit, onTechnica
   const [resolvedIssueIds, setResolvedIssueIds] = useState<string[]>([]);
   const [reviewEvidenceIds, setReviewEvidenceIds] = useState<string[]>([]);
   const [resolutionReason, setResolutionReason] = useState("");
+  const [draftNote, setDraftNote] = useState("");
+  const [suggestedConclusion, setSuggestedConclusion] = useState("");
   const technicalKeys = useRef(new Map<string, string>());
   const legalKeys = useRef(new Map<string, string>());
   const openIssues: Obj[] = (task.review_issues || []).filter((item: Obj) => item.status === "open");
@@ -124,7 +127,34 @@ export function ApprovalWorkspace({ task, pack, busy, role, onSubmit, onTechnica
     const extras = sources.filter((item: Obj) => pickedSources.includes(item.id) && !filtered.some((row: Obj) => row.id === item.id));
     return extras.concat(filtered);
   }, [sources, sourceQuery, pickedSources]);
+  const edgeReview = task.edge_review || task.risk?.edge_review || {};
+  const edgeBlocked = edgeReview.decision === "block_external" || Boolean(edgeReview.safety_floor?.applied);
+  const edgeAllowed = edgeReview.decision === "allow_human_review" && !edgeReview.safety_floor?.applied;
   const reply = (pack?.reply_templates || []).find((item: Obj) => item.disposition === (risk.disposition || "needs_verification"));
+  const applyDraft = (draft: Obj) => {
+    if (!draft || draft.recorded || draft.grants_dispatch || draft.request_hash !== task.request_hash) return;
+    const knownEvidence = new Set(evidenceOptions.map(item => item.id));
+    const knownSources = new Set(sources.map(item => item.id));
+    const knownConditions = new Set(conditions.map(item => item.id));
+    setReason(String(draft.reason || ""));
+    setFactPremise(String(draft.fact_premise || ""));
+    setAuthorityJudgment(String(draft.authority_judgment || ""));
+    setExternalNote(String(draft.external_processing_note || ""));
+    setMinimizationNote(String(draft.minimization_note || ""));
+    setFinalBasis(String(draft.final_basis || ""));
+    setScopeNote(String(draft.scope_note || SCOPE_DEFAULT));
+    const evidenceIds = (draft.evidence_fact_ids || []).filter((id: string) => knownEvidence.has(id));
+    if (evidenceIds.length) setReviewEvidenceIds(evidenceIds);
+    const sourceIds = (draft.legal_source_ids || []).filter((id: string) => knownSources.has(id));
+    if (sourceIds.length) setPickedSources(sourceIds);
+    const conditionIds = (draft.reviewed_condition_ids || []).filter((id: string) => knownConditions.has(id));
+    if (conditionIds.length) setPickedConditions(conditionIds);
+    const suggestion = CONCLUSIONS.some(([value]) => value === draft.suggested_conclusion) ? draft.suggested_conclusion : "";
+    setSuggestedConclusion(suggestion);
+    setDraftNote(draft.source === "live_edge_model"
+      ? "底稿由边侧模型根据当前冻结事实起草。请核对后再提交。这不是复核记录，不授予发送权。"
+      : "当前未调用边侧模型，底稿由已冻结事实整理。请核对后再提交。这不是复核记录，不授予发送权。");
+  };
   const complete = Boolean(
     acknowledged && reason.trim() && factPremise.trim() && authorityJudgment.trim()
     && externalNote.trim() && minimizationNote.trim() && finalBasis.trim() && scopeNote.trim()
@@ -230,8 +260,15 @@ export function ApprovalWorkspace({ task, pack, busy, role, onSubmit, onTechnica
           <p>目标 {task.request?.target || "未冻结"} · 传输 {task.transport}</p>
           <p>数据流向以实际传输、存储和访问为准，不以品牌背景推定出境。</p>
         </details>
-        <details open>
+        {edgeBlocked ? <p className="finding">边侧审核未允许进入人工复核，不生成本地复核底稿。</p> : <details open>
           <summary>复核结论（不发送）</summary>
+          {edgeAllowed && onDraft && <button className="secondary" type="button" disabled={busy || !task.request_hash}
+            onClick={async () => {
+              const draft = await onDraft();
+              if (draft) applyDraft(draft);
+            }}>生成本地复核底稿</button>}
+          {draftNote && <p className="finding" role="status">{draftNote}</p>}
+          {suggestedConclusion && <p className="small-note">模型建议结论：{CONCLUSIONS.find(([value]) => value === suggestedConclusion)?.[1]}。请自行点选，建议不会自动勾选。</p>}
           {grouped.map(group => (
             <div key={group.kind} className="gate-kind-group">
               <h5>{KIND_LABEL[group.kind]}</h5>
@@ -329,7 +366,7 @@ export function ApprovalWorkspace({ task, pack, busy, role, onSubmit, onTechnica
             }}>
             <ShieldAlert size={14}/>{conclusion === "reject_current_request" || conclusion === "prohibit_external_processing" ? "提交否决并阻断本次请求" : "提交法律复核结论"}
           </button>
-        </details>
+        </details>}
       </div>
       </>}
       {role === "approver" && <p className="small-note">审批人可在风险检验区批准当前版本；法学复核结论本身不会授予发送权。</p>}

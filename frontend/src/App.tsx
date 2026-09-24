@@ -1103,6 +1103,8 @@ export default function App() {
                           "红队作业已排队；完成后请重新检验。")}
                         onLegalReview={(body)=>run(()=>api(`${localReviewTask ? "/demos" : ""}/tasks/${task.id}/legal-review`,"POST",body),
                           "已记录法律复核结论；否决会阻断本次请求，允许结论仍不授予发送权。")}
+                        onDraft={(principal?.role === "legal_reviewer" || localReviewTask) ? () => run(() => api(`${localReviewTask ? "/demos" : ""}/tasks/${task.id}/review-draft`, "POST"),
+                          "已填入复核底稿，请核对后再提交。底稿不授予发送权。") : undefined}
                         onTechnicalIssue={(body)=>run(()=>api(`/tasks/${task.id}/review-issues`,"POST",body),
                           "技术问题已提交，本次请求已暂停等待法学复核。")}/>
                     )}
@@ -1772,7 +1774,7 @@ function SettingsForm({
     >
       <div>
         <h3>边侧推理服务</h3>
-        <p>{presentationOnly ? "本地模型：MiniCPM5-2B · Q4_K_M · llama-server" : "仅允许已登记的本机或可信内网地址。"}</p>
+        <p>{presentationOnly ? "本地模型：以随包资产清单与运行配置为准 · llama-server" : "仅允许已登记的本机或可信内网地址。"}</p>
         <label>
           API 根地址
           <input
@@ -1820,7 +1822,7 @@ function SettingsForm({
         />
         {!presentationOnly && <p>部署模式：{v.deployment_mode} · 隔离验收：{v.isolation_verified ? "已记录" : "未通过"}</p>}
         <h3>跨轮外发工程预算</h3>
-        <p>累计账本字符与条数上限，防止重复操作导致无限轮外发。不是法学必要性判断。</p>
+        <p>累计账本字符与条数上限，防止误操作无限轮外发。不是法学必要性判断。</p>
         <label>
           累计外发字符
           <input

@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 from lexaegis.parsing import PaddleOCRProvider, ocr_capability, parse, register_ocr_provider
 from lexaegis.registry import import_pack, seed_packs
+from lexaegis import support_registry
 from lexaegis.storage import Store
 from lexaegis.cli import backup, restore
 from lexaegis.redteam import app as redteam
@@ -223,6 +224,12 @@ def test_domain_pack_extends_without_gate_change_and_immutable_versions(env):
         assert p['domain_id']=='new_domain'
         raw['name']='同版本篡改'
         with pytest.raises(ValueError):import_pack(repo,raw)
+    # P3: a loadable pack is not usable until the cause enters the Support Registry
+    assert env['client'].post('/api/v1/cases',json={'name':'测试扩展','domain':'new_domain'}).status_code==409
+    with env['app'].state.store.transaction() as repo:
+        support_registry.upsert_support(repo,{
+            "cause_id":"new_domain","status":"supported","environments":["production"],
+            "pack_ids":[p["id"]],"capabilities":["R_fact_summary"]},actor="test")
     assert env['client'].post('/api/v1/cases',json={'name':'测试扩展','domain':'new_domain'}).status_code==200
 
 

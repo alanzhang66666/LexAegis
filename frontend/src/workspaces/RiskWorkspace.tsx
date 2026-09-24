@@ -6,13 +6,14 @@ import { FormalReleaseIntake } from "./FormalReleaseIntake";
 
 type Obj = Record<string, any>;
 
-export function RiskWorkspace({ task, pack, busy, role, localReview = false, runtimeProfile, dataOrigin, label, attackLabels, request, onRefreshCase, onAction, onApprove, onResult, onRunAttacks, onInstallPolicy, onLegalReview, onTechnicalIssue, onSuccessor }:{
+export function RiskWorkspace({ task, pack, busy, role, localReview = false, runtimeProfile, dataOrigin, label, attackLabels, request, onRefreshCase, onAction, onApprove, onResult, onRunAttacks, onInstallPolicy, onLegalReview, onTechnicalIssue, onSuccessor, onDraft }:{
   localReview?: boolean;
   task: Obj; pack?: Obj; busy: boolean; role?:string; runtimeProfile?:string; dataOrigin?:string; label:(key:string)=>string; attackLabels:Record<string,string>;
   onAction:(action:string)=>void; onApprove:()=>void; onResult:()=>void; onRunAttacks:(auxiliary:Obj)=>void;
   onInstallPolicy?:()=>void;
   request:(path:string,method?:string,body?:any)=>Promise<any>; onRefreshCase:()=>Promise<void>;
   onLegalReview:(body:Obj)=>Promise<any>|void; onTechnicalIssue:(body:Obj)=>Promise<any>|void; onSuccessor:()=>void;
+  onDraft?:()=>Promise<any>|void;
 }) {
   const [auxiliary, setAuxiliary] = useState("{}");
   const [inputError, setInputError] = useState("");
@@ -26,6 +27,12 @@ export function RiskWorkspace({ task, pack, busy, role, localReview = false, run
     && dataOrigin === "bundled_synthetic";
   const attackRunAllowed = formal || syntheticAttackRun;
   const summary = dispositionCopy(task.risk);
+  const edgeReview = task.edge_review || task.risk?.edge_review || {};
+  const edgeAllowed = edgeReview.decision === "allow_human_review";
+  const edgeNotApplicable = edgeReview.decision === "not_applicable";
+  const edgeSource = edgeReview.source === "live_edge_model_with_policy_floor" ? "本机边侧模型 + 本地安全基线" :
+    edgeReview.source === "live_edge_model" ? "本机边侧模型" :
+    edgeReview.source === "bundled_synthetic_fixture" ? "合成固定审核" : "边侧审核配置";
   const reviewStatus = task.review_status || "pending";
   const reviewBlocked = !["cleared", "not_required"].includes(reviewStatus)
     || ["review_blocked", "rejected", "stopped"].includes(task.status);
@@ -68,6 +75,11 @@ export function RiskWorkspace({ task, pack, busy, role, localReview = false, run
     <div className="initial-risk-result"><b>系统初检结果</b><Tag tone={summary.blocked?"amber":"green"}>{summary.legal}</Tag>
       <span>{summary.ready} · 完整风险检验：{task.risk.completion === "complete" ? "已完成" : "未完成"} · 不代表已证明安全</span>
     </div>
+    <div className="initial-risk-result edge-review-result"><b>边侧模型审核</b><Tag tone={edgeAllowed || edgeNotApplicable ? "green" : "amber"}>{edgeNotApplicable ? "本地任务不适用" : edgeAllowed ? "可进入人工复核" : "不可外发"}</Tag>
+      <span>{edgeSource} · {edgeReview.reason || "未记录审核结论"}</span>
+      {edgeReview.model_decision && <span>模型原始结论：{edgeReview.model_decision === "allow_human_review" ? "可进入人工复核" : "不可外发"}；已应用安全基线。</span>}
+      {edgeReview.response_hash && <code>{edgeReview.response_hash}</code>}
+    </div>
     <div className="review-status-strip"><b>人工复核：{({pending:"待人工复核",blocked:"已暂停",rejected:"已否决",cleared:"已完成",not_required:"无需复核"} as Record<string,string>)[reviewStatus] || reviewStatus}</b>
       <span>{task.status === "stopped" ? "当前任务已终止，原请求及初检记录保留；如需继续处理，请新建任务。" : task.review_status === "rejected" || task.status === "rejected" ? "否决仅针对当前请求；请调整后创建关联后继任务。" : task.review_status === "blocked" || task.status === "review_blocked" ? "原初检结果保留供追溯，当前请求已停止。" : reviewBlocked ? "完成具名人工复核后才能继续。" : "人工复核状态已解除；仍需通过其余风险门禁和审批。"}</span>
     </div>
@@ -76,7 +88,7 @@ export function RiskWorkspace({ task, pack, busy, role, localReview = false, run
       {releaseReasons.length > 0 && <ul>{[...new Set(releaseReasons)].map((message:string)=><li key={message}>{message}</li>)}</ul>}
     </div>}
     <IssueList issues={task.risk.blockers}/>
-    {localReview && <ApprovalWorkspace task={task} pack={pack} busy={busy} role="legal_reviewer" onSubmit={onLegalReview} onTechnicalIssue={onTechnicalIssue}/>}
+    {localReview && <ApprovalWorkspace task={task} pack={pack} busy={busy} role="legal_reviewer" onSubmit={onLegalReview} onTechnicalIssue={onTechnicalIssue} onDraft={onDraft}/>}
     <h4 className="subheading">四类攻击运行</h4>
     {runtimeProfile === "demo" ? <p className="context-note"><Tag tone="amber">待开发</Tag> 独立风险攻击与红队实验待开发。</p> : <div className="attack-list">{(task.risk.attacks || []).map((attack:Obj)=><div key={attack.kind}>
       <span>{label(attack.kind)}</span><Tag tone={attack.outcome === "resisted" ? "green" : "amber"}>
@@ -142,7 +154,7 @@ export function RiskWorkspace({ task, pack, busy, role, localReview = false, run
       <FormalReleaseIntake task={task} role={role} request={request} busy={busy} onRefreshCase={onRefreshCase}/>}
     {task.status === "complete" && <button className="primary" onClick={onResult}>查看摘要与回链 <ArrowRight size={16}/></button>}
     {task.error && <div className="inline-warning"><AlertTriangle size={14}/>{task.error}</div>}
-    {!localReview && <ApprovalWorkspace task={task} pack={pack} busy={busy} role={role} onSubmit={onLegalReview} onTechnicalIssue={onTechnicalIssue}/>}
+    {!localReview && <ApprovalWorkspace task={task} pack={pack} busy={busy} role={role} onSubmit={onLegalReview} onTechnicalIssue={onTechnicalIssue} onDraft={onDraft}/>}
   </>;
 }
 

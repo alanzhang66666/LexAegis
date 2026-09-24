@@ -49,7 +49,7 @@ def test_binding_creates_and_enforces_profile_and_storage_role(monkeypatch, tmp_
     app = tmp_path / "app"
     marker = bind_runtime(app, "app")
     assert marker["runtime_profile"] == "demo"
-    assert json.loads((app / MARKER).read_text()) == {
+    assert json.loads((app / MARKER).read_text(encoding="utf-8")) == {
         "version": 1, "runtime_profile": "demo", "role": "app"
     }
     assert bind_runtime(app, "app")["root"] == str(app)
@@ -67,7 +67,7 @@ def test_unmarked_populated_legacy_directory_requires_explicit_migration(monkeyp
     with pytest.raises(ValueError, match="migrate explicitly"):
         bind_runtime(old, "app")
     migrate_legacy_runtime(old, "app", "production", "production")
-    assert json.loads((old / MARKER).read_text())["runtime_profile"] == "production"
+    assert json.loads((old / MARKER).read_text(encoding="utf-8"))["runtime_profile"] == "production"
     with pytest.raises(ValueError, match="retain its declared"):
         migrate_legacy_runtime(old, "app", "demo", "production")
 
@@ -88,7 +88,10 @@ def test_symlink_data_path_is_refused(monkeypatch, tmp_path):
     target = tmp_path / "real"
     target.mkdir()
     alias = tmp_path / "alias"
-    alias.symlink_to(target, target_is_directory=True)
+    try:
+        alias.symlink_to(target, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"symlink creation requires privilege on this platform: {exc}")
     with pytest.raises(ValueError, match="symlink"):
         bind_runtime(alias, "app")
 
@@ -107,7 +110,7 @@ def test_concurrent_profiles_cannot_claim_one_empty_directory(tmp_path):
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(attempt, ("production", "demo")))
     assert sorted(item.returncode for item in results) == [0, 1]
-    marker = json.loads((target / MARKER).read_text())
+    marker = json.loads((target / MARKER).read_text(encoding="utf-8"))
     assert marker["runtime_profile"] in ("production", "demo")
 
 

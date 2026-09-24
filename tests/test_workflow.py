@@ -157,7 +157,8 @@ def test_restart_recovers_inflight_send_as_unknown(demo_env):
         job=repo.list("job",case["id"])[0]
         job["status"]="running"
         task_record=repo.get(task["id"], "task")
-        task_record["status"]="sending"
+        from lexaegis import orchestrator
+        orchestrator.transition_task(repo, task_record, "sending", "STATE_TRANSITION")
         repo.put("task", task_record, case["id"])
         repo.put("job",job,case["id"])
     recover(env["app"].state.store)

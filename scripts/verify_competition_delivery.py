@@ -157,6 +157,10 @@ def verify_three_layers(root: Path, findings: list[str]) -> None:
             findings.append(f"三层实测缺少模型响应哈希：{name}")
         if item.get("safety_floor_applied") is not False:
             findings.append(f"三层实测依赖确定性兜底而非模型本身：{name}")
+        if name == "3_model_and_human_allow" and (
+            item.get("transport") != "cloud" or item.get("provenance") != "cloud"
+        ):
+            findings.append(f"三层实测第三条不是云端真实发送：{name}")
 
 
 def verify(root: Path, *, check_inventory_file: bool = True, check_inventory: bool | None = None) -> list[str]:
