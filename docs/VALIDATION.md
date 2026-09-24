@@ -24,7 +24,22 @@
 | 语义修正 | 包撤销/支持暂停传播原先只置 stale 标志却记 `to_status="stale"` 步骤（自相矛盾），现真正置 `status="stale"`，与 touch_case/upgrade/runtime_pack 三条既有 stale 路径一致 |
 | 测试修正 | `test_restart_recovers_inflight_send_as_unknown` 原以裸写模拟崩溃现场——真实代码中 step 与 task 同事务原子提交，该状态不可达；改为走漏斗写 `sending` 模拟真实可达崩溃态 |
 | Python 全量测试 | `pytest -q`：**656 passed、5 skipped、1 warning**；`LEX_ORCHESTRATOR_AUTHORITY=1 pytest -q`：**656 passed、5 skipped**——权威开关下全绿 |
-| 边界 | authority 开关仍默认关，转默认需真实环境观察期；控制器是记录层控制面，真实 KubeEdge 通道演练未做；mapper 为声明式数据配置，不虚构法律语义 |
+| 边界 | authority 开关仍默认关，转默认需真实环境观察期；控制器是记录层控制面，本地 kind+KubeEdge 下发/断连/撤包演练已过（`deploy/k8s/DRILL_EVIDENCE.md`），生产集群未验证；mapper 为声明式数据配置，不虚构法律语义 |
+
+## 2026-09-24 本地 kind+KubeEdge 下发/断连/撤包演练
+
+| 本轮检查 | 实际结果与边界 |
+| --- | --- |
+| 集群 | kind `lexaegis-v22`（k8s v1.37.0，Docker Desktop WSL2）+ cloudcore v1.20.0 + edgecore v1.30.7-kubeedge-v1.20.0（`edge-1`，containerd native snapshotter + CNI host-local/loopback/portmap/ptp），节点 Ready |
+| 下发 | assignment-1（`dpm:labor:2.0.0-draft.3`）deliver→边侧 `edge_apply`→verified→activated 回执入控制面 |
+| 断连 | `docker network disconnect` 切 CloudHub↔EdgeHub：edge-1 Ready=Unknown（lease 过期）；边应用自治 health=200、已导入 manifest 保留 |
+| 断连期下发 | assignment-2（`3.0.0-product-draft.1`）控制面 delivered，bundle 装 ConfigMap——边侧文件系统验证 **absent**（通道物理不通，非应用层模拟） |
+| 重连 | edge-1 Ready=True；ConfigMap 经 CloudHub→EdgeHub→MetaManager→edged 卷同步真实到达 `/var/lib/kubelet/pods/*/volumes/.../bundle/bundle.json`；`edge_apply` 导入并回执 verified+activated |
+| 撤包 | assignment-1 revoke→边侧 `edge_revoke`→revoked 回执→assignment 终态 `revoked`；边库实测 `2.0.0-draft.3 → revoked` |
+| 对账 | `reconcile` 终态 ok=2 / retry=0 / awaiting=0 / failed=0 |
+| 边界 | 单机演练非生产集群；assignment-1 传输走 docker cp（宿主层），assignment-2 走真实 KubeEdge ConfigMap 同步；边应用为容器内进程非 KubeEdge pod；manifest 均为草稿不代表法学发布；未覆盖 `waiting-cloud` 返回管道语义（另有独立测试） |
+
+脚本 `scripts/kubeedge_local_drill.py`，证据 `deploy/k8s/DRILL_EVIDENCE.md`。
 
 ## 2026-09-24 V2.2 包下发 bundle 与审计字段回填验证
 

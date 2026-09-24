@@ -1,9 +1,10 @@
 # LexAegis on Kubernetes + KubeEdge
 
-> **状态：未在真实集群验证。** 这些 manifests 是 V2.2 目标拓扑的草拟表达，
-> 从 `compose.yaml` 隔离模型映射而来。真实 KubeEdge 部署与断连 / 包下发 /
-> 撤包演练是独立验收门禁（`docs/V2_2_ALIGNMENT.md` P7）；无集群演练收据前
-> 不得宣称 KubeEdge 部署已通过。
+> **状态：本地单机演练已通过（2026-09-24），生产集群未验证。** kind + KubeEdge
+> 断连 / 包下发 / 撤包演练收据见 `DRILL_EVIDENCE.md`；注意演练中边应用以
+> 容器内进程形态运行、bundle-2 经真实 ConfigMap 同步通道到达，本目录
+> manifests 本身未按原样部署——生产形态部署仍是独立验收门禁
+> （`docs/V2_2_ALIGNMENT.md` P7）。
 
 ## 拓扑映射
 
@@ -83,8 +84,10 @@ fail-closed 入库，`published` 不导入，status 仅对内嵌签名可验证�
 集群落地时的建议路径：云域跑控制器（分配 → deliver 产 bundle）→
 KubeEdge 通道（ConfigMap/OCM 或独立下发服务）投递 → 边域调
 `edge_apply`/`edge_revoke` 并回传回执 → 控制器记回执推进状态；
-`reconcile` 供运维或控制器周期对账。**端到端集群演练未做**，
-不宣称该链路在真实集群通过。
+`reconcile` 供运维或控制器周期对账。本地 kind+KubeEdge 演练已按此路径
+跑通（assignment-2 的 bundle 经 ConfigMap 真实同步到边节点文件系统，
+断连期 absent、重连后到达），证据见 `DRILL_EVIDENCE.md`；生产集群形态
+仍属未验证。
 
 ## 与 Compose 的差异
 
