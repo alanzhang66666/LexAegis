@@ -13,7 +13,6 @@ services:
     <<: *runtime
     ports: ["127.0.0.1:${LEX_COMPOSE_API_PORT:-38765}:8765"]
     environment:
-      LEX_DATA_DIR: /data
       LEX_RUN_PROFILE: ${LEX_RUN_PROFILE:-production}
       LEX_RELEASE_BUILD_MANIFEST_PATH: /release/release-build-manifest.json
       LEX_LOCAL_PASSWORD: ${LEX_LOCAL_PASSWORD:?Set a local password}
@@ -56,7 +55,6 @@ services:
     depends_on:
       api: {condition: service_healthy}
     environment:
-      LEX_DATA_DIR: /data
       LEX_RUN_PROFILE: ${LEX_RUN_PROFILE:-production}
       LEX_RELEASE_BUILD_MANIFEST_PATH: /release/release-build-manifest.json
       LEX_GATEWAY_URL: http://gateway:8766
