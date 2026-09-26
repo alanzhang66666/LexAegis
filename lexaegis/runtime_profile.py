@@ -55,7 +55,12 @@ def profile_config(profile: str | None = None) -> dict[str, Any]:
 
 
 def _has_payload(directory: Path) -> bool:
-    return any(item.name not in (MARKER, BINDING_LOCK) for item in directory.iterdir())
+    # lost+found is created by mkfs at every ext4 filesystem root; fresh named
+    # volumes always contain it. It is a filesystem artifact, not user payload.
+    return any(
+        item.name not in (MARKER, BINDING_LOCK, "lost+found")
+        for item in directory.iterdir()
+    )
 
 
 def _check_restore_marker(path: Path) -> None:
