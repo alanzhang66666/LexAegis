@@ -101,10 +101,18 @@ services:
       PYTHONDONTWRITEBYTECODE: "1"
     networks: [redteam]
     # No volumes: neither raw documents nor truth labels can be read.
+    healthcheck:
+      test: [CMD, python, -c, "import socket; socket.create_connection(('127.0.0.1', 8767), 2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
   benchmark:
     <<: *runtime
     profiles: [benchmark]
     command: [python, -m, lexaegis.cli, bench, --profile, ianvs-pipl]
+    restart: "no"
+    healthcheck:
+      disable: true
     environment:
       LEX_RUNTIME_ROLE: benchmark
       PYTHONDONTWRITEBYTECODE: "1"
