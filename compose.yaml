@@ -25,6 +25,7 @@ services:
       LEX_ISOLATED: "1"
       LEX_DEPLOYMENT_MODE: isolated
       LEX_RUNTIME_ROLE: api
+      LEX_LAUNCHER_ROLES: api
       PYTHONDONTWRITEBYTECODE: "1"
     volumes:
       - "${LEX_APP_DATA_PATH:-lexaegis-app-data}:/data"
