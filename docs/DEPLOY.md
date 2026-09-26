@@ -28,6 +28,8 @@ lexaegis restore /path/to/lexaegis-backup.zip \
 
 `.env` 必须配置 `LEX_LOCAL_PASSWORD` 和 `LEX_GATEWAY_SECRET`。API/worker 在内部网络；仅网关连接外发网络；原件与网关使用不同卷。前端全部本地提供。
 
+数据根默认是命名卷 `lexaegis-app-data` / `lexaegis-gateway-data`。**不要**在 Docker Desktop 下用绑定挂载当数据根——Windows/macOS 宿主目录经 9p/virtiofs 代理，会被 `assert_local_filesystem` 正确拒绝（SQLite 不上网络文件系统）。仅当宿主确为本地文件系统时才用 `LEX_APP_DATA_PATH` / `LEX_GATEWAY_DATA_PATH` 覆盖。API 服务以 `LEX_LAUNCHER_ROLES=api` 运行：隔离拓扑中 api 容器不再内嵌 gateway/worker（它们由独立服务承担），且尊重 `LEX_DEPLOYMENT_MODE=isolated` 而非强制 native。`isolate-api-route` 持续删除 API 网络命名空间的默认路由（api 重建会得新 netns，一次性删除会失效）。
+
 ```bash
 docker compose up --build -d
 lexaegis check-isolation
@@ -42,7 +44,7 @@ lexaegis check-isolation
 
 ## Kubernetes / KubeEdge（草拟，未验证）
 
-`deploy/k8s/` 提供 V2.2 云边拓扑的 manifests：边域 `edge-api` / `edge-worker`（KubeEdge EdgeCore 节点，`lexaegis.io/domain: edge`），云域 `lexaegis-cgw`（唯一持有云凭据、唯一可出网）。原件与身份映射只落边侧 PVC；边域 Pod 经 NetworkPolicy 只能到达 CGW。**未在真实集群验证**——部署与断连/包下发/撤包演练是独立验收门禁，无演练收据不得宣称通过。详见 `deploy/k8s/README.md`。
+`deploy/k8s/` 提供 V2.2 云边拓扑的 manifests：边域 `edge-api` / `edge-worker`（KubeEdge EdgeCore 节点，`lexaegis.io/domain: edge`），云域 `lexaegis-cgw`（唯一持有云凭据、唯一可出网）。原件与身份映射只落边侧 PVC；边域 Pod 经 NetworkPolicy 只能到达 CGW。本机 kind + KubeEdge 单集群已完成下发/断连/撤包演练并留真实通道收据（`deploy/k8s/DRILL_EVIDENCE.md`，assignment-2 走真实 CloudHub→EdgeHub→MetaManager 卷同步）；**生产集群部署仍未验证**。详见 `deploy/k8s/README.md`。
 
 ## 启动排障
 

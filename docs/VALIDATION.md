@@ -41,6 +41,18 @@
 
 脚本 `scripts/kubeedge_local_drill.py`，证据 `deploy/k8s/DRILL_EVIDENCE.md`。
 
+## 2026-09-26 B11 生产 Compose 隔离部署与 verified build manifest
+
+| 本轮检查 | 实际结果与边界 |
+| --- | --- |
+| 镜像构建 | `docker build -t lexaegis:local .` 真实完成（前端 stage + Python 依赖 + llama runtime）；digest `sha256:f861940def8c80343c8086682f26d1295fbb412fcdcf6fcf4391bed1fb3134d6` |
+| 隔离栈启动 | `docker compose --profile redteam --profile benchmark up -d` 全栈就绪：api/worker/gateway/redteam healthy，isolate-api-route 常删默认路由，benchmark 批任务退出即终态 |
+| 五项探测 | `lexaegis check-isolation`：**api_no_egress / worker_no_egress / gateway_no_case_volume / redteam_no_secrets / benchmark_no_secrets 全 true**；`isolation_verified=true` 于 2026-09-26T01:12:03Z 写入隔离卷 `settings`，审计 `isolation.verified` |
+| 容器内直连核验 | api 内 `http://gateway:8766` 连通（内部网）；`http://1.1.1.1:80` **URLError 拒绝**——无出口为真实路由缺失，非应用层拒绝 |
+| build manifest | `build_36bf09f9f1e4b733ef51c65e` **status=verified**：worktree clean、绑定 source_commit `dffbb3f5`、锁文件/wheel/前端 dist/文档/运行包/镜像 digest/迁移修订/验证结果哈希齐全；证据 `.data/release/`（不入库） |
+| 部署过程修复 | 三处真实缺陷被门禁挡住并修复：① 绑定挂载为 9p 代理 FS 被 `assert_local_filesystem` 正确拒绝 → 默认改命名卷；② compose 覆盖 `LEX_DATA_DIR=/data` 指向卷根，与镜像内 `/data/app`、`/data/gateway` 种子目录冲突 → 移除覆盖；③ launcher 单容器模式内嵌 gateway+worker 且强制 `native` → `LEX_LAUNCHER_ROLES` 分角色、尊重预设 deployment mode；④ `isolate-api-route` 一次性删路由在 api 重建后失效 → 改循环删除（该缺陷曾被 api_no_egress 探测真实捕获） |
+| 边界 | 主机防火墙证据与镜像供应链审计**未做**，B7 隔离收据仍缺这两类 artifact；本验证只覆盖 Compose 拓扑隔离与构建来源，不替代具名技术 attester 与 G8 法学确认；`formal_dispatch=blocked` 不变 |
+
 ## 2026-09-24 V2.2 包下发 bundle 与审计字段回填验证
 
 | 本轮检查 | 实际结果与边界 |
