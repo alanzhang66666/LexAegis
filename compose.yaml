@@ -28,7 +28,7 @@ services:
       LEX_RUNTIME_ROLE: api
       PYTHONDONTWRITEBYTECODE: "1"
     volumes:
-      - "${LEX_APP_DATA_PATH:-./.data/production/app}:/data"
+      - "${LEX_APP_DATA_PATH:-lexaegis-app-data}:/data"
       - "${LEX_RELEASE_BUILD_MANIFEST_HOST_PATH:-./release-build-manifest.json}:/release/release-build-manifest.json:ro"
     # publish is not internal: Windows Docker otherwise drops 127.0.0.1 host bindings.
     # isolate-api-route then deletes the default route so the 1.1.1.1 probe still fails.
@@ -71,7 +71,7 @@ services:
       LEX_RUNTIME_ROLE: worker
       PYTHONDONTWRITEBYTECODE: "1"
     volumes:
-      - "${LEX_APP_DATA_PATH:-./.data/production/app}:/data"
+      - "${LEX_APP_DATA_PATH:-lexaegis-app-data}:/data"
       - "${LEX_RELEASE_BUILD_MANIFEST_HOST_PATH:-./release-build-manifest.json}:/release/release-build-manifest.json:ro"
     networks: [internal, redteam]
   gateway:
@@ -90,7 +90,7 @@ services:
       LEX_RUNTIME_ROLE: gateway
       PYTHONDONTWRITEBYTECODE: "1"
     volumes:
-      - "${LEX_GATEWAY_DATA_PATH:-./.data/production/gateway}:/data"
+      - "${LEX_GATEWAY_DATA_PATH:-lexaegis-gateway-data}:/data"
       - "${LEX_RELEASE_BUILD_MANIFEST_HOST_PATH:-./release-build-manifest.json}:/release/release-build-manifest.json:ro"
     networks: [internal, egress]
   redteam:
@@ -122,6 +122,12 @@ services:
     tmpfs: [/tmp]
     volumes: ["./models:/models:ro"]
     networks: [internal, redteam]
+# Named volumes: bind mounts under Docker Desktop are proxied filesystems (9p/virtiofs)
+# and are correctly rejected for SQLite. Set LEX_APP_DATA_PATH/LEX_GATEWAY_DATA_PATH
+# only on hosts where the target is a real local filesystem.
+volumes:
+  lexaegis-app-data: {}
+  lexaegis-gateway-data: {}
 networks:
   internal: {internal: true}
   redteam: {internal: true}
