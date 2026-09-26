@@ -48,7 +48,8 @@ services:
     cap_add: [NET_ADMIN]
     security_opt: [no-new-privileges:true]
     read_only: true
-    command: ["sh", "-c", "ip route del default || true; exec sleep infinity"]
+    # api restarts get a fresh netns with the default route restored; keep deleting it.
+    command: ["sh", "-c", "while :; do ip route del default 2>/dev/null; sleep 2; done"]
     restart: unless-stopped
   worker:
     <<: *runtime
