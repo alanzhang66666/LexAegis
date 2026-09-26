@@ -110,6 +110,40 @@ def _provider(repo, request: Mapping[str, Any]) -> tuple[str, str]:
     return provider_id, profile_hash
 
 
+def _frozen_standby(repo, request: Mapping[str, Any], scope_kind: str) -> dict | None:
+    """Validate a standby slot frozen into the request dependencies.
+
+    First-acceptance packs keep the primary-only rule; a request-scoped pack
+    may carry a standby slot only while its provider profile is reviewed and
+    hash-bound. Failover semantics stay local_undisclosed_only — the standby
+    never receives a request that already crossed the boundary.
+    """
+    dependencies = request.get("dependencies") or {}
+    slot = (dependencies.get("dual_slot") or {}).get("standby")
+    provider_id = dependencies.get("standby_provider_id")
+    if not slot and not provider_id:
+        return None
+    if scope_kind != "request":
+        raise FormalReleaseError("first release allows the primary slot only")
+    if not isinstance(slot, dict) or not provider_id or slot.get("provider_id") != provider_id:
+        raise FormalReleaseError("standby binding is incomplete")
+    try:
+        profile = repo.get(str(provider_id), "provider")
+    except KeyError as exc:
+        raise FormalReleaseError("standby provider profile is missing") from exc
+    profile_hash = dependencies.get("standby_provider_hash")
+    if digest(profile) != profile_hash:
+        raise FormalReleaseError("standby provider profile changed")
+    if profile.get("status") != "reviewed":
+        raise FormalReleaseError("standby provider profile is not reviewed")
+    target = slot.get("target")
+    model = slot.get("model")
+    if not isinstance(target, str) or not target.startswith("https://") or not model:
+        raise FormalReleaseError("standby slot target or model is missing")
+    return {"provider_id": provider_id, "target": target, "model": model,
+            "provider_profile_hash": profile_hash}
+
+
 def _tuple_for_request(case: Mapping[str, Any], task: Mapping[str, Any], request: Mapping[str, Any], *, include_pilot: bool = True) -> dict[str, str]:
     """Build the live product scope; retain the named LA-001 pilot tuple."""
     dependencies = request.get("dependencies") or {}
@@ -277,8 +311,6 @@ def freeze_request(
     model = body.get("model")
     if not isinstance(target, str) or not target.startswith("https://") or not model:
         raise FormalReleaseError("formal request target or model is missing")
-    if dependencies.get("standby_provider_id") or (dependencies.get("dual_slot") or {}).get("standby"):
-        raise FormalReleaseError("first release allows the primary slot only")
     _provider(repo, request)
     try:
         pack = repo.get(str(task.get("pack_id") or ""), "pack")
@@ -307,6 +339,7 @@ def freeze_request(
             raise FormalReleaseError("published rule scope does not cover the current case and primary provider")
     else:
         raise FormalReleaseError("unknown published rule scope kind")
+    standby = _frozen_standby(repo, request, scope_kind)
     material_versions = dependencies.get("material_versions")
     if not isinstance(material_versions, dict) or material_versions != _current_documents(repo, case["id"]):
         raise FormalReleaseError("formal request material versions are stale or incomplete")
@@ -357,6 +390,10 @@ def freeze_request(
         "target": target,
         "model": model,
         "provider_profile_hash": provider_hash,
+        "standby_provider_id": standby.get("provider_id") if standby else None,
+        "standby_target": standby.get("target") if standby else None,
+        "standby_model": standby.get("model") if standby else None,
+        "standby_provider_profile_hash": standby.get("provider_profile_hash") if standby else None,
         "runtime_pack_hash": pack_hash,
         "material_versions": material_versions,
         "rule_versions": {str(task.get("pack_id", "rules")): str(pack_hash)},
@@ -401,6 +438,20 @@ def install_policy(repo, policy: FormalReleasePolicy | Mapping[str, Any], *, act
             raise FormalReleaseError("request policy has no valid current task scope") from exc
         if candidate.tuple != expected_tuple:
             raise FormalReleaseError("request policy must match its case, purpose, and primary provider")
+        dependencies = (task.get("request") or {}).get("dependencies") or {}
+        slot = (dependencies.get("dual_slot") or {}).get("standby") or {}
+        if candidate.allowed_standby_target:
+            try:
+                profile = repo.get(str(dependencies.get("standby_provider_id") or ""), "provider")
+            except KeyError:
+                profile = None
+            if (slot.get("target") != candidate.allowed_standby_target
+                    or slot.get("model") != candidate.allowed_standby_model
+                    or dependencies.get("standby_provider_hash") != candidate.allowed_standby_provider_profile_hash
+                    or not profile or profile.get("status") != "reviewed"):
+                raise FormalReleaseError("standby policy scope is not backed by a reviewed frozen standby slot")
+        elif slot:
+            raise FormalReleaseError("request has a standby slot but the policy does not authorize it")
     if candidate.status != "blocked":
         raise FormalReleaseError("a new formal release policy must start blocked")
     if actor_role != "admin" or not actor.strip():
@@ -542,6 +593,13 @@ def evaluate_release(
         if (policy.build_manifest_hash != request.build_manifest_hash or policy.allowed_target != request.target
                 or policy.allowed_model != request.model or policy.allowed_provider_profile_hash != request.provider_profile_hash):
             raise FormalReleaseError("request is outside installed policy scope")
+        if bool(policy.allowed_standby_target) != bool(request.standby_target):
+            raise FormalReleaseError("policy standby scope does not match the frozen request")
+        if request.standby_target and (
+                policy.allowed_standby_target != request.standby_target
+                or policy.allowed_standby_model != request.standby_model
+                or policy.allowed_standby_provider_profile_hash != request.standby_provider_profile_hash):
+            raise FormalReleaseError("standby slot is outside installed policy scope")
         if policy.consumed_dispatches >= 1:
             raise FormalReleaseError("single formal dispatch slot is already consumed")
         if policy.status == "armed_once" and (
@@ -597,6 +655,26 @@ def evaluate_release(
             if not valid:
                 hits.append(GateHit(gate_id=gate_id, status="pending", kind="verification",
                                     reason_code="formal_evidence_missing", message=f"{gate_id} 缺少当前请求有效签署证据"))
+        if request.standby_provider_id:
+            standby_tuple = {"case_id": request.tuple["case_id"], "purpose": request.tuple["purpose"],
+                             "recipient": request.standby_provider_id}
+            standby_reviews = []
+            for raw in repo.list(_RECEIPT_KIND):
+                if raw.get("gate_id") != "G3" or raw.get("tuple") != standby_tuple:
+                    continue
+                if raw.get("request_hash") not in (None, request.request_hash):
+                    continue
+                if raw.get("bound_versions") != expected_versions:
+                    continue
+                data = dict(raw)
+                if (data.get("conclusion") == "pass" and _receipt_manifest_intact(repo, data)
+                        and _receipt_role_action(repo, data)
+                        and _receipt_live(repo, data, at, standby_tuple)):
+                    standby_reviews.append(data)
+            if not _g3_has_required_legal_reviews(standby_reviews):
+                hits.append(GateHit(gate_id="G3", status="pending", kind="verification",
+                                    reason_code="standby_legal_reviews_missing",
+                                    message="G3 备槽接收方缺少法03/法04 有效签署"))
         isolation = [item for item in repo.list("isolation_receipt")
                      if item.get("request_hash") == request.request_hash
                      and item.get("tuple") == request.tuple

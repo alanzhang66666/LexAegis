@@ -447,6 +447,10 @@ class AttackRun(Contract):
     query_count: int = Field(default=0, ge=0)
     duration_ms: int = Field(default=0, ge=0)
     result_hash: str | None = None
+    executor_version: str | None = None
+    suite_id: str | None = None
+    positive_control: bool = False
+    request_hash: str | None = None
     started_at: str
     finished_at: str | None = None
 
@@ -738,6 +742,9 @@ class FormalReleasePolicy(Contract):
     allowed_target: str = ""
     allowed_model: str = ""
     allowed_provider_profile_hash: str = ""
+    allowed_standby_target: str = ""
+    allowed_standby_model: str = ""
+    allowed_standby_provider_profile_hash: str = ""
     maximum_dispatches: int = Field(default=1, ge=1)
     consumed_dispatches: int = Field(default=0, ge=0)
     valid_from: str | None = None
@@ -753,6 +760,18 @@ class FormalReleasePolicy(Contract):
             "purpose": "R_fact_summary",
             "recipient": "D_DeepSeek_official_API",
         }
+        standby = (self.allowed_standby_target, self.allowed_standby_model,
+                   self.allowed_standby_provider_profile_hash)
+        if self.scope_kind == "first_acceptance" and any(standby):
+            raise ValueError("first-acceptance policy permits the primary slot only")
+        if any(standby) and not all(standby):
+            raise ValueError("standby scope requires target, model, and provider profile hash")
+        if all(standby):
+            if not self.allowed_standby_target.startswith("https://"):
+                raise ValueError("standby target must be an exact HTTPS endpoint")
+            import re as _re
+            if _re.fullmatch(r"(sha256:)?[0-9a-f]{64}", self.allowed_standby_provider_profile_hash) is None:
+                raise ValueError("standby provider profile hash must be a sha256 digest")
         if self.scope_kind == "first_acceptance":
             if self.tuple != expected or self.bound_request_hash is not None:
                 raise ValueError("first-acceptance policy requires the exact LA-001 × R × D scope")
@@ -777,6 +796,10 @@ class FrozenFormalRequest(Contract):
     target: str = Field(min_length=1)
     model: str = Field(min_length=1)
     provider_profile_hash: str = Field(min_length=1)
+    standby_provider_id: str | None = None
+    standby_target: str | None = None
+    standby_model: str | None = None
+    standby_provider_profile_hash: str | None = None
     runtime_pack_hash: str = Field(min_length=1)
     material_versions: dict[str, int]
     rule_versions: dict[str, str]
@@ -830,6 +853,7 @@ class IsolationReceipt(Contract):
     probe_output_hash: str = ""
     host_firewall_evidence_hash: str = ""
     supply_chain_evidence_hash: str = ""
+    evidence_artifact_ids: dict[str, str] = Field(default_factory=dict)
     generated_at: str | None = None
     expires_at: str | None = None
     attested_by: str | None = None

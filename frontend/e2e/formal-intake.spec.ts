@@ -60,7 +60,8 @@ test("production formal intake uses exact actor, pending default and frozen G1 b
   let isolationPostCount = 0;
   await page.route("**/api/v1/tasks/*/formal-release/intake-context", route => route.fulfill({ json: { ...context, actor: activeActor, task_id: new URL(route.request().url()).pathname.split("/")[4] } }));
   await page.route("**/api/v1/formal-release", route => route.fulfill({ json: { policies: [], artifacts, receipts: saved,
-    isolation_receipts: [{ id: "isolation-stub", request_hash: context.request_hash, tuple: context.tuple, status: "pending_legal_confirmation", attested_by: "tech-user" }], grants: [] } }));
+    isolation_receipts: [{ id: "isolation-stub", request_hash: context.request_hash, tuple: context.tuple, status: "pending_legal_confirmation", attested_by: "tech-user",
+      evidence_artifact_ids: { probe_output_hash: "evidence-probe", host_firewall_evidence_hash: "evidence-fw" } }], grants: [] } }));
   await page.route("**/api/v1/formal-release/receipts", async route => {
     const body = route.request().postDataJSON();
     submittedReceipt = body;
@@ -131,6 +132,7 @@ test("production formal intake uses exact actor, pending default and frozen G1 b
   await expect(page.getByLabel("G1 法01 人工结论")).toHaveValue("pending");
   await expect(page.getByRole("combobox", { name: "证据模板类别" })).toContainText("技04");
   await expect(page.getByLabel("isolation-stub 选择本人 G8 收据").locator("option")).toHaveCount(2);
+  await expect(page.getByText(/probe_output_hash→evidence-probe/)).toBeVisible();
   await page.getByLabel("isolation-stub 选择本人 G8 收据").selectOption("g8-signed-by-me");
   await page.getByLabel("模板原件").first().selectOption("template-law01");
   await page.locator(".intake-template").first().locator("fieldset.intake-artifacts").nth(1).locator("input").first().check();

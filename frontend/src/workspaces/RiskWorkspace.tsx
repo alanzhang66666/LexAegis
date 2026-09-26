@@ -1,4 +1,4 @@
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { AlertTriangle, ArrowRight, Check, Play, ShieldCheck } from "lucide-react";
 import { Empty, IssueList, Tag } from "../components/ui";
 import { ApprovalWorkspace, dispositionCopy } from "./ApprovalWorkspace";
@@ -118,6 +118,10 @@ export function RiskWorkspace({ task, pack, busy, role, localReview = false, run
         {task.redteam_status === "pending" ? "红队作业排队中" : "排队运行四类攻击"}
       </button>
     </details>}
+    {runtimeProfile==="production"&&task.request_hash&&<>
+      <AttackSuites task={task} request={request}/>
+      <EvidenceManifest task={task} request={request}/>
+    </>}
     {task.risk.findings.map((finding:string)=><p className="finding" key={finding}>{finding}</p>)}
     <details className="request-detail" open>
       <summary>完整请求快照 <Tag>v{task.version}</Tag></summary>
@@ -156,6 +160,55 @@ export function RiskWorkspace({ task, pack, busy, role, localReview = false, run
     {task.error && <div className="inline-warning"><AlertTriangle size={14}/>{task.error}</div>}
     {!localReview && <ApprovalWorkspace task={task} pack={pack} busy={busy} role={role} onSubmit={onLegalReview} onTechnicalIssue={onTechnicalIssue} onDraft={onDraft}/>}
   </>;
+}
+
+function AttackSuites({ task, request }: { task: Obj; request: (path: string) => Promise<any> }) {
+  const [suites, setSuites] = useState<Obj[]>([]);
+  useEffect(() => {
+    let live = true;
+    request(`/tasks/${task.id}/attack-suites`).then(value => { if (live && Array.isArray(value)) setSuites(value); }).catch(() => {});
+    return () => { live = false; };
+  }, [task.id, task.request_hash]);
+  if (!suites.length) return null;
+  return <div className="attack-suite-list"><h4 className="subheading">正式攻击套件</h4>
+    <p className="small-note">正式套件结果仍须法09具名认可才计入 G8；未运行、错误和不确定均不算通过。</p>
+    {suites.map((suite: Obj) => <div key={suite.id} className="attack-suite">
+      <span>{suite.id}</span>
+      <Tag tone={suite.conclusion === "complete" ? "green" : "amber"}>
+        {suite.conclusion === "complete" ? "套件完成" : "套件无效"}</Tag>
+      <Tag tone={suite.all_resisted ? "green" : "amber"}>{suite.all_resisted ? "四类全 resisted" : "未全部 resisted"}</Tag>
+      <Tag tone={(suite.positive_control || {}).detected ? "green" : "amber"}>
+        {(suite.positive_control || {}).detected ? "阳性对照检出" : "阳性对照未检出"}</Tag>
+      <details><summary>套件证据</summary><dl className="metadata">
+        <dt>执行器</dt><dd>{suite.executor_version || "未记录"} · {suite.transport || "通道未记录"}</dd>
+        <dt>请求哈希</dt><dd><code>{suite.request_hash}</code></dd>
+        <dt>套件哈希</dt><dd><code>{suite.suite_hash}</code></dd>
+        <dt>明细运行</dt><dd>{(suite.run_ids || []).length} 条 · {(suite.run_hashes || []).join("、")}</dd>
+      </dl></details>
+    </div>)}
+  </div>;
+}
+
+function EvidenceManifest({ task, request }: { task: Obj; request: (path: string) => Promise<any> }) {
+  const [manifest, setManifest] = useState<Obj | null>(null);
+  useEffect(() => {
+    let live = true;
+    request(`/tasks/${task.id}/evidence-manifest`).then(value => { if (live) setManifest(value); }).catch(() => {});
+    return () => { live = false; };
+  }, [task.id, task.request_hash]);
+  if (!manifest) return null;
+  const problems = manifest.audit_chain_problems || [];
+  return <div className="evidence-manifest"><h4 className="subheading">证据清单（仅哈希，不含材料原文）</h4>
+    <dl className="metadata">
+      <dt>请求哈希</dt><dd><code>{manifest.request_hash || "未冻结"}</code></dd>
+      <dt>门禁收据</dt><dd>{(manifest.gate_receipts || []).length} 份 · 隔离收据 {(manifest.isolation_receipts || []).length} 份</dd>
+      <dt>攻击证据</dt><dd>{(manifest.attack_suites || []).length} 套件 · {(manifest.attack_runs || []).length} 明细</dd>
+      <dt>回执与决定</dt><dd>{(manifest.cloud_result_envelopes || []).length} 信封 · {(manifest.human_decisions || []).length} 人工决定</dd>
+      <dt>审计链</dt><dd>{(manifest.audit_chain || []).length} 条 · {problems.length ? `${problems.length} 处断链` : "链完整"}</dd>
+      <dt>清单哈希</dt><dd><code>{manifest.manifest_hash}</code></dd>
+    </dl>
+    {problems.length > 0 && <p className="error" role="alert">审计链完整性异常：{problems.join("；")}</p>}
+  </div>;
 }
 
 function materialVersionLabel(versions: Obj | undefined) {

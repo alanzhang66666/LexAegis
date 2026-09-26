@@ -1,4 +1,5 @@
 """Single formal-cloud outbound gate. Not a send authorization by itself."""
+import re
 from .d_path import combination_blockers, combination_input_hash, layer_b_blockers, ledger_corpus, same_recipient_ledger
 from .governance import REQUIRED_ATTACKS, pack_content_hash
 
@@ -14,6 +15,9 @@ G_PRODUCT = "G-product"
 PACK_UNPUBLISHED = "适用规则尚未正式发布"
 PACK_LEGAL_UNFROZEN = "案由包尚未冻结法学状态、外发许可或适用范围"
 WEIGHTS_UNFROZEN = "五类风险信号权重尚未冻结"
+CITATION_UNRESOLVED = "存在未解析的法源引用"
+CITATION_NO_STATUTORY = "规则缺少条款级法律规范依据"
+CITATION_SUPERSEDED = "引用了已被替代的法源版本或条号"
 PROVIDER_INCOMPLETE = "服务商处理条件或影响评估不完整"
 ATTACKS_NOT_RESISTED = "四类冻结攻击未全部达到 resisted"
 ISOLATION_UNVERIFIED = "隔离部署自检未通过"
@@ -134,6 +138,77 @@ def _pack_legal_unfrozen(pack):
     )
 
 
+_RULE_SECTIONS = ("disclosure_rules", "sensitive_object_rules",
+                  "manual_review_conditions", "not_hard_ban_categories",
+                  "prohibition_findings")
+_SUPERSEDED_STATUS = {"superseded", "historical"}
+
+
+def _normalized_articles(articles):
+    return {str(a).replace(" ", "") for a in (articles or [])}
+
+
+def _superseded_article_labels(source):
+    """Article labels this source itself marks as replaced, e.g. 2017 art.38 -> art.41."""
+    labels = set()
+    mapping = source.get("historical_mapping") or {}
+    for key in mapping:
+        key = str(key)
+        match = re.search(r"article[_\-]?(\d+)", key)
+        if match is None:
+            match = re.search(r"第\s*(\d+)\s*条", key)
+        if match is None:
+            match = re.search(r"(\d+)\s*$", key)
+        if match:
+            labels.add("第" + match.group(1).lstrip("0") + "条")
+    return labels
+
+
+def citation_blockers(pack):
+    """Pack-level legal-citation audit feeding G5.
+
+    A rule that cites legal sources must resolve them and hold at least one
+    article-level statutory basis; instrument-scope standards and project
+    controls may only supplement. Unresolved references, superseded versions
+    or superseded article numbers all block publication readiness.
+    """
+    pack = pack or {}
+    messages = []
+    if pack.get("unresolved_citations"):
+        messages.append(CITATION_UNRESOLVED)
+    sources = {s.get("id"): s for s in pack.get("legal_sources") or [] if isinstance(s, dict)}
+    for section in _RULE_SECTIONS:
+        for item in pack.get(section) or []:
+            if not isinstance(item, dict):
+                continue
+            label = item.get("id") or item.get("field") or section
+            if item.get("unresolved_citations"):
+                messages.append(CITATION_UNRESOLVED + "：" + str(label))
+                continue
+            cited = item.get("legal_source_ids") or []
+            if not cited:
+                continue
+            missing = [sid for sid in cited if sid not in sources]
+            if missing:
+                messages.append(CITATION_UNRESOLVED + "：" + str(label))
+                continue
+            resolved = [sources[sid] for sid in cited]
+            if any((s.get("citation_status") or "") in _SUPERSEDED_STATUS for s in resolved):
+                messages.append(CITATION_SUPERSEDED + "：" + str(label))
+                continue
+            if not any(s.get("rule_nature") == "statutory" and s.get("granularity") == "article"
+                       for s in resolved):
+                messages.append(CITATION_NO_STATUTORY + "：" + str(label))
+    for source in sources.values():
+        if (source.get("citation_status") or "") in _SUPERSEDED_STATUS:
+            continue
+        dead = _superseded_article_labels(source)
+        if dead and _normalized_articles(source.get("articles")) & dead:
+            messages.append(CITATION_SUPERSEDED + "：" + str(source.get("id")))
+            break
+    return messages
+
+
 def edge_review_hits(edge_review):
     """Local edge review is G0 request hygiene, not G3 vendor/PIPIA evidence."""
     if not isinstance(edge_review, dict) or edge_review.get("decision") != "block_external":
@@ -165,6 +240,8 @@ def collect_outbound_blockers(
         hits.append(_hit(G5, PACK_LEGAL_UNFROZEN))
     if set(pack.get("risk_weights") or {}) != FROZEN_WEIGHTS:
         hits.append(_hit(G5, WEIGHTS_UNFROZEN))
+    for message in citation_blockers(pack):
+        hits.append(_hit(G5, message))
     if any(check.get("status") != "pass" for check in (provider_results or [])):
         hits.append(_hit(G3, PROVIDER_INCOMPLETE))
     if not attacks_all_resisted(attacks):
@@ -229,11 +306,13 @@ def attach_disposition(risk):
 
 
 def validate_formal_gate(pack, provider_results, attacks, isolation_verified) -> list[str]:
-    """Subset used by pack-integrity tests: G3/G5-hash/G8/G9. Weights and legal freeze stay in collect."""
+    """Subset used by pack-integrity tests: G3/G5/G8/G9. Weights and legal freeze stay in collect."""
     hits = []
     pack = pack or {}
     if _pack_unpublished(pack):
         hits.append(_hit(G5, PACK_UNPUBLISHED))
+    for message in citation_blockers(pack):
+        hits.append(_hit(G5, message))
     if any(check.get("status") != "pass" for check in (provider_results or [])):
         hits.append(_hit(G3, PROVIDER_INCOMPLETE))
     if not attacks_all_resisted(attacks):

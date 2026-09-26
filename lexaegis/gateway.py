@@ -160,8 +160,13 @@ def create_gateway(data_dir=None, secret=None, provider=None, build_manifest=Non
             if request["target"] not in approved_targets:
                 raise HTTPException(403, "Request target is not an approved recipient")
             if formal is not None:
-                if slots.get("standby"):
-                    raise HTTPException(403, "Formal first release permits only the primary slot")
+                formal_policy = FormalReleasePolicy.model_validate((formal.get("policy") or {}))
+                standby_slot = slots.get("standby")
+                if standby_slot:
+                    if (formal_policy.scope_kind != "request" or not formal_policy.allowed_standby_target
+                            or standby_slot.get("target") != formal_policy.allowed_standby_target
+                            or standby_slot.get("model") != formal_policy.allowed_standby_model):
+                        raise HTTPException(403, "Standby slot is outside the signed formal policy scope")
                 if not slots.get("primary") or slots["primary"].get("target") != request["target"]:
                     raise HTTPException(403, "Formal request target must match its primary slot")
         with store.transaction() as repo:
@@ -287,6 +292,12 @@ def _persist_and_claim_formal(repo, bundle, request, approval, identity, manifes
                 or policy.tuple != frozen.tuple or policy.allowed_target != frozen.target
                 or policy.allowed_model != frozen.model):
             raise FormalReleaseError("signed policy is outside local gateway build or request scope")
+        if bool(policy.allowed_standby_target) != bool(frozen.standby_target) or (
+                frozen.standby_target and (
+                    policy.allowed_standby_target != frozen.standby_target
+                    or policy.allowed_standby_model != frozen.standby_model
+                    or policy.allowed_standby_provider_profile_hash != frozen.standby_provider_profile_hash)):
+            raise FormalReleaseError("signed policy standby scope does not match frozen request")
         if (grant.release_policy_id != policy.id or grant.request_hash != frozen.request_hash
                 or grant.build_manifest_hash != frozen.build_manifest_hash
                 or grant.tuple != frozen.tuple or grant.state not in {"issued", "reserved"}):

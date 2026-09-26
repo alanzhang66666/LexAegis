@@ -178,6 +178,25 @@ class EvidenceStore:
             record = repo.get(artifact_id, _ARTIFACT_KIND)
         return EvidenceArtifact.model_validate(record)
 
+    def artifact_ids_by_hash(self, content_hash: str) -> list[str]:
+        """Return artifact ids whose registered content_hash matches, oldest first."""
+        content_hash = content_hash.strip().lower()
+        with self.store.read() as repo:
+            return [
+                item["id"] for item in repo.list(_ARTIFACT_KIND)
+                if item.get("content_hash") == content_hash
+            ]
+
+    def verified_artifact_by_hash(self, content_hash: str) -> EvidenceArtifact | None:
+        """Resolve a content hash to an artifact whose bytes re-verify, else None."""
+        for artifact_id in self.artifact_ids_by_hash(content_hash):
+            try:
+                self.read_artifact(artifact_id)
+            except (EvidenceIntegrityError, KeyError):
+                continue
+            return self.get_artifact(artifact_id)
+        return None
+
     def read_artifact(self, artifact_id: str) -> bytes:
         """Load protected content through its opaque reference and verify SHA-256."""
         artifact = self.get_artifact(artifact_id)

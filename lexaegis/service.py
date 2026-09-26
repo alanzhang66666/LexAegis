@@ -209,6 +209,63 @@ def queue_attack_run(repo, task_id, auxiliary_by_protocol=None):
     return job
 
 
+def _formal_suite_evaluate_fn():
+    """评测入口：有隔离红队服务则走 HTTP，否则进程内评测（transport 如实记录）。"""
+    import httpx
+    from .attacks import evaluate as in_process_evaluate
+    from .diagnostics import resolve_redteam_url
+    from .util import sign
+
+    base = resolve_redteam_url()
+    secret = os.getenv("LEX_REDTEAM_SECRET", "")
+    if not base or not secret:
+        return in_process_evaluate, "in_process"
+    client = httpx.Client(trust_env=False, timeout=60)
+
+    def evaluate_via_service(protocol, request, history, auxiliary, labels):
+        view = {"protocol": protocol, "request": request, "disclosed_history": history,
+                "auxiliary": auxiliary, "query_budget": max(1, int(protocol.get("query_budget") or 1))}
+        response = client.post(base + "/evaluate", json={"view": view, "signature": sign(view, secret)},
+                               timeout=protocol.get("time_budget_seconds") or 60)
+        response.raise_for_status()
+        return response.json()
+
+    evaluate_via_service.close = client.close
+    return evaluate_via_service, "isolated_redteam"
+
+
+def run_task_formal_suite(repo, task_id, auxiliary_sets=None, labels=None):
+    """正式攻击套件 1.0：冻结协议+阳性对照+request_hash 绑定证据。结果写入
+    attack_suite_run/attack_run，供法09收据以 evidence_artifact_ids 引用。"""
+    from . import attacks
+    from .policy import disclosure_history
+
+    task = repo.get(task_id, "task")
+    case = assert_current(repo, task)
+    if task.get("request") is None or not task.get("request_hash"):
+        raise DomainError("请先运行确定性风险检验以冻结请求")
+    if len(json.dumps(auxiliary_sets or {}, ensure_ascii=False)) > 200000:
+        raise DomainError("辅助数据集声明超过 20 万字符限制")
+    history = [
+        item.get("request", {}).get("wire_payload")
+        for item in disclosure_history(repo.list("disclosure", case["id"]))
+        if item.get("request", {}).get("wire_payload")
+    ]
+    evaluate_fn, transport = _formal_suite_evaluate_fn()
+    try:
+        suite = attacks.run_formal_suite(
+            repo, task, evaluate_fn=evaluate_fn, auxiliary_sets=auxiliary_sets,
+            labels=labels, history=history, transport=transport)
+    finally:
+        close = getattr(evaluate_fn, "close", None)
+        if close:
+            close()
+    audit(repo, case["id"], "attacksuite.completed", task_id=task_id, suite_id=suite["id"],
+          conclusion=suite["conclusion"], all_resisted=suite["all_resisted"],
+          request_hash=task["request_hash"])
+    return suite
+
+
 def _apply_review_status(ir):
     from .contracts import REVIEW_BLOCK_KINDS
     ir["needs_review"] = any(b["kind"] in REVIEW_BLOCK_KINDS and not b["reviewed"] for b in ir["blocks"])

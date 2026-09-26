@@ -10,12 +10,12 @@ from typing import Literal
 from urllib.parse import urlparse
 from zipfile import ZipFile, BadZipFile
 import httpx
-from fastapi import FastAPI, HTTPException, Request, Response, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, Request, Response, UploadFile, File, Form, Body
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from . import __version__, service, release_service
+from . import __version__, service, release_service, retention
 from .auth import create_user_record, current_actor, ensure_initial_admin, public_user, verify_password
 from .diagnostics import host_publish_capability, isolation_capability, legal_capability, redteam_capability
 from .parsing import UPLOAD_EXTENSIONS, ocr_capability
@@ -232,6 +232,11 @@ def _require_cloud_url(url):
 
 class AttackBatchInput(Input):
     auxiliary: dict[str, list[dict]] = Field(default_factory=dict)
+
+
+class AttackSuiteInput(Input):
+    auxiliary_sets: dict[str, list[dict]] = Field(default_factory=dict)
+    labels: dict[str, str] | None = None
 
 
 class ProviderReviewInput(Input):
@@ -1075,12 +1080,90 @@ def create_app(data_dir=None, password=None, build_manifest=None):
             raise
 
     @app.get("/api/v1/cases/{case_id}/documents/{document_id}/file")
-    def original(case_id: str, document_id: str):
-        with store.read() as repo:
+    def original(case_id: str, document_id: str, request: Request):
+        # 最小必要：审批人只核对外发请求，不需要下载原始材料
+        identity = require_role(request, "case_operator", "technical_reviewer", "legal_reviewer")
+        with store.transaction() as repo:
             doc = repo.get(document_id, "document")
-        if doc["case_id"] != case_id or not doc["path"]:
-            raise HTTPException(404)
-        return FileResponse(root / "files" / doc["path"], filename=doc["name"])
+            if doc["case_id"] != case_id or not doc["path"]:
+                raise HTTPException(404)
+            audit(repo, case_id, "document.original_downloaded", actor=identity["actor"],
+                  document_id=document_id)
+            path = root / "files" / doc["path"]
+        return FileResponse(path, filename=doc["name"])
+
+    @app.delete("/api/v1/cases/{case_id}")
+    def erase_case_endpoint(case_id: str, request: Request, body: dict = Body(...)):
+        identity = require_role(request, "admin")
+        if body.get("confirm_id") != case_id:
+            raise HTTPException(400, "删除确认号与案件编号不一致")
+        basis = str(body.get("basis") or "")
+        try:
+            result = retention.erase_case(store, root, case_id, actor=identity["actor"], basis=basis)
+        except KeyError:
+            raise HTTPException(404, "案件不存在")
+        except ValueError as exc:
+            raise HTTPException(409, str(exc))
+        return result
+
+    @app.get("/api/v1/retention/policy")
+    def get_retention_policy(request: Request):
+        require_role(request, "admin")
+        with store.read() as repo:
+            return retention.resolve_policy(repo.get("settings"))
+
+    @app.put("/api/v1/retention/policy")
+    def put_retention_policy(request: Request, body: dict = Body(...)):
+        identity = require_role(request, "admin")
+        try:
+            policy = retention.validate_policy(body.get("policy") or body)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        with store.transaction() as repo:
+            settings = repo.get("settings")
+            settings["retention"] = policy
+            repo.put("settings", settings)
+            audit(repo, "", "data.retention_policy_set", actor=identity["actor"], policy=policy)
+        return policy
+
+    @app.post("/api/v1/retention/sweep")
+    def run_retention_sweep(request: Request):
+        identity = require_role(request, "admin")
+        report = retention.sweep(store, root)
+        with store.transaction() as repo:
+            audit(repo, "", "data.retention_sweep_requested", actor=identity["actor"],
+                  purged=len(report["purged"]))
+        return report
+
+    @app.post("/api/v1/provider-deletion-requests")
+    def create_provider_deletion(request: Request, body: dict = Body(...)):
+        identity = require_role(request, "admin")
+        try:
+            with store.transaction() as repo:
+                record = retention.record_provider_deletion(
+                    repo, provider_profile_id=str(body.get("provider_profile_id") or ""),
+                    actor=identity["actor"], request_hash=body.get("request_hash"),
+                    note=str(body.get("note") or ""))
+        except KeyError:
+            raise HTTPException(404, "服务商档案不存在")
+        return record
+
+    @app.get("/api/v1/provider-deletion-requests")
+    def list_provider_deletions(request: Request):
+        require_role(request, "admin", "case_operator", "legal_reviewer")
+        with store.read() as repo:
+            return repo.list("provider_deletion_request")
+
+    @app.post("/api/v1/provider-deletion-requests/{request_id}/ack")
+    def ack_provider_deletion(request_id: str, request: Request):
+        identity = require_role(request, "admin")
+        try:
+            with store.transaction() as repo:
+                return retention.ack_provider_deletion(repo, request_id, actor=identity["actor"])
+        except KeyError:
+            raise HTTPException(404, "删除请求不存在")
+        except ValueError as exc:
+            raise HTTPException(409, str(exc))
 
     @app.post("/api/v1/cases/{case_id}/documents/{document_id}/retry")
     def retry_document(case_id: str, document_id: str, request: Request):
@@ -1247,6 +1330,26 @@ def create_app(data_dir=None, password=None, build_manifest=None):
         with store.transaction() as repo:
             return service.queue_attack_run(repo, task_id, body.auxiliary)
 
+    @app.get("/api/v1/tasks/{task_id}/attack-suites")
+    def task_attack_suites(task_id: str):
+        with store.read() as repo:
+            repo.get(task_id, "task")
+            return repo.list("attack_suite_run", task_id)
+
+    @app.post("/api/v1/tasks/{task_id}/attack-suites/run")
+    def run_task_attack_suite(task_id: str, body: AttackSuiteInput, request: Request):
+        require_role(request, "case_operator")
+        with store.transaction() as repo:
+            return service.run_task_formal_suite(repo, task_id, body.auxiliary_sets, body.labels)
+
+    @app.get("/api/v1/tasks/{task_id}/evidence-manifest")
+    def task_evidence_manifest(task_id: str, request: Request):
+        require_role(request, "case_operator")
+        from .audit_chain import export_evidence_manifest
+        with store.read() as repo:
+            repo.get(task_id, "task")
+            return export_evidence_manifest(repo, task_id)
+
     @app.post("/api/v1/tasks/{task_id}/approve")
     def approve(task_id: str, body: ApprovalInput, request: Request):
         identity = require_exact_role(request, "approver")
@@ -1344,8 +1447,10 @@ def create_app(data_dir=None, password=None, build_manifest=None):
             if task["status"] != "complete" or not task["artifact"]:
                 raise service.DomainError("结果尚未完成")
             claim = next((c for c in task["artifact"]["claims"] if c["id"] == claim_id), None)
-            if not claim or not claim["anchors"] or "引用不存在或指向未披露事实" in claim["issues"] or "日期或金额存在未在引用事实中出现的数字" in claim["issues"]:
-                raise service.DomainError("存在无效引用或无依据数字，不能确认；请重做任务")
+            if not claim or not claim["anchors"] or claim.get("status") == "blocked" \
+                    or any(str(i).startswith("阻断：") for i in claim["issues"]) \
+                    or "引用不存在或指向未披露事实" in claim["issues"] or "日期或金额存在未在引用事实中出现的数字" in claim["issues"]:
+                raise service.DomainError("存在无效引用、无依据数字或阻断级输出校核，不能确认；请重做任务")
             claim["reviewed"] = True
             claim["status"] = "confirmed"
             claim["reviewer"] = identity["actor"]

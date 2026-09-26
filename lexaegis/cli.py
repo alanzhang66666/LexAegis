@@ -198,6 +198,10 @@ def main():
     p.add_argument("--target", type=Path, required=True)
     p.add_argument("--gateway-target", type=Path, required=True)
     p.add_argument("--profile", choices=["production", "demo", "integration"])
+    p = commands.add_parser("retention", help="运行一次数据保留清理；仅清理已配置期限的对象")
+    retention_commands = p.add_subparsers(dest="retention_command", required=True)
+    p = retention_commands.add_parser("sweep", help="单次执行；未配置期限的对象不动")
+    p.add_argument("--profile", choices=["production", "demo", "integration"])
     p = commands.add_parser("migrate-runtime", help="显式标记已有运行目录；只用于确认归属的旧数据")
     p.add_argument("--root", type=Path, required=True)
     p.add_argument("--role", choices=["app", "gateway"], required=True)
@@ -320,6 +324,12 @@ def main():
     elif args.command == "restore":
         result = restore(args.archive, args.target, args.gateway_target, args.profile)
         print("Restored in review-required state. Unstarted approvals and jobs were invalidated; sending/unknown tasks require reconciliation. Local account password hashes are included; gateway/cloud secrets are not. Reconfigure secrets and restart services.")
+    elif args.command == "retention":
+        from .retention import sweep
+        from .runtime_profile import profile_config
+        config = profile_config(args.profile)
+        report = sweep(Store(config["app_dir"] / "app.sqlite"), config["app_dir"])
+        print(json.dumps(report, ensure_ascii=False, indent=2))
     elif args.command == "migrate-runtime":
         from .runtime_profile import migrate_legacy_runtime
         result = migrate_legacy_runtime(args.root, args.role, args.profile, args.declared_legacy_profile)

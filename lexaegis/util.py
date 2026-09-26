@@ -131,4 +131,11 @@ def exclusive_lock(path, *, error):
 def audit(repo, scope, event, **metadata):
     from .auth import current_actor
     actor = metadata.pop("actor", None) or current_actor.get()
-    repo.put("audit", {"id": uid("evt"), "at": now(), "actor": actor, "event": event, "metadata": metadata}, scope)
+    entries = repo.list("audit", scope)
+    record = {
+        "id": uid("evt"), "at": now(), "actor": actor, "event": event,
+        "metadata": metadata, "prev_hash": entries[-1].get("entry_hash") if entries else "",
+    }
+    record["entry_hash"] = digest(
+        {key: record[key] for key in ("at", "actor", "event", "metadata", "prev_hash")})
+    repo.put("audit", record, scope)

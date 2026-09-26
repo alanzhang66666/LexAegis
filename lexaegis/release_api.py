@@ -289,8 +289,17 @@ def register_release_routes(app, store, root, require_role, require_exact_role, 
                     or body.build_manifest_hash != frozen.build_manifest_hash
                     or body.image_digests != manifest.container_image_digests):
                 raise HTTPException(409, "隔离证据范围、请求哈希、构建或镜像与当前任务不一致")
+            resolved = {}
+            for field in ("deployment_identity_hash", "compose_hash", "probe_output_hash",
+                          "host_firewall_evidence_hash", "supply_chain_evidence_hash"):
+                raw = (value.get(field) or "").removeprefix("sha256:")
+                artifact = evidence.verified_artifact_by_hash(raw)
+                if artifact is None:
+                    raise HTTPException(409, f"{field} 未在证据库中登记为可核验内容")
+                resolved[field] = artifact.id
             value["tuple"] = scope
             value["attested_by"] = actor["user_id"]
+            value["evidence_artifact_ids"] = resolved
             repo.put("isolation_receipt", value)
             audit(repo, case["id"], "isolation.submitted", receipt_id=body.id,
                   actor_user_id=actor["user_id"], actor_role=actor["role"])
@@ -330,6 +339,11 @@ def register_release_routes(app, store, root, require_role, require_exact_role, 
                 raise HTTPException(409, "G8 确认收据已失效或证据绑定不完整")
             for artifact_id in legal.get("evidence_artifact_ids", []):
                 evidence.read_artifact(artifact_id)
+            for artifact_id in value.get("evidence_artifact_ids", {}).values():
+                try:
+                    evidence.read_artifact(artifact_id)
+                except (EvidenceStoreError, KeyError) as exc:
+                    raise HTTPException(409, "隔离收据引用的证据内容已失效") from exc
             repo.put("isolation_receipt", value)
             audit(repo, case["id"], "isolation.confirmed", receipt_id=receipt_id,
                   actor_user_id=actor["user_id"], actor_role=actor["role"], at=now())

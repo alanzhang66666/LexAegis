@@ -29,6 +29,28 @@ LAW_05_BYTES = b"completed synthetic law-05 review evidence"
 LAW_05_HASH = hashlib.sha256(LAW_05_BYTES).hexdigest()
 
 
+def legal_clean_source(source: dict) -> dict:
+    """合成修复测试包：真实 labor 包存在未决法源引用（obj_05/obj_11 等，
+    属法学核验待办）；流程类测试需要法源完整的包，仅用于测试。"""
+    source = json.loads(json.dumps(source))
+    statutory = next(
+        item["id"] for item in source.get("legal_sources") or []
+        if item.get("rule_nature") == "statutory" and item.get("granularity") == "article")
+    sources = {item["id"]: item for item in source.get("legal_sources") or []}
+    source.pop("unresolved_citations", None)
+    for section in ("sensitive_object_rules", "disclosure_rules",
+                    "manual_review_conditions", "prohibition_findings"):
+        for rule in source.get(section) or []:
+            if not isinstance(rule, dict) or "legal_source_ids" not in rule:
+                continue
+            rule.pop("unresolved_citations", None)
+            cited = [sources[sid] for sid in (rule.get("legal_source_ids") or []) if sid in sources]
+            if not any(item.get("rule_nature") == "statutory" and item.get("granularity") == "article"
+                       for item in cited):
+                rule["legal_source_ids"] = [statutory]
+    return source
+
+
 def write_report(path: Path, marker: str = "pending") -> bytes:
     content = json.dumps(
         {"schema_version": 1, "status": marker, "synthetic_pass_count": 0},

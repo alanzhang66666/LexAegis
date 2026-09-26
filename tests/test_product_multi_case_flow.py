@@ -27,6 +27,7 @@ from tests.test_release_service_integration import (
     MODEL, SECRET, TARGET, _Provider, _identities, _manifest, _register_receipt,
 )
 from tests.test_runtime_pack_workflow import RISK_WEIGHTS, SOURCE_PACK
+from tests.test_runtime_pack import legal_clean_source
 
 
 def _provider():
@@ -108,7 +109,7 @@ def test_published_domain_pack_supports_two_independent_service_created_releases
     with store.transaction() as repo:
         for protocol in protocols:
             repo.put("risk_protocol", protocol)
-    source_pack = json.loads(Path(SOURCE_PACK).read_text(encoding="utf-8"))
+    source_pack = legal_clean_source(json.loads(Path(SOURCE_PACK).read_text(encoding="utf-8")))
     source_pack["risk_protocols"] = [{"id": item["id"], "version": item["version"]}
                                       for item in protocols]
     login_as(env, "technical_reviewer")
@@ -241,15 +242,24 @@ def test_published_domain_pack_supports_two_independent_service_created_releases
         receipt("G9", "法10", technical="技06")
         receipt("G10", "技08", actor=approver_identity["actor"], role="approver")
         now = datetime.now(timezone.utc)
+        isolation_evidence = {}
+        for name in ("deployment_identity", "compose", "probe_output", "host_firewall", "supply_chain"):
+            artifact = client.post("/api/v1/formal-release/evidence", params={"template_kind": "技06"},
+                files={"file": (f"{name}.txt",
+                                f"synthetic {name} attestation {task['id']}".encode(), "text/plain")})
+            assert artifact.status_code == 200, artifact.text
+            isolation_evidence[name] = artifact.json()["content_hash"]
         isolation = IsolationReceipt(
             id=f"isolation-{task['id']}", request_hash=frozen.request_hash,
             tuple=release_tuple,
             build_manifest_hash=frozen.build_manifest_hash, deployment_mode="isolated",
-            deployment_identity_hash="sha256:" + "1" * 64, compose_hash="sha256:" + "2" * 64,
+            deployment_identity_hash=isolation_evidence["deployment_identity"],
+            compose_hash=isolation_evidence["compose"],
             image_digests=manifest.container_image_digests, api_no_egress=True, worker_no_egress=True,
             gateway_no_case_volume=True, redteam_no_secrets=True, benchmark_no_secrets=True,
-            probe_output_hash="sha256:" + "3" * 64, host_firewall_evidence_hash="sha256:" + "4" * 64,
-            supply_chain_evidence_hash="sha256:" + "5" * 64,
+            probe_output_hash=isolation_evidence["probe_output"],
+            host_firewall_evidence_hash=isolation_evidence["host_firewall"],
+            supply_chain_evidence_hash=isolation_evidence["supply_chain"],
             generated_at=(now - timedelta(minutes=1)).isoformat(),
             expires_at=(now + timedelta(minutes=20)).isoformat(), attested_by="technical-reviewer",
             status="pending_legal_confirmation")
@@ -265,6 +275,10 @@ def test_published_domain_pack_supports_two_independent_service_created_releases
         "id": "isolation-wrong-hash", "request_hash": second["request_hash"]})
     assert client.post("/api/v1/formal-release/isolation",
                        json=wrong_hash.model_dump(mode="json")).status_code == 409
+    unregistered = isolation_by_task[first["id"]].model_copy(update={
+        "id": "isolation-unregistered", "probe_output_hash": "9" * 64})
+    assert client.post("/api/v1/formal-release/isolation",
+                       json=unregistered.model_dump(mode="json")).status_code == 409
     for task in tasks:
         isolation = isolation_by_task[task["id"]]
         submitted = client.post("/api/v1/formal-release/isolation",

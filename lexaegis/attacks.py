@@ -34,6 +34,11 @@ POSITIVE_CONTROL_REQUEST = {
     ]
 }
 
+FORMAL_EXECUTOR_VERSION = "lexaegis.attacks.executor/1.0"
+FORMAL_SCORER_VERSION = "lexaegis.attacks.scorer/1.0"
+FORMAL_SUITE_NOTE = ("正式攻击套件：协议已冻结并校验哈希，辅助数据按类型+内容哈希声明，"
+                     "阳性对照先行；结果仍须法09具名认可才计入 G8")
+
 
 def assert_isolated_payload(value):
     if isinstance(value, dict):
@@ -266,3 +271,161 @@ def _result(kind, outcome, score, evidence, query_count, started, request, histo
         "process": process,
         "baseline": "engineering",
     }
+
+
+POSITIVE_CONTROL_PROTOCOL = {
+    "id": "positive_control", "kind": "identity", "version": "control-1.0",
+    "attacker_view": {}, "auxiliary_data": [], "query_budget": 0,
+    "time_budget_seconds": 30, "success_criteria": {"operator": "gte"}, "threshold": 0.5,
+}
+
+
+def check_positive_control(evaluate_fn) -> dict:
+    """阳性对照先行：在已知泄漏输入上，评测链必须能检出恢复，否则本次套件无效。"""
+    result = evaluate_fn(POSITIVE_CONTROL_PROTOCOL, POSITIVE_CONTROL_REQUEST, [], [], None)
+    detected = result.get("outcome") == "succeeded"
+    return {
+        "detected": bool(detected),
+        "outcome": result.get("outcome"),
+        "score": result.get("score"),
+        "evidence": [*(result.get("evidence") or [])[:5]],
+        "attacker_view_hash": result.get("attacker_view_hash"),
+        "engine_version": result.get("executor_version"),
+    }
+
+
+def validate_auxiliary_sets(protocols: list[dict], auxiliary_sets: dict | None) -> dict:
+    """声明式辅助数据集：逐集合校验 content_hash，按协议 declared auxiliary_data 覆盖。
+
+    auxiliary_sets = {protocol_id|kind: [{dataset_id, dataset_kind, content_hash, entries}]}
+    返回 {protocol_id: flattened_entries}。"""
+    auxiliary_sets = auxiliary_sets or {}
+    provided = {}
+    for protocol in protocols:
+        datasets = (auxiliary_sets.get(protocol["id"]) or auxiliary_sets.get(protocol["kind"]) or [])
+        for dataset in datasets:
+            entries = dataset.get("entries")
+            if not isinstance(entries, list):
+                raise ValueError(f"辅助数据集 {dataset.get('dataset_id')} 缺 entries")
+            if digest(entries) != dataset.get("content_hash"):
+                raise ValueError(f"辅助数据集 {dataset.get('dataset_id')} content_hash 与 entries 不符")
+            assert_isolated_payload(entries)
+        required = protocol.get("auxiliary_data") or []
+        covered = {item.get("dataset_kind") for item in datasets}
+        missing = [kind for kind in required if kind not in covered]
+        if missing:
+            raise ValueError(f"协议 {protocol['id']} 声明的辅助数据未提供：" + "、".join(missing))
+        provided[protocol["id"]] = [entry for dataset in datasets for entry in dataset["entries"]]
+    return provided
+
+
+def run_formal_suite(repo, task: dict, *, evaluate_fn, auxiliary_sets: dict | None = None,
+                     labels: dict | None = None, history: list | None = None,
+                     transport: str = "isolated_redteam", at=None) -> dict:
+    """正式攻击套件执行器 1.0。
+
+    - 协议必须冻结且 content_hash 与请求依赖中 risk_protocol_hashes 逐字一致
+    - 辅助数据集按内容哈希声明，孤立载荷校验后进入攻击者视图
+    - 阳性对照先行；对照失败 -> 全部 not_run，套件 invalid
+    - 每次 run 绑定 request_hash / attack_input_hash / task_version，不可跨版本复用
+    返回 attack_suite_run 记录（kind="attack_suite_run"），并写入 attack_run 明细。"""
+    from .contracts import AttackRun
+    from .governance import protocols_for_pack
+    from .util import now, uid
+
+    request_hash = task.get("request_hash")
+    if not request_hash:
+        raise ValueError("任务尚未冻结 request_hash，不能运行正式攻击套件")
+    attack_input_hash = task.get("attack_input_hash")
+    if not attack_input_hash:
+        raise ValueError("任务缺少 attack_input_hash，不能运行正式攻击套件")
+    pack = repo.get(task["pack_id"], "pack")
+    protocols = protocols_for_pack(repo, pack)
+    frozen_hashes = ((task.get("request") or {}).get("dependencies") or {}).get("risk_protocol_hashes") or {}
+    for protocol in protocols:
+        bound = frozen_hashes.get(protocol["kind"])
+        if bound and bound != protocol["content_hash"]:
+            raise ValueError(f"协议 {protocol['id']} 哈希与请求冻结版本不符，攻击运行不可复用")
+    provided = validate_auxiliary_sets(protocols, auxiliary_sets)
+
+    suite_id = uid("attacksuite")
+    started_at = now()
+    control = check_positive_control(evaluate_fn)
+    suite = {
+        "id": suite_id, "task_id": task["id"], "task_version": task["version"],
+        "request_hash": request_hash, "attack_input_hash": attack_input_hash,
+        "transport": transport, "executor_version": FORMAL_EXECUTOR_VERSION,
+        "scorer_version": FORMAL_SCORER_VERSION,
+        "positive_control": control,
+        "auxiliary_sets": [
+            {"protocol_id": protocol["id"],
+             "datasets": [{"dataset_id": d.get("dataset_id"), "dataset_kind": d.get("dataset_kind"),
+                           "content_hash": d.get("content_hash"), "entry_count": len(d["entries"])}
+                          for d in (auxiliary_sets or {}).get(protocol["id"], (auxiliary_sets or {}).get(protocol["kind"], []) or [])]}
+            for protocol in protocols
+        ],
+        "run_ids": [], "run_hashes": [], "conclusion": "invalid",
+        "all_resisted": False, "created_at": started_at, "note": FORMAL_SUITE_NOTE,
+    }
+    if control["detected"]:
+        history = history or []
+        runs = []
+        for protocol in protocols:
+            budget = max(1, int(protocol.get("query_budget") or 1))
+            view_history = history[-protocol["query_budget"]:] if protocol.get("query_budget") else []
+            try:
+                result = evaluate_fn(protocol, task["request"]["wire_payload"], view_history,
+                                     provided.get(protocol["id"]) or [], labels)
+                outcome = result.get("outcome")
+                if outcome not in {"resisted", "succeeded", "uncertain", "error"}:
+                    raise ValueError("引擎返回契约无效")
+                run = AttackRun(
+                    id=uid("attack"), protocol_id=protocol["id"],
+                    protocol_hash=protocol["content_hash"], task_id=task["id"],
+                    task_version=task["version"], attack_input_hash=attack_input_hash,
+                    outcome=outcome, score=result.get("score"),
+                    evidence=[FORMAL_SUITE_NOTE,
+                              f"engine={result.get('executor_version')}",
+                              *[str(item)[:1000] for item in result.get("evidence", [])][:48]],
+                    query_count=int(result.get("query_count", 0)),
+                    duration_ms=int(result.get("duration_ms", 0)),
+                    executor_version=FORMAL_EXECUTOR_VERSION, suite_id=suite_id,
+                    request_hash=request_hash, started_at=now(), finished_at=now(),
+                ).model_dump()
+            except Exception as error:
+                run = AttackRun(
+                    id=uid("attack"), protocol_id=protocol["id"],
+                    protocol_hash=protocol["content_hash"], task_id=task["id"],
+                    task_version=task["version"], attack_input_hash=attack_input_hash,
+                    outcome="error", evidence=[f"正式套件执行异常：{type(error).__name__}"],
+                    executor_version=FORMAL_EXECUTOR_VERSION, suite_id=suite_id,
+                    request_hash=request_hash, started_at=now(), finished_at=now(),
+                ).model_dump()
+            run["result_hash"] = digest({k: v for k, v in run.items() if k != "result_hash"})
+            repo.put("attack_run", run, task["id"])
+            runs.append(run)
+        suite["run_ids"] = [run["id"] for run in runs]
+        suite["run_hashes"] = [run["result_hash"] for run in runs]
+        suite["engine_versions"] = {protocol["kind"]: run.get("evidence", [None])[1]
+                                    for protocol, run in zip(protocols, runs)}
+        suite["all_resisted"] = all(run["outcome"] == "resisted" for run in runs)
+        suite["conclusion"] = "complete"
+    else:
+        for protocol in protocols:
+            run = AttackRun(
+                id=uid("attack"), protocol_id=protocol["id"],
+                protocol_hash=protocol["content_hash"], task_id=task["id"],
+                task_version=task["version"], attack_input_hash=attack_input_hash,
+                outcome="not_run",
+                evidence=["阳性对照未检出已知泄漏，评测链不可信，本次套件无效"],
+                executor_version=FORMAL_EXECUTOR_VERSION, suite_id=suite_id,
+                request_hash=request_hash, started_at=started_at, finished_at=now(),
+            ).model_dump()
+            run["result_hash"] = digest({k: v for k, v in run.items() if k != "result_hash"})
+            repo.put("attack_run", run, task["id"])
+            suite["run_ids"].append(run["id"])
+            suite["run_hashes"].append(run["result_hash"])
+    suite["finished_at"] = now()
+    suite["suite_hash"] = digest({k: v for k, v in suite.items() if k != "suite_hash"})
+    repo.put("attack_suite_run", suite, task["id"])
+    return suite

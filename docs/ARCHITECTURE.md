@@ -77,6 +77,32 @@ V2.2 对齐层（P1–P8 已落地，详见 [V2_2_ALIGNMENT.md](V2_2_ALIGNMENT.m
 
 门禁命中经 `outbound_gate.derive_disposition` 拆成两个正交结果：法律处置 `disposition`（`prohibited` > `needs_verification` > `needs_minimization` > `allowed`，由 prohibition/verification/minimization 三类命中决定）与系统就绪度 `readiness`（任何 `engineering` 命中即 `not_ready`，不产生法律结论）。
 
+门禁调用图（单一执法路径，不允许第二套编号）：
+
+```
+evaluate_task → policy.assess
+  ├─ outbound_gate.edge_review_hits      → G0（边侧审核 block_external）
+  ├─ outbound_gate.prohibition_hits      → G0（硬性禁止四要件 / 命中禁止）
+  └─ outbound_gate.collect_outbound_blockers（仅 formal+cloud）
+       ├─ _pack_unpublished / _pack_legal_unfrozen / risk_weights → G5
+       ├─ citation_blockers（法源加严审计，B1）                  → G5
+       ├─ provider_results 非 pass                              → G3
+       ├─ attacks_all_resisted 不成立                            → G8
+       ├─ isolation_verified 否                                 → G9
+       ├─ forbidden_terms / combination_blockers                → G7
+       └─ layer_b_blockers（层 B 关闭清单）                      → G2
+  → attach_disposition → task.risk.gates/blockers/findings
+approve → G10（approver 具名、request_hash 一致、人工判断齐备）
+formal_release.evaluate_release（发送前独立第二道）
+  ├─ frozen request：tuple/build/provider/model/prompt/依赖哈希逐项相等
+  ├─ 逐门收据 GateEvidenceReceipt（法01–法10，具名+有效期+supersedes）
+  ├─ attack_suite_run（正式攻击套件，阳性对照+request_hash 绑定）
+  ├─ isolation_receipt（request/build/env 绑定，证据哈希须解析为
+  │   证据库可校验 artifact——B7 challenge）
+  └─ 未决项 → GateHit pending/fail；全过 → issue_grant 一次性许可
+gateway claim → 校验 bundle 签名、策略范围、nonce、单槽凭据 → 发送
+```
+
 发送意图与队列在同一业务事务中写入，然后由工作进程调用网关。网关先持久化 sending 再调用服务商。请求 ID 去重；超时后不主动重复调用。reconcile 只读取网关已有记录。
 
 规则未发布、四类攻击未完成、材料未复核、事实来源失效、残留直接标识、硬性禁止或已知组合风险都会阻断。`capability` 与 `risk completion/outcome` 不能互相替代。

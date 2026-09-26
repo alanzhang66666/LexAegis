@@ -189,7 +189,11 @@ def execute(repo, task, record):
                 claim["issues"].append("引用包含历史材料版本锚点，确认前须显式核对")
                 claim["status"] = "needs_review"
                 flagged += 1
-        return f"flagged={flagged}"
+        from . import output_checks
+        pack = repo.get(task["pack_id"], "pack") if task.get("pack_id") else {}
+        counts = output_checks.apply_return_checks(
+            claims, task.get("decisions"), task.get("fact_snapshot"), pack)
+        return f"flagged={flagged} blocked={counts['block']} review={counts['review']}"
 
     def human_decision_stage():
         extra = validated if isinstance(validated, dict) else {}
