@@ -76,7 +76,6 @@ services:
     <<: *runtime
     command: [python, -m, uvicorn, "lexaegis.gateway:create_gateway", --factory, --host, 0.0.0.0, --port, "8766", --no-access-log]
     environment:
-      LEX_GATEWAY_DIR: /data
       LEX_RUN_PROFILE: ${LEX_RUN_PROFILE:-production}
       LEX_RELEASE_BUILD_MANIFEST_PATH: /release/release-build-manifest.json
       LEX_GATEWAY_SECRET: ${LEX_GATEWAY_SECRET:?Set a signing secret}
