@@ -4,6 +4,7 @@ from fastapi import File, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from .contracts import FormalReleasePolicy, GateReceiptInput, IsolationReceipt
+from .release_build import readiness_for_context
 from .evidence import EvidenceStore, EvidenceIntakeService, EvidenceStoreError
 from . import formal_release, release_service, service
 from .util import audit, digest, now, uid
@@ -100,6 +101,7 @@ class IntakeContextOutput(BaseModel):
     gates: list[dict]
     g2_authorization_statement: str
     isolation: dict[str, str]
+    readiness: dict
 
 
 _INTAKE_GATES = [
@@ -142,12 +144,14 @@ def register_release_routes(app, store, root, require_role, require_exact_role, 
     @app.get("/api/v1/formal-release")
     def release_status(request: Request):
         require_role(request, "technical_reviewer", "legal_reviewer", "approver")
+        context = release_service.collect_context(store, root, build_manifest=build_manifest)
         with store.read() as repo:
             return {"policies": repo.list("formal_release_policy"),
                     "receipts": repo.list("gate_evidence_receipt"),
                     "isolation_receipts": repo.list("isolation_receipt"),
                     "artifacts": repo.list("evidence_artifact"),
-                    "grants": repo.list("one_time_dispatch_grant")}
+                    "grants": repo.list("one_time_dispatch_grant"),
+                    "readiness": readiness_for_context(context).model_dump(mode="json")}
 
     @app.get("/api/v1/tasks/{task_id}/formal-release/intake-context", response_model=IntakeContextOutput)
     def task_intake_context(task_id: str, request: Request):
@@ -190,6 +194,9 @@ def register_release_routes(app, store, root, require_role, require_exact_role, 
                     g2_authorization_statement=_g2_authorization_statement(release_tuple),
                     isolation={"attester_role": "technical_reviewer", "legal_confirmation_role": "legal_reviewer",
                                "confirmation_gate_id": "G8"},
+                    readiness=readiness_for_context(
+                        context, request_hash=frozen.request_hash
+                    ).model_dump(mode="json"),
                 )
             except KeyError as exc:
                 raise HTTPException(404, "任务或案件不存在") from exc
@@ -253,9 +260,33 @@ def register_release_routes(app, store, root, require_role, require_exact_role, 
         content = await file.read(20 * 1024 * 1024 + 1)
         if not content or len(content) > 20 * 1024 * 1024:
             raise HTTPException(413, "证据为空或超过 20MB")
+        engineering = template_kind in {
+            "readiness_compose_isolation", "readiness_k8s_conformance",
+            "readiness_host_firewall", "readiness_supply_chain",
+        }
+        metadata = {}
+        if engineering:
+            try:
+                import json
+                import re
+                lowered = content.decode("utf-8").lower()
+                if re.search(r"password\s*[:=]|token\s*[:=]|request[_ -]?body\s*[:=]|/(?:users|home|private|tmp|var)/", lowered):
+                    raise HTTPException(409, "readiness 工程证据未通过脱敏检查")
+                candidate = json.loads(content.decode("utf-8"))
+                if isinstance(candidate, dict):
+                    metadata = {
+                        "source_command": candidate.get("source_command", "") if isinstance(candidate.get("source_command", ""), str) else "",
+                        "valid_until": candidate.get("valid_until") if isinstance(candidate.get("valid_until"), str) else None,
+                    }
+            except (UnicodeDecodeError, ValueError):
+                raise HTTPException(409, "readiness 工程证据必须是可解析的脱敏 JSON")
         return evidence.register_artifact(content=content, media_type=file.content_type or "application/octet-stream",
                                           source_path_hint=Path(file.filename or "evidence").name,
-                                          template_kind=template_kind, actor=actor["user_id"]).model_dump(mode="json")
+                                          template_kind=template_kind, actor=actor["user_id"],
+                                          source_kind="command_generated" if engineering else "manual_upload",
+                                          source_command=metadata.get("source_command", ""),
+                                          valid_until=metadata.get("valid_until"),
+                                          redaction_profile="synthetic-v1" if engineering else "manual").model_dump(mode="json")
 
     @app.post("/api/v1/formal-release/receipts")
     def register_receipt(body: GateReceiptInput, request: Request):
@@ -357,5 +388,8 @@ def register_release_routes(app, store, root, require_role, require_exact_role, 
             task = repo.get(task_id, "task")
             case = service.assert_current(repo, task)
             task["product_release"] = release_service.status(repo, task, case, context)
+            task["product_release"]["readiness"] = readiness_for_context(
+                context, request_hash=task.get("request_hash", "")
+            ).model_dump(mode="json")
             repo.put("task", task, case["id"])
             return task["product_release"]

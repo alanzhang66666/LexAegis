@@ -6,6 +6,10 @@ type Obj = Record<string, any>;
 type RequestFn = (path:string,method?:string,body?:any)=>Promise<any>;
 
 const roleLabel:Record<string,string>={legal_reviewer:"法学人员",technical_reviewer:"技术复核人员",approver:"审批人",case_operator:"案件操作员",admin:"管理员"};
+const readinessKinds=["build_manifest","compose_isolation","k8s_conformance","host_firewall","supply_chain"] as const;
+const readinessLabel:Record<string,string>={build_manifest:"构建清单",compose_isolation:"Compose 隔离",k8s_conformance:"kind/KubeEdge 一致性",host_firewall:"宿主机防火墙",supply_chain:"供应链"};
+const readinessRole:Record<string,string>={build_manifest:"技术复核人员",compose_isolation:"技术复核人员",k8s_conformance:"技术复核人员",host_firewall:"技术复核人员",supply_chain:"技术复核人员"};
+const readinessStatus:Record<string,string>={pass:"通过",pending:"待补证",fail:"失败",expired:"已过期",stale:"已失效",unknown:"未知"};
 const isoNow=()=>new Date().toISOString();
 const stable=(value:Obj)=>JSON.stringify(Object.fromEntries(Object.entries(value||{}).sort(([a],[b])=>a.localeCompare(b))));
 const toIso=(value:string|undefined)=>value?new Date(value).toISOString():null;
@@ -101,6 +105,7 @@ export function FormalReleaseIntake({task,role,request,busy,onRefreshCase}:{task
     {contextUnavailable||!context?<div className="inline-warning" role="status">当前正式证据上下文不可用：{error||"请先冻结请求并满足构建、网关和服务身份检查。"} 未生成或补填任何放行证据。</div>:<>
       <dl className="metadata"><dt>请求哈希</dt><dd><code>{context.request_hash}</code></dd><dt>绑定范围</dt><dd>{context.tuple.case_id} · {context.tuple.purpose} · {context.tuple.recipient}</dd>
         <dt>构建清单哈希</dt><dd><code>{context.build_manifest_hash}</code></dd><dt>当前登记人</dt><dd>{actor} · {context.actor.actor}（{context.actor.username}）</dd></dl>
+      <ReadinessPanel report={context.readiness} receipts={receipts}/>
       <div className="governance-form"><label>证据模板类别<select value={templateKind} onChange={event=>setTemplateKind(event.target.value)}><option value="">选择法/技模板</option>
         {availableKinds.map((kind:string)=><option key={kind}>{kind}</option>)}</select></label><label>上传受控模板/证据原件<input type="file" onChange={event=>setFile(event.target.files?.[0]||null)}/></label></div>
       <p className="small-note">上传后只保存受控副本与内容哈希。请核对现有原件并由相应法学、技术或审批角色另行签收。</p>
@@ -130,6 +135,18 @@ export function FormalReleaseIntake({task,role,request,busy,onRefreshCase}:{task
         {!item.revoked_at&&["legal_reviewer","approver","admin"].includes(role||"")&&<><input aria-label={`${item.id} 撤销理由`} value={revokeReason[item.id]||""} onChange={event=>setRevokeReason(old=>({...old,[item.id]:event.target.value}))}/><button disabled={working||!revokeReason[item.id]?.trim()} onClick={()=>revoke(item)}>撤销收据</button></>}</div>)}</div>}
     </>}{notice&&<p className="notice" role="status">{notice}</p>}{error&&<p className="error" role="alert">{error}</p>}
   </Panel>;
+}
+
+function ReadinessPanel({report,receipts}:{report:Obj|null|undefined;receipts:Obj[]}) {
+  const checks=report?.checks&&typeof report.checks==="object"&&!Array.isArray(report.checks)?report.checks:{};
+  const legalG9Confirmed=receipts.some(item=>item.gate_id==="G9"&&item.conclusion==="pass"&&!item.revoked_at);
+  return <section className="readiness-panel" data-testid="readiness-report" aria-label="放行前置 readiness">
+    <div className="readiness-heading"><div><h3>放行前置 readiness</h3><p className="small-note">工程证据与法学 G9 收据分开核验。系统会绑定当前请求、构建清单和证据有效期。</p></div><StatusBadge tone={report?.state==="eligible"?"green":"amber"}>{report?`${report.mode=== "enforced"?"强制":"报告"} · ${report.state==="eligible"?"eligible":"blocked"}`:"blocked · 未生成报告"}</StatusBadge></div>
+    <div className="readiness-legal"><b>法学 G9 收据</b><span className={legalG9Confirmed?"readiness-pass":"readiness-pending"}>{legalG9Confirmed?"已确认":"未确认，不能替代工程证据"}</span></div>
+    <div className="readiness-list">{readinessKinds.map(kind=>{const item=checks[kind]||{};const status=String(item.status||"pending");const engineering=item.source_kind==="command_generated";const ids=Array.isArray(item.artifact_ids)?item.artifact_ids:[];
+      return <div className="readiness-row" key={kind} data-testid={`readiness-${kind}`}><div className="readiness-row-title"><b>{readinessLabel[kind]}</b><StatusBadge tone={status==="pass"?"green":status==="fail"?"red":"amber"}>{readinessStatus[status]||status}</StatusBadge></div><dl className="readiness-details"><dt>责任角色</dt><dd>{readinessRole[kind]}</dd><dt>证据来源</dt><dd>{engineering?"工程证据已生成，只可查看和绑定":"人工上传证据，仍需相应人工收据"}</dd><dt>证据 ID</dt><dd>{ids.length?ids.join("、"):"无"}</dd><dt>有效期止</dt><dd>{item.valid_until||"未设置"}</dd><dt>下一步</dt><dd>{item.reason||"补齐当前请求所需证据并重新检查"}</dd></dl></div>})}</div>
+    {report?.source_commit&&<p className="small-note">来源提交 <code>{report.source_commit}</code> · 构建清单 <code>{report.build_manifest_hash||"无"}</code> · 生成于 {report.generated_at||"未知"}</p>}
+  </section>;
 }
 
 function normalize(value:string|undefined){return (value||"").replace(/\s+/g,"").toUpperCase()}

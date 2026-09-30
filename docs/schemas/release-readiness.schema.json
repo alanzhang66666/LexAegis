@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lexaegis.local/schemas/release-readiness.schema.json",
+  "title": "LexAegis release readiness report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["mode", "state", "source_commit", "build_manifest_hash", "request_hash", "checks", "generated_at"],
+  "properties": {
+    "mode": {"enum": ["report_only", "enforced"]},
+    "state": {"enum": ["blocked", "eligible"]},
+    "source_commit": {"anyOf": [{"const": ""}, {"pattern": "^[0-9a-f]{40}$"}]},
+    "build_manifest_hash": {"anyOf": [{"const": ""}, {"pattern": "^(sha256:)?[0-9a-f]{64}$"}]},
+    "request_hash": {"anyOf": [{"const": ""}, {"pattern": "^(sha256:)?[0-9a-f]{64}$"}]},
+    "generated_at": {"type": "string", "minLength": 1},
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["build_manifest", "compose_isolation", "k8s_conformance", "host_firewall", "supply_chain"],
+      "properties": {
+        "build_manifest": {"$ref": "#/$defs/check"},
+        "compose_isolation": {"$ref": "#/$defs/check"},
+        "k8s_conformance": {"$ref": "#/$defs/check"},
+        "host_firewall": {"$ref": "#/$defs/check"},
+        "supply_chain": {"$ref": "#/$defs/check"}
+      }
+    }
+  },
+  "$defs": {
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "artifact_ids", "source_kind", "source_command", "environment", "generated_at", "valid_until", "redaction_profile", "reason"],
+      "properties": {
+        "status": {"enum": ["unknown", "pending", "pass", "fail", "expired", "stale", "revoked", "not_applicable"]},
+        "artifact_ids": {"type": "array", "items": {"type": "string"}},
+        "source_kind": {"enum": ["manual_upload", "command_generated"]},
+        "source_command": {"type": "string"},
+        "environment": {"type": "object", "additionalProperties": {"type": "string"}},
+        "generated_at": {"type": "string", "minLength": 1},
+        "valid_until": {"type": ["string", "null"]},
+        "redaction_profile": {"type": "string", "minLength": 1},
+        "reason": {"type": "string"}
+      }
+    }
+  }
+}
