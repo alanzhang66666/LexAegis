@@ -11,12 +11,18 @@ import json
 import re
 import subprocess
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal, Mapping, Sequence
 
 from pydantic import ValidationError
 
-from .contracts import ReleaseBuildManifest
+from .contracts import (
+    READINESS_CHECK_IDS,
+    ReadinessCheck,
+    ReadinessReport,
+    ReleaseBuildManifest,
+)
 from .util import canonical, now
 
 
@@ -102,6 +108,11 @@ class ValidationResults:
 
     checks: Mapping[str, bool] = field(default_factory=dict)
     evidence_hashes: Mapping[str, str] = field(default_factory=dict)
+    readiness: Mapping[str, ReadinessCheck] = field(default_factory=dict)
+    source_commit: str = ""
+    build_manifest_hash: str = ""
+    request_hash: str = ""
+    image_digests: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def passed(self) -> bool:
@@ -114,6 +125,20 @@ class ValidationResults:
             "checks": dict(sorted(self.checks.items())),
             "evidence_hashes": dict(sorted(self.evidence_hashes.items())),
         }
+        if self.readiness:
+            payload["readiness"] = {
+                key: value.model_dump(mode="json")
+                for key, value in sorted(self.readiness.items())
+            }
+        for key, value in (
+            ("source_commit", self.source_commit),
+            ("build_manifest_hash", self.build_manifest_hash),
+            ("request_hash", self.request_hash),
+        ):
+            if value:
+                payload[key] = value
+        if self.image_digests:
+            payload["image_digests"] = dict(sorted(self.image_digests.items()))
         return _sha256(canonical(payload).encode("utf-8"))
 
 
@@ -406,6 +431,112 @@ def incomplete_manifest_inputs(manifest: ReleaseBuildManifest) -> tuple[str, ...
     return tuple(missing)
 
 
+def build_readiness_report(
+    manifest: ReleaseBuildManifest,
+    results: ValidationResults | None = None,
+    *,
+    request_hash: str = "",
+    mode: Literal["report_only", "enforced"] = "report_only",
+    generated_at: str | None = None,
+) -> ReadinessReport:
+    """Build the fixed readiness view without creating a second release state machine.
+
+    The build check is derived from the observed manifest. Other checks may be
+    supplied by command-generated or manually registered validation evidence;
+    absent evidence remains pending. Report bindings are checked before a
+    result can influence eligibility, so a stale report is fail-closed.
+    """
+
+    results = results or ValidationResults()
+    timestamp = generated_at or now()
+    manifest_hash = build_manifest_identity_hash(manifest)
+    binding_errors: list[str] = []
+    if results.source_commit and results.source_commit != manifest.source_commit:
+        binding_errors.append("source_commit 与当前构建不一致")
+    if results.build_manifest_hash and results.build_manifest_hash != manifest_hash:
+        binding_errors.append("build_manifest_hash 与当前构建不一致")
+    if results.request_hash and results.request_hash != request_hash:
+        binding_errors.append("request_hash 与当前请求不一致")
+    if results.image_digests and dict(results.image_digests) != dict(manifest.container_image_digests):
+        binding_errors.append("镜像 digest 与当前构建不一致")
+
+    build_status = "pass" if manifest.status == "verified" else "pending"
+    build_reason = "verified build manifest" if build_status == "pass" else (
+        "构建清单未验证：" + ", ".join(incomplete_manifest_inputs(manifest))
+    )
+    checks: dict[str, ReadinessCheck] = {
+        "build_manifest": ReadinessCheck(
+            status=build_status,
+            artifact_ids=[manifest.id] if manifest.status == "verified" else [],
+            source_kind="command_generated",
+            source_command="lexaegis release verify-candidate",
+            environment={"source_commit": manifest.source_commit or "unknown"},
+            generated_at=timestamp,
+            valid_until=None,
+            redaction_profile="synthetic-v1",
+            reason=build_reason,
+        )
+    }
+    supplied = dict(results.readiness)
+    for check_id in READINESS_CHECK_IDS:
+        if check_id == "build_manifest":
+            continue
+        value = supplied.get(check_id)
+        if value is None:
+            value = ReadinessCheck(
+                status="pending",
+                source_kind="manual_upload" if check_id in {"host_firewall", "supply_chain"} else "command_generated",
+                source_command="",
+                environment={},
+                generated_at=timestamp,
+                redaction_profile="synthetic-v1",
+                reason="尚未登记与当前构建绑定的证据",
+            )
+        elif value.valid_until:
+            try:
+                expiry = datetime.fromisoformat(value.valid_until.replace("Z", "+00:00"))
+                if expiry <= datetime.now(timezone.utc) and value.status == "pass":
+                    value = value.model_copy(update={"status": "expired", "reason": "证据已过有效期"})
+            except (TypeError, ValueError):
+                value = value.model_copy(update={"status": "fail", "reason": "证据有效期格式无法核验"})
+        checks[check_id] = value
+    if binding_errors:
+        reason = "；".join(binding_errors)
+        for check_id, value in list(checks.items()):
+            checks[check_id] = value.model_copy(update={
+                "status": "fail",
+                "reason": f"readiness 绑定失败：{reason}",
+            })
+    required = ("build_manifest", "compose_isolation", "host_firewall", "supply_chain")
+    state = "eligible" if all(checks[name].status == "pass" for name in required) and not binding_errors else "blocked"
+    return ReadinessReport(
+        mode=mode,
+        state=state,
+        source_commit=manifest.source_commit,
+        build_manifest_hash=manifest_hash,
+        request_hash=request_hash,
+        checks=checks,
+        generated_at=timestamp,
+    )
+
+
+def readiness_for_context(
+    context: Mapping[str, object] | None,
+    *,
+    request_hash: str = "",
+    mode: Literal["report_only", "enforced"] = "report_only",
+) -> ReadinessReport:
+    """Return a report for an API context, preserving a blocked empty baseline."""
+    context = context or {}
+    manifest = context.get("build_manifest")
+    if not isinstance(manifest, ReleaseBuildManifest):
+        manifest = ReleaseBuildManifest(id="build_unverified", created_at=now())
+    results = context.get("validation_results")
+    if not isinstance(results, ValidationResults):
+        results = ValidationResults()
+    return build_readiness_report(manifest, results, request_hash=request_hash, mode=mode)
+
+
 @dataclass(frozen=True)
 class ReleaseCandidateReport:
     """Read-only release-candidate verdict safe to print on an operator console.
@@ -428,6 +559,7 @@ class ReleaseCandidateReport:
     drift_fields: tuple[str, ...]
     build_baseline_verified: bool
     product_dispatch_state: str
+    readiness: ReadinessReport | None = None
     policy_installed: bool = False
     dispatch_attempted: bool = False
     read_only: bool = True
@@ -447,6 +579,7 @@ class ReleaseCandidateReport:
             "drift_fields": list(self.drift_fields),
             "build_baseline_verified": self.build_baseline_verified,
             "product_dispatch_state": self.product_dispatch_state,
+            "readiness": self.readiness.model_dump(mode="json") if self.readiness else None,
             "policy_installed": self.policy_installed,
             "dispatch_attempted": self.dispatch_attempted,
             "read_only": self.read_only,
@@ -520,6 +653,35 @@ def load_validation_results(
         return ValidationResults(), "unreadable"
     if not all(isinstance(name, str) and name.strip() for name in checks):
         return ValidationResults(), "unreadable"
+    readiness: dict[str, ReadinessCheck] = {}
+    raw_readiness = payload.get("readiness", {})
+    if raw_readiness is not None and not isinstance(raw_readiness, dict):
+        return ValidationResults(), "unreadable"
+    try:
+        for name, value in (raw_readiness or {}).items():
+            if name not in READINESS_CHECK_IDS or not isinstance(value, dict):
+                return ValidationResults(), "unreadable"
+            readiness[name] = ReadinessCheck.model_validate(value)
+    except (TypeError, ValueError, ValidationError):
+        return ValidationResults(), "unreadable"
+    source_commit = payload.get("source_commit", "")
+    build_manifest_hash = payload.get("build_manifest_hash", "")
+    request_hash = payload.get("request_hash", "")
+    image_digests = payload.get("image_digests", {})
+    if not all(isinstance(item, str) for item in (source_commit, build_manifest_hash, request_hash)):
+        return ValidationResults(), "unreadable"
+    if source_commit and not re.fullmatch(r"[0-9a-f]{40}", source_commit):
+        return ValidationResults(), "unreadable"
+    if build_manifest_hash and not re.fullmatch(r"(?:sha256:)?[0-9a-f]{64}", build_manifest_hash):
+        return ValidationResults(), "unreadable"
+    if request_hash and not re.fullmatch(r"(?:sha256:)?[0-9a-f]{64}", request_hash):
+        return ValidationResults(), "unreadable"
+    if not isinstance(image_digests, dict) or not all(
+        isinstance(key, str) and isinstance(value, str) for key, value in image_digests.items()
+    ):
+        return ValidationResults(), "unreadable"
+    if not all(re.fullmatch(r"sha256:[0-9a-f]{64}", value) for value in image_digests.values()):
+        return ValidationResults(), "unreadable"
     return (
         ValidationResults(
             checks={name: result is True for name, result in checks.items()},
@@ -528,6 +690,11 @@ def load_validation_results(
                 for name, value in evidence.items()
                 if isinstance(name, str) and isinstance(value, str)
             },
+            readiness=readiness,
+            source_commit=source_commit,
+            build_manifest_hash=build_manifest_hash,
+            request_hash=request_hash,
+            image_digests=image_digests,
         ),
         "loaded",
     )
@@ -558,6 +725,8 @@ def verify_release_candidate(
     reference_readable: bool = True,
     validation_report_status: ValidationReportStatus = "absent",
     created_at: str | None = None,
+    request_hash: str = "",
+    readiness_mode: Literal["report_only", "enforced"] = "report_only",
 ) -> ReleaseCandidateReport:
     """Verify a release candidate without writing state or arming anything.
 
@@ -571,6 +740,9 @@ def verify_release_candidate(
     verifier = ReleaseBuildVerifier(repository)
     worktree = verifier.inspect_worktree()
     manifest = verifier.build_manifest(inputs, results, created_at=created_at)
+    readiness = build_readiness_report(
+        manifest, results, request_hash=request_hash, mode=readiness_mode, generated_at=created_at
+    )
     drift = manifest_drift(reference, manifest) if reference is not None else ()
     if not reference_readable:
         reference_status: ReferenceStatus = "unreadable"
@@ -598,6 +770,7 @@ def verify_release_candidate(
             manifest.status == "verified" and not drift and reference_readable
         ),
         product_dispatch_state=product_dispatch_state(),
+        readiness=readiness,
     )
 
 

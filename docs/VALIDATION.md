@@ -248,3 +248,9 @@ pnpm exec playwright test --config=playwright.runtime-pack.config.ts
 ```
 
 浏览器测试配置会自行启动使用独立验收目录的应用，不访问真实边侧模型或云端模型。
+
+## 2026-09-30 readiness 前置闭环（本轮）
+
+`ReadinessReport` 复用现有 `ReleaseBuildManifest`、`EvidenceArtifact` 和 G1-G10 收据，固定检查 `build_manifest`、`compose_isolation`、`k8s_conformance`、`host_firewall`、`supply_chain`。报告分为 `report_only` 与 `enforced`，但 `formal_dispatch` 继续为 `blocked`。kind/KubeEdge 结果只作为 `k8s_conformance` 工程附件，不能把 G9 标为通过，也不新增 G11。
+
+`lexaegis release verify-candidate --readiness-output PATH` 和 `lexaegis check-isolation --report PATH` 输出可脱敏复核的 JSON；演练脚本的 `--json-report` 记录合成注册、下发、断连、重连、撤包和 reconcile。报告绑定 source commit、构建清单、请求与镜像 digest，错绑、过期、撤销、缺证据均保持 blocked。CI readiness job 缺少密钥、Docker、kind/KubeEdge 或 SBOM 工具时失败关闭；GitHub Actions 账单锁定不视为通过。

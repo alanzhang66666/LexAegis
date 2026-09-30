@@ -29,6 +29,9 @@ test("production formal intake stays bound and unapproved when authoritative bui
   await page.getByLabel("任务历史").selectOption(taskId);
   await expect(page.getByRole("heading", { name: "正式放行证据与人工收据" })).toBeVisible();
   await expect(page.getByText("每份收据须绑定当前请求和具名人员")).toBeVisible();
+  await expect(page.getByTestId("readiness-report")).toBeVisible();
+  await expect(page.getByTestId("readiness-build_manifest")).toContainText("构建清单");
+  await expect(page.getByTestId("readiness-report")).toContainText("法学 G9 收据");
   const pendingContext = page.getByText(/当前正式证据上下文不可用/);
   const readOnlyContext = page.getByText(/当前角色为.*只可查看证据与收据/).first();
   await expect(pendingContext.or(readOnlyContext)).toBeVisible();
@@ -48,6 +51,13 @@ test("production formal intake uses exact actor, pending default and frozen G1 b
       { gate_id: "G1", required_template_kinds: ["法01"], templates: [{ template_kind: "法01", required_role: "legal_reviewer", required_for_gate: true }] },
       { gate_id: "G7", required_template_kinds: ["法08"], templates: [{ template_kind: "法08", required_role: "legal_reviewer", required_for_gate: true, technical_template: "技04" }] },
     ], g2_authorization_statement: "仅允许此次合成请求用于摘要", isolation: { attester_role: "technical_reviewer", legal_confirmation_role: "legal_reviewer", confirmation_gate_id: "G8" },
+    readiness: { mode: "report_only", state: "blocked", source_commit: "c".repeat(40), build_manifest_hash: "build-hash", request_hash: "a".repeat(64), generated_at: "2030-04-01T00:00:00Z", checks: {
+      build_manifest: { status: "pass", artifact_ids: ["build-manifest"], source_kind: "command_generated", source_command: "lexaegis release verify-candidate", environment: { profile: "production" }, generated_at: "2030-04-01T00:00:00Z", valid_until: "2030-04-08T00:00:00Z", redaction_profile: "synthetic_v1", reason: "构建清单已绑定" },
+      compose_isolation: { status: "pending", artifact_ids: [], source_kind: "command_generated", source_command: "lexaegis check-isolation", environment: { profile: "production" }, generated_at: "2030-04-01T00:00:00Z", valid_until: null, redaction_profile: "synthetic_v1", reason: "等待当前请求证据" },
+      k8s_conformance: { status: "pending", artifact_ids: [], source_kind: "command_generated", source_command: "scripts/kubeedge_local_drill.py", environment: { profile: "local" }, generated_at: "2030-04-01T00:00:00Z", valid_until: null, redaction_profile: "synthetic_v1", reason: "未提供目标集群工程收据" },
+      host_firewall: { status: "pending", artifact_ids: [], source_kind: "manual_upload", source_command: "", environment: {}, generated_at: "2030-04-01T00:00:00Z", valid_until: null, redaction_profile: "manual", reason: "需要宿主机防火墙证据" },
+      supply_chain: { status: "pending", artifact_ids: [], source_kind: "manual_upload", source_command: "", environment: {}, generated_at: "2030-04-01T00:00:00Z", valid_until: null, redaction_profile: "manual", reason: "需要供应链证据" },
+    }},
   };
   const artifacts = [
     { id: "template-law01", template_kind: "法01", source_path_hint: "law01.docx", content_hash: "1".repeat(64) },
@@ -129,6 +139,10 @@ test("production formal intake uses exact actor, pending default and frozen G1 b
   await page.getByRole("button", { name: /03 风险与审批/ }).click();
   await page.getByLabel("任务历史").selectOption(taskId);
   await expect(page.getByRole("heading", { name: "正式放行证据与人工收据" })).toBeVisible();
+  await expect(page.getByTestId("readiness-report")).toContainText("报告 · blocked");
+  await expect(page.getByTestId("readiness-compose_isolation")).toContainText("工程证据已生成，只可查看和绑定");
+  await expect(page.getByTestId("readiness-host_firewall")).toContainText("人工上传证据，仍需相应人工收据");
+  await expect(page.getByTestId("readiness-report").getByRole("button")).toHaveCount(0);
   await expect(page.getByLabel("G1 法01 人工结论")).toHaveValue("pending");
   await expect(page.getByRole("combobox", { name: "证据模板类别" })).toContainText("技04");
   await expect(page.getByLabel("isolation-stub 选择本人 G8 收据").locator("option")).toHaveCount(2);
