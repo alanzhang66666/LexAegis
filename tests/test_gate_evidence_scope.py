@@ -1,7 +1,7 @@
 """Diagnostics only: dependency fingerprints never authorize external sending."""
 from types import SimpleNamespace
 
-from lexaegis.gate_evidence_scope import proposed_dependencies
+from lexaegis.gate_evidence_scope import proposed_dependencies, compare_legacy_receipt_bindings
 
 
 def _request(**updates):
@@ -38,3 +38,35 @@ def test_missing_environment_identity_is_not_verified():
     assert results["G9"]["fingerprint"] is None
     assert all(item["authoritative"] is False for item in results.values())
     assert proposed_dependencies(_request(), deployment_identity="dep-a")["G9"]["fingerprint"]
+
+
+def test_shadow_identifies_non_rule_drift_without_authorizing():
+    request = _request(task_version=2, mapping_version=3)
+    receipt = {"id": "receipt-a", "gate_id": "G5", "tuple": request.tuple,
+               "request_hash": None, "bound_versions": {
+                   "materials": "old", "rules": proposed_dependencies(request)["G5"]["fingerprint"],
+                   "task": "1", "mapping": "2", "ledger": "1",
+                   "combination": "combo"}}
+    # Use the real rules hash to isolate unrelated version drift.
+    from lexaegis.util import digest
+    receipt["bound_versions"]["rules"] = digest(request.rule_versions)
+    result = compare_legacy_receipt_bindings(request, [receipt])
+    assert len(result) == 1
+    assert result[0]["scope_migration_candidate"] is True
+    assert result[0]["legacy_binding_matches"] is False
+    assert result[0]["validated"] is False
+    assert result[0]["authoritative"] is False
+
+
+def test_shadow_rejects_changed_rules_and_cross_scope():
+    request = _request(task_version=2, mapping_version=3)
+    from lexaegis.util import digest
+    baseline = {
+        "id": "receipt-b", "gate_id": "G5", "tuple": request.tuple,
+        "request_hash": None, "bound_versions": {
+            "materials": digest(request.material_versions), "rules": "stale",
+            "task": "2", "mapping": "3", "ledger": "1", "combination": "combo"}}
+    result = compare_legacy_receipt_bindings(request, [baseline])
+    assert result[0]["scope_migration_candidate"] is False
+    wrong_scope = dict(baseline, tuple={"purpose": "other", "recipient": "cloud-a"})
+    assert compare_legacy_receipt_bindings(request, [wrong_scope]) == []
