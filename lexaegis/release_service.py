@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 import httpx
 from . import formal_release as release
 from .gate_experience import summarize_gate_decision
-from .gate_evidence_scope import proposed_dependencies
+from .gate_evidence_scope import proposed_dependencies, compare_legacy_receipt_bindings
 from .contracts import FormalReleasePolicy, OneTimeDispatchGrant
 from .evidence import EvidenceStore, EvidenceIntakeService
 from .runtime_identity import _load_manifest, runtime_identity
@@ -72,7 +72,9 @@ def status(repo, task, case, context):
         return {"state": "eligible" if decision.approval_eligible else "blocked",
                 "frozen_request": frozen.model_dump(mode="json"), "decision": decision.model_dump(mode="json"),
                 "experience": summarize_gate_decision(decision.model_dump(mode="json")),
-                "dependency_diagnostics": proposed_dependencies(frozen)}
+                "dependency_diagnostics": proposed_dependencies(frozen),
+                "receipt_binding_shadow": compare_legacy_receipt_bindings(
+                    frozen, repo.list("gate_evidence_receipt"))}
     except (ValueError, TypeError, KeyError) as exc:
         return {"state": "blocked", "reason": str(exc)}
 
