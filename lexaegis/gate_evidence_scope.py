@@ -48,3 +48,48 @@ def proposed_dependencies(request, *, deployment_identity=None):
         }
         for gate_id, keys in DEPENDENCIES.items()
     }
+
+
+def compare_legacy_receipt_bindings(request, receipts):
+    """Audit why an otherwise present G3/G5 receipt misses legacy binding.
+
+    This is a *shadow-only* comparison, not evidence verification: conclusions,
+    signatures, artifact bytes, expiry, revocation, role separation and legal
+    scope are deliberately NOT evaluated here. Never use it to authorize.
+    """
+    expected = {
+        "materials": digest(request.material_versions),
+        "rules": digest(request.rule_versions),
+        "task": str(request.task_version),
+        "mapping": str(request.mapping_version),
+        "ledger": str(request.ledger_version),
+        "combination": request.combination_input_hash,
+    }
+    output = []
+    for raw in receipts:
+        gate = raw.get("gate_id")
+        if gate not in {"G3", "G5"}:
+            continue
+        if raw.get("tuple") != request.tuple:
+            continue
+        if raw.get("request_hash") not in (None, request.request_hash):
+            continue
+        bound = raw.get("bound_versions")
+        if not isinstance(bound, dict):
+            continue
+        changed = sorted(k for k in set(bound) | set(expected)
+                         if bound.get(k) != expected.get(k))
+        output.append({
+            "receipt_id": raw.get("id"),
+            "gate_id": gate,
+            "legacy_binding_matches": not changed,
+            "changed_dependencies": changed,
+            "scope_migration_candidate": (
+                bool(changed)
+                and all(key not in {"rules"} for key in changed)
+                and raw.get("request_hash") is None
+            ),
+            "validated": False,
+            "authoritative": False,
+        })
+    return output
