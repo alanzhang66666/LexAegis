@@ -1,6 +1,6 @@
 # 案隐盾（LexAegis）V3.0 交付矩阵与 PR 开发任务清单
 
-> 该文件是 `docs/V3_0_REFACTOR_SPEC.md` 的工程落地矩阵。**提案阶段，不代表代码已实现。** 每个 PR 必须附：代码、覆盖率、迁移、攻击用例、可逆性/回滚说明、实测证据。生产端 `formal_dispatch=blocked` 永不因文档合并而改变。
+> 该文件是 `docs/V3_0_REFACTOR_SPEC.md` 的工程落地矩阵。**提案阶段，不代表代码已实现。** 每个 PR 必须附：代码、覆盖率、迁移、攻击用例、可逆性/回滚说明、实测证据。当前主分支 `formal_dispatch=blocked` 不会仅因文档合并而解除；**V3.0 的交付目标为生产环境中通过法学和技术门禁后正常真实外发，不设产品级永久阻断**。
 
 ## 0. 不可破坏的基线
 
@@ -9,8 +9,29 @@
 - A 链业务跨境协作和 B 链外部模型调用：批准、许可、账本、失败恢复相互独立。
 - `L4` 与未知的身份/法域/算法/审批状态默认阻断。
 - `G0–G10` 语义不修改；审批人、算法模型、云端返回都不能授予网关越权发送能力。
-- 新 V3 模块以 `feature flag` 开启实验；`DP_VECTOR_EXPERIMENT` 永不接受生产案件自动调用。
+- 新 V3 隐私算法以 `feature flag` 开启实验；`DP_VECTOR_EXPERIMENT` 永不接受生产案件自动调用。但经过真实验证的最小化事实卡（`MINIMIZED_TEXT_B`）是 V3.0 **默认可执行外发路径**，不等待向量实验。
 - 旧 `DomainRuntimeSnapshot`、`CloudTaskEnvelope`、`CloudResultEnvelope`、`HumanDecision` 保持兼容；代码变更之前保留冻结请求的黄金序列化 fixture。
+
+## 0.1 产品验收修订：默认真实外发能做到
+
+用户确认 **“应该默认外发已经可以做到”**。据此把“受控真外发可用”提升为 V3.0 的优先验收目标，而非发布末期的可选需求：
+
+1. **能力默认可用**：V3.0 可配置完成的 `production` 安装应具有 `OutboundCapability=available`，正常 UI 展示“可以申请真实外发”，没有产品级恒 `blocked` 锁。
+2. **请求不默认放行**：新任务仍 `pending_assessment`；法学 L0–L4、A/B 审查、真实服务商白名单、G0–G10、审批、载荷哈希和一次授权完成后才得到 `ready_to_dispatch`。
+3. **B 链已有真发送基础**：`gateway.py` 有 `provider.dispatch(...)` 云端请求，`integration` 支持合成任务 `transport=cloud`；但 `outbound_gate.product_dispatch_state()` 恒阻断、`formal_release.FIRST_RELEASE_TUPLE` 单例范围，尚不能表述为通用正式案件可发。
+4. **正向验收必有真实响应**：至少一个经过合法审批的最小事实卡样本，确认供应商实际收到并产生 `provenance=cloud`、具名许可消耗、网关真实回执；另有 L4/无授权/依赖哈希变化的拒绝验证。
+5. **DP 不阻塞文本主路**：差分隐私、向量 Adapter、Ianvs 只影响 `DP_VECTOR_EXPERIMENT` 开通，不应成为真实 `MINIMIZED_TEXT_B` 的全局前置依赖。
+6. **A 链另外验收**：跨境企业业务协作必须实现独立接收方与法域授权及真实传输，不能拿 B 链的调用成功代替。
+
+### 0.2 尽早交付的垂直切片
+
+| 顺序 | 最小变更 | 验收 |
+| --- | --- | --- |
+| T0 | 锁定 `main` 真发送接口、合成 `integration` 端到端测试与部署配置现状 | 实测 `cloud` 成功/错误/unknown，真实业务数据禁参与 |
+| T1 | 新 V3 `OutboundCapability` 和 `ReleaseScope` Schema + 旧字段映射 | 老试点字节签名与冻结请求仍兼容 |
+| T2 | B 链受控常态外发：法律准入绑定、现有 G 门、动态请求级 `grant` | **合格正式任务能真发**，无额外总闸门 |
+| T3 | A 链业务分享/法域双向流程及独立账本 | A/B 不串权，真发送与拒绝路径都实测 |
+| T4 | S/L 分类、DP 预算、证据强化、KubeEdge、Ianvs 验证 | 增强质量和隐私，不能降低 T2/T3 的审批底线 |
 
 ## 1. PR 排序与明确代码任务
 
@@ -77,13 +98,13 @@
 
 **检查**：A 批不能 B 用；B 批不能 A 用；任一条件变化 invalidates 审批；记录不将动态法律判断简化为布尔值。
 
-### PR-06 A 链传输执行器与 B 链字节验证
+### PR-06 通用真实外发：先 B 链可用，后 A 链独立执行器
 
-**文件**：新 `lexaegis/transfer/`、现有 `gateway.py`、`formal_release.py`、`outbound_gate.py`、`worker.py`、`service.py`、部署网络与传输测试。
+**文件**：先改 `outbound_gate.py`、`formal_release.py`、`gateway.py`、`worker.py`、`service.py`，再补独立的 `lexaegis/transfer/`（A 链）与部署网络、传输测试。
 
-**接口**：`dispatch_frozen_transfer(transfer_intent, chain_decision, frozen_bytes_hash, grant_nonce)`。
+**接口**：`dispatch_frozen_transfer(transfer_intent, chain_decision, frozen_bytes_hash, grant_nonce)`。**验收为真调用**，不是仅 `can_dispatch=True`、`mock` 或静态回执。
 
-**检查**：A 网关独立账本；B 保留原入口；批准内容=实际发送内容的字节级一致性；重复 nonce 无双发；没有密钥/网络/审查时硬拒绝；`unknown` 不自动重发；撤销和恢复测试；执行器不挂载原始案卷卷。
+**检查**：**B 链常态的真实生产最小事实卡应能发送成功**；去掉 `product_dispatch_state()` 恒阻断和 `FIRST_RELEASE_TUPLE` 永久限制，改用按任务绑定的 `ReleaseScope`；现有 G0–G10、具名审批、正式签名许可与供应商白名单一项不减；A 链新增独立网关及账本；批准内容=实际发送内容的字节级一致性；重复 nonce 无双发；没有密钥/网络/审查时硬拒绝；`unknown` 不自动重发；撤销和恢复测试；执行器不挂载原始案卷卷。
 
 ### PR-07 实质证据回链与人工决定
 
@@ -113,11 +134,11 @@
 
 **硬规则**：禁止硬编码 mock 值进入验收，明示 `is_simulated`；普通 Chat Completions 不得冒充真实 `VectorAdapter`。
 
-### PR-11 双重签发和受控发布
+### PR-11 受控常态发送与发布签发
 
 **交付**：双法域法律审查证据、安全红队、运行隔离清单、构建 provenance、验证运行证据、回滚预案、具名发布决定。
 
-**原则**：不存在项目经理按一次按钮解除全部阻断；具体链路/法域/服务商/领域包/算法快照限定后申请单独开通。
+**原则**：生产条件满足的具体请求可正常发送，没有永久全局阻断；仍不存在任何人按一次按钮就能绕过法学、审批、供应商限制或冻结载荷绑定。
 
 ## 2. 测试门槛和风险归属
 
@@ -127,7 +148,7 @@
 | 数据安全 | 原文和映射不进入 A/B 无权限出口 | 安全/边缘 |
 | 法域法律 | 中越双向对应法源、豁免与 PIA/CTIA 的责任签署 | 中国/越南法律负责人 |
 | DP 正确性 | 灵敏度证明、机制参数、会计组合、CSPRNG 与并发记录 | 隐私算法 |
-| 决策授权 | L4/unknown、A/B 双链隔离、具名权限 | 合规/QA |
+| 决策授权 | **批准的真实请求可发、未批准请求不能发**；L4/unknown、A/B 双链隔离、具名权限 | 合规/QA |
 | 回流可信 | 原文支持、反证并列、有效 HumanDecision | 律师/证据标注 |
 | 可靠性 | 崩溃、断网、超时、`unknown` 不重复释放 | 平台/网关 |
 | 隔离与部署 | 外网出口受控、KubeEdge 包撤销、审计不含原文 | SRE/安全 |
@@ -199,7 +220,7 @@ tests/
 1. 联合法学与研发评审 `V3_0_REFACTOR_SPEC.md`，留下逐条签署的开口问题。
 2. 将本矩阵落成 GitHub issue/工程看板，锁定 PR-01 Schema 契约。
 3. 编写独立的合成测试数据和现有 V2 字节级黄金快照。
-4. PR-01 合并之前不拆除既有单体、门禁、签名许可或正式外发阻断。
+4. PR-01 合并前不直接拆除现有门禁或以常量翻转冒充功能完成；完成 PR-05/06 的真实外发正反向验收后，才把产品级恒阻断替换为受控可用状态。
 5. 各阶段完成必须更新 `docs/VALIDATION.md`，区分静态审核、模拟测试、实测与未验证。
 
 **本文件只启动方案与工作分解；不是安全授权，也不是全部代码已改造的声明。**
