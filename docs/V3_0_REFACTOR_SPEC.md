@@ -7,6 +7,9 @@
 > **基线**：LexAegis `main` @ `263b2275091ef9ae1c8228eda553da6bf7ee69bc`（2026-09-26）；Ianvs `main` @ `8cd593ea0888a3d1c3f1d788897b53eb1fd8980c`（2026-10-08）。  
 > **原则**：现有主分支的 `formal_dispatch=blocked` 和 `product_dispatch_state()` 恒阻断是**迁移前实际状态**，不是 V3.0 的目标默认行为。V3.0 的验收目标为**默认具备可执行的受控真实外发能力**：一旦请求满足法学准入、最小披露、版本冻结、角色审批和网关 G0–G10，即可正常发出并形成实际送达/未知态收据，不额外受产品级永久总闸门拦截。未满足条件一律拒绝。保留身份映射/证据原文边侧隔离和一次性许可。迁移完成与独立验收前不可提前在生产开放。
 
+> **门禁精简决策（最新）**：V3.0 使用 **G-L 法律/接收方、G-D 最小披露/风险、G-H 按 L 等级一次确认、G-S 网关即时执行** 四项用户可见关口，旧 G0–G10 作为内部审计映射；环境/Provider/法源等有效证书前置复用。默认具备受控真实外发能力，不是默认授权发送。详见 [V3.0 门禁精简 ADR](V3_0_GATE_SIMPLIFICATION_ADR.md)。
+
+
 ## 0. 来源、决策权与可证明范围
 
 | 来源 | 主要贡献 | 本规格使用方式 |
@@ -43,7 +46,7 @@ V3.0 是跨领域通用平台内核 + 首发劳动争议包：平台识别 `case
 
 ### 1.3 V3.0 里程碑口径
 
-- **V3.0-alpha**：新契约、分类/路由、预算实验接口、A/B 评估快照；联通真实发送的合成集成路径，记录成功/拒绝/unknown 三类证据。
+- **V3.0-alpha**：新契约、**四道门禁聚合与旧 G0–G10 兼容映射**、分类/路由、预算实验接口、A/B 评估快照；联通真实发送的合成集成路径，记录成功/拒绝/unknown 三类证据。
 - **V3.0-beta**：完成生产 B 链通用请求级授权及 A 链独立执行器、证据冲突回链、UI 和账本；**无产品级永久阻断**，生产开通仍需部署及各链验收。
 - **V3.0-rc**：生产隔离、法学规则签署、红队及法域核验完成；在获批准入范围内进行真实端到端发送验收，范围外仍失败关闭。
 - **V3.0 正式发布**：支持已完成环境/收件方/领域包准入的任务走常态化真实发送流程；每条请求仍需独立冻结、审查和具名授权。无额外产品级恒阻断，不存在任何人可一键绕过法律/技术门禁。
@@ -53,6 +56,7 @@ V3.0 是跨领域通用平台内核 + 首发劳动争议包：平台识别 `case
 **定义**：`outbound_capability=available` 是部署级能力状态，不等于 `dispatch_authorized=true`。V3.0 在具备经核验的服务商、已发布法学包、隔离运行环境和真实出站凭据时，向用户提供可用的真实外发功能；不能再以常量 `product_dispatch_state() == "blocked"` 作为最终产品设计。
 
 - **默认路径**：非纯本地任务可选择 `MINIMIZED_TEXT_B`；适配的任务完成事实卡裁剪与人工审查后，正常进入请求级审批、一次性许可与外发，而不是跳转到“实验功能未开通”。
+- **四门编排**：面向用户仅有 G-L（法律/接收方）、G-D（最小披露与风险）、G-H（L 级别一次确认）、G-S（网关即时验证）；G1/G3/G5/G9 等可稳定条件优先按签名证明前置，仍按版本/过期/撤销校验；G8 必须按具体攻击输入哈希维持有效结论。详见门禁精简 ADR。
 - **初始状态**：每个新请求为 `pending_assessment` / `pending_approval`，不是 `authorized`；只有符合全部条件才变为 `ready_to_dispatch`。不满足的返回**具体可修复原因**（缺少包、法源、接收方合同、PIA/CTIA 确认、服务商能力、密钥、签名、隔离、攻击验证等），不是抽象的“产品尚未开通”。
 - **可执行权限**：形式上 `can_dispatch = deployment_ready AND recipient_ready AND legal_chain_approved AND gate_snapshot_allowed AND human_approval_valid AND payload_bytes_match AND one_time_grant_live`；任一项缺失即仅阻断当前请求/具体链路。
 - **流程责任**：普通案件满足以上谓词后，系统须实际调用所登记的服务端点，返回有证据的 `complete` 或 `unknown`，绝不以 `mock` 和静态回执冒充外发。
@@ -177,7 +181,7 @@ Cloud Risk Feedback 只能生成 **Proposal**；边侧 Policy Validator 检查�
 
 `TransferIntent(chain=B)` 独立审查 API 提供者、实际计算/存储区域、DPA、训练利用限制、日志/留存、子处理方、接收目的、密钥、有效端点及具体冻结载荷。**B 链境外算力本身也可能构成数据出境处理活动**，不可被架构图默认排除。
 
-B 链复用 `gateway.py`、`formal_release.py`、`outbound_gate.py`；不得创建绕过既有门禁的另一个模型 HTTP 客户端。
+B 链复用 `gateway.py`、`formal_release.py`、`outbound_gate.py`；由 **G-L/G-D/G-H/G-S 四门聚合器**统一展示和调度，旧 G0–G10 仍可追溯，不得创建绕过既有门禁的另一个模型 HTTP 客户端。
 
 ### 5.3 七维法学审查输出
 
@@ -362,6 +366,8 @@ API 命名应在 PR-01 冻结并对齐现有资源风格。所有写操作需要
 | 交付 | 代码范围 | 最低验收条件 | 依赖 |
 | --- | --- | --- | --- |
 | PR-00 规格基线 | `docs/V3_0_REFACTOR_SPEC.md`、`docs/V3_0_DELIVERY_MATRIX.md` | 与现有安全边界无冲突；法学/算法评审问题明确 | 无 |
+| PR-01a 四门聚合/兼容 | `gate_orchestrator.py`（新增）、旧 `outbound_gate.py`、`formal_release.py` | 新旧门禁等价、4 关一屏、旧证据可追溯 | PR-00 |
+| PR-01b 前置证书/复用 | 法学/服务商/隔离证明、任务哈希缓存与回归 | 只有未变 scope/TTL/hash 复用；变更和撤销立即失效；高风险红队不复用异源结果 | PR-01a |
 | PR-01 V3 契约/版本 | `contracts.py`、`domain_runtime.py`、迁移与 `tests` | Schema 严格，旧 V2 请求字节、冻结哈希、旧用例保持兼容 | PR-00 |
 | PR-02 边侧分类与风险 | `privacy/sensitivity_classifier.py`、`detection.py`、模型能力绑定 | 高敏/组合漏检基线、未配置失败关闭、模型离线回退不降级 | PR-01 |
 | PR-03 最小化与路由 | `privacy/privacy_router.py`、`disclosure.py`、`policy.py` | L4 阻断、UNKNOWN 阻断、金额日期否定关系保真、无自授权 | PR-02 |
