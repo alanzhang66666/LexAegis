@@ -1,0 +1,327 @@
+{
+  "repository": "alanzhang66666/LexAegis",
+  "import_date": "2026-10-27",
+  "files": [
+    {
+      "path": "风险材料/案例/Artificial intelligence stop to chatGPT by the ItalianSAPersonal data is collected unlawfully, no age verification system is in place for children.pdf",
+      "source": "风险材料.zip",
+      "bytes": 1127716,
+      "sha256": "c18bd4971c40a9a37d48f12d14b74c30c698e80b397fca2d30a697d83cef9610",
+      "git_blob_sha": "2f3c9b6a4d5dcbba2c4b5b3e95d93a9492a836d9"
+    },
+    {
+      "path": "风险材料/案例/Incident 768_ ChatGPT Reportedly Implic... Leak of Source Code and Meeting Notes.pdf",
+      "source": "风险材料.zip",
+      "bytes": 2493895,
+      "sha256": "70df3214019b1dda3ee649fa00a51058391ec0698836927342ff26b020d165a2",
+      "git_blob_sha": "ef55c3d8b9d68642dbaf5c4fb5fd7027d6fd069c"
+    },
+    {
+      "path": "风险材料/论文/2024.findings-naacl.157.pdf",
+      "source": "风险材料.zip",
+      "bytes": 5900311,
+      "sha256": "b05b90167077f454023d021c4b6965ef194860954efe0a02d7dc8b3a38c3ce5d",
+      "git_blob_sha": "9ebc5a84f75dc18b96a8782f4c07197d283c4f01"
+    },
+    {
+      "path": "风险材料/论文/个人信息匿名化主体法律义务与民事法律责任研究_黄炳烛.pdf",
+      "source": "风险材料.zip",
+      "bytes": 1549594,
+      "sha256": "392ea3d576e7252f76dda358360292e0b987299d727e8bc9d8a78101e23fffab",
+      "git_blob_sha": "27162d148a4d8850636e2d23e4a627fa1705fbc5"
+    },
+    {
+      "path": "风险材料/论文/区块链个人信息保护中的数据最小化_陈爱飞.pdf",
+      "source": "风险材料.zip",
+      "bytes": 729405,
+      "sha256": "d6266e3db21b03554c47f309f65cf245ae2ca808e0ff9fb5938a6d7f714ac609",
+      "git_blob_sha": "7167e68869adce21504eafd3685af9b8a5b34f85"
+    },
+    {
+      "path": "风险材料/论文/跨境人工智能去匿名化个人信息行为的刑法规制困境与出路_李志恒 (1).pdf",
+      "source": "风险材料.zip",
+      "bytes": 241835,
+      "sha256": "388cb394b1a320886dc3fe8cc206f799c937fc515a951334ad9c62f604bd50ef",
+      "git_blob_sha": "4a864dc7fe4d3c05dc5a7f2adc18678807ba3c02"
+    },
+    {
+      "path": "风险材料/论文/跨境人工智能去匿名化个人信息行为的刑法规制困境与出路_李志恒.pdf",
+      "source": "风险材料.zip",
+      "bytes": 241835,
+      "sha256": "8561d0138c37a518ebf6f2caa63d1bbb3c445377fc5563fce5a275d34a5abce0",
+      "git_blob_sha": "6b5f482c6db303932ecd14fd8b1e13743564d363"
+    },
+    {
+      "path": "案隐盾法律法规/匿名化材料外发与跨境法律适用说明.docx",
+      "source": "案隐盾法律法规.zip",
+      "bytes": 19207,
+      "sha256": "023ccbbb80fb5d412581ad7e133fb2a63898a20074d455bf3e95a982d69fce90",
+      "git_blob_sha": "352759a1e993553d05fd5735a66347eeba03b002"
+    },
+    {
+      "path": "案隐盾法律法规/法规原文/数据出境安全评估办法_中央网络安全和信息化委员会办公室.pdf",
+      "source": "案隐盾法律法规.zip",
+      "bytes": 133826,
+      "sha256": "ebe39a02a5d278ae07cf649dde274d3b72830fee6ccfdf6fd1e39070e59c494e",
+      "git_blob_sha": "0733a1d0bec10e669baf16c7e1f74acfa4268a6a"
+    },
+    {
+      "path": "案隐盾法律法规/法规原文/中华人民共和国数据安全法_中国人大网.pdf",
+      "source": "案隐盾法律法规.zip",
+      "bytes": 2520038,
+      "sha256": "edaa65829faebe869cb48bc4e93d740593f3bc5464a3b78d087186fdaf9ff9b3",
+      "git_blob_sha": "306185af4437dcb2f9416b334069c608dadbbd82"
+    },
+    {
+      "path": "案隐盾法律法规/法规原文/国家互联网信息办公室令（第16号）　　促进和规范数据跨境流动规定__2024年第15号国务院公报_中国政府网.pdf",
+      "source": "案隐盾法律法规.zip",
+      "bytes": 143548,
+      "sha256": "ca62cea475313d6a0f7faaea343d43fd8590fb8d53cff4d1962c678fa38e6e66",
+      "git_blob_sha": "04996f3be556142965f73840feca408c39e9a277"
+    },
+    {
+      "path": "案隐盾法律法规/法规原文/中华人民共和国个人信息保护法_中央网络安全和信息化委员会办公室.pdf",
+      "source": "案隐盾法律法规.zip",
+      "bytes": 224482,
+      "sha256": "e07122b6d672d0c2958369e045b0e3304522fddd77d0d70e399ee79f528597ce",
+      "git_blob_sha": "94301ed705e8a3dd9af22348d42b96b7ee611074"
+    },
+    {
+      "path": "案隐盾法律法规/法规原文/​中华人民共和国网络安全法_中央网络安全和信息化委员会办公室.pdf",
+      "source": "案隐盾法律法规.zip",
+      "bytes": 250996,
+      "sha256": "b59eb774c321d434fab89045a1d26665e63515040cea79e52c65dcc2006281a7",
+      "git_blob_sha": "def93716aef1e43a96b46a5feace883a297757f7"
+    },
+    {
+      "path": "匿名化材料_AI与数据出境_相关政策（文玥）/01_政策文件/P01_关于构建数据基础制度更好发挥数据要素作用的意见_官网正文离线阅读版.html",
+      "source": "匿名化材料_AI与数据出境_相关政策（文玥）.zip",
+      "bytes": 22123,
+      "sha256": "2e95b49e4d4b05fc1b3949bf3bf4fea982419307d316cd4da524242ab91afa2c",
+      "git_blob_sha": "1b18ae035c5ca56e83b021661d418358aa15fc35"
+    },
+    {
+      "path": "匿名化材料_AI与数据出境_相关政策（文玥）/01_政策文件/P02_关于完善数据流通安全治理更好促进数据要素市场化价值化的实施方案.pdf",
+      "source": "匿名化材料_AI与数据出境_相关政策（文玥）.zip",
+      "bytes": 234563,
+      "sha256": "f236f2b29af84b98122a3d9b134660ad5093e05b421636065ef70b3a9f119559",
+      "git_blob_sha": "7d4f7e20c9b799bcaad7df953ba213cbd59ede2c"
+    },
+    {
+      "path": "匿名化材料_AI与数据出境_相关政策（文玥）/01_政策文件/P03_关于在国家数据基础设施建设先行先试中加强场景应用的实施方案_官网正文离线阅读版.html",
+      "source": "匿名化材料_AI与数据出境_相关政策（文玥）.zip",
+      "bytes": 8533,
+      "sha256": "7d06537a727367eb4a9c6c9ddba2cc4b05adb7a6acfb8cc575f841644c57fec5",
+      "git_blob_sha": "0a7d1492eb861c7b3dcc849e0cfb14bd42e099c8"
+    },
+    {
+      "path": "匿名化材料_AI与数据出境_相关政策（文玥）/01_政策文件/P04_最高人民法院关于依法审理涉人工智能纠纷案件的意见_官网正文离线阅读版.html",
+      "source": "匿名化材料_AI与数据出境_相关政策（文玥）.zip",
+      "bytes": 32949,
+      "sha256": "fb8bbd1ffeb31d1b627cbc0de4d7dfd9e66bf4a328e5cb021606346ae4af8ebe",
+      "git_blob_sha": "f9a879c856c0ddaadf184d2545712c221403c7ee"
+    },
+    {
+      "path": "匿名化材料_AI与数据出境_相关政策（文玥）/02_监管问答与办事指南/G01_促进和规范数据跨境流动规定答记者问_官网正文离线阅读版.html",
+      "source": "匿名化材料_AI与数据出境_相关政策（文玥）.zip",
+      "bytes": 15373,
+      "sha256": "a26303570dd59938ed0013dbce60fb975d86cec85ead2a666df8302ee40b75a1",
+      "git_blob_sha": "7f8ae02c6793e25f76b7823dd0c2c26c9b2a3bc2"
+    },
+    {
+      "path": "匿名化材料_AI与数据出境_相关政策（文玥）/02_监管问答与办事指南/G02_数据出境安全管理政策问答（2025年4月）_官网正文离线阅读版.html",
+      "source": "匿名化材料_AI与数据出境_相关政策（文玥）.zip",
+      "bytes": 9999,
+      "sha256": "e1cccc710b7f8c49c5b55c4958a7ea28f9527dc47d177da85c4cb42e74cc805e",
+      "git_blob_sha": "0afe2400a15f48336ca72fd01fa4357dbca599c9"
+    },
+    {
+      "path": "匿名化材料_AI与数据出境_相关政策（文玥）/02_监管问答与办事指南/G03_数据出境安全管理政策问答（2025年10月）_官网正文离线阅读版.html",
+      "source": "匿名化材料_AI与数据出境_相关政策（文玥）.zip",
+      "bytes": 9259,
+      "sha256": "60226335224c56b3cbd3132821d0477f21c18508a59ab956b964e72b39f8218c",
+      "git_blob_sha": "9c109d79e45d1552c5453d9a5db4d232775253a0"
+    },
+    {
+      "path": "匿名化材料_AI与数据出境_相关政策（文玥）/02_监管问答与办事指南/G04_数据出境安全管理政策法规问答（2026年9月）_官网正文离线阅读版.html",
+      "source": "匿名化材料_AI与数据出境_相关政策（文玥）.zip",
+      "bytes": 3769,
+      "sha256": "535b7cbec370b7b641bdcfea1d9804cbc287edf62bd2bab8e8a40d7b348d9959",
+      "git_blob_sha": "8a6179545028f233463117b5aeef1bd298e77459"
+    },
+    {
+      "path": "匿名化材料_AI与数据出境_相关政策（文玥）/02_监管问答与办事指南/G05_数据出境安全评估申报指南（第三版）.docx",
+      "source": "匿名化材料_AI与数据出境_相关政策（文玥）.zip",
+      "bytes": 67052,
+      "sha256": "2c3045905ff09f85d7f18fcd2933bd0e445ef818829217b345bed6292f57ab4f",
+      "git_blob_sha": "378b371f9255bc067616c52a3a73056b448c12b4"
+    },
+    {
+      "path": "匿名化材料_AI与数据出境_相关政策（文玥）/02_监管问答与办事指南/G06_个人信息出境标准合同备案指南（第二版）.docx",
+      "source": "匿名化材料_AI与数据出境_相关政策（文玥）.zip",
+      "bytes": 69615,
+      "sha256": "ecdeb9e2e35c408866c5d832dbde3bc0e8738ad59222c0d6a5551409819aba5b",
+      "git_blob_sha": "2bfc4ef1b59b318a8f1c38166e76008b94ee918d"
+    },
+    {
+      "path": "匿名化材料_AI与数据出境_相关政策（文玥）/02_监管问答与办事指南/G07_关于变更个人信息出境认证依据标准的公告_官网正文离线阅读版.html",
+      "source": "匿名化材料_AI与数据出境_相关政策（文玥）.zip",
+      "bytes": 1468,
+      "sha256": "8567ee9d45f34e93ddf5d22f8263c990888cbfd3c49990453332ac574022bfeb",
+      "git_blob_sha": "099d1e3329165d903fe60e93ebfd6dab9efe96ef"
+    },
+    {
+      "path": "匿名化材料_AI与数据出境_相关政策（文玥）/03_标准实践指南/T01_个人用户使用人工智能服务安全指南.pdf",
+      "source": "匿名化材料_AI与数据出境_相关政策（文玥）.zip",
+      "bytes": 714088,
+      "sha256": "2b8b471b5a5aa188ab08201913a14d3ddce70a6dccf222e2d34ddb3fff39f014",
+      "git_blob_sha": "f2dc47d1612085657a1338ae9eaad1f914fac940"
+    },
+    {
+      "path": "匿名化材料_AI与数据出境_相关政策（文玥）/03_标准实践指南/T02_人工智能应用安全指引_总则.pdf",
+      "source": "匿名化材料_AI与数据出境_相关政策（文玥）.zip",
+      "bytes": 787224,
+      "sha256": "3c280b693b5fededb6f9a81df99c12e27fb707eaae89a60630daff7ceecf9f71",
+      "git_blob_sha": "bbf024358d91fd78eda4877f9f85f5cb3fb2ee71"
+    },
+    {
+      "path": "匿名化材料_AI与数据出境_相关政策（文玥）/03_标准实践指南/T03_智能体部署使用安全指引.pdf",
+      "source": "匿名化材料_AI与数据出境_相关政策（文玥）.zip",
+      "bytes": 659397,
+      "sha256": "11124dbe739eebd438a6ed5e9b612fae599aa116d74ceab05a9d1c426f101ec4",
+      "git_blob_sha": "9f55df7d1344a713f2dfdcafed4a5a131406dc9c"
+    },
+    {
+      "path": "匿名化材料_AI与数据出境_相关政策（文玥）/03_标准实践指南/T04_敏感个人信息识别指南.pdf",
+      "source": "匿名化材料_AI与数据出境_相关政策（文玥）.zip",
+      "bytes": 593167,
+      "sha256": "8e48eafd91eaf0ff77ebb20b795ac8487a6d8952c376d898289d4bff8f1a1210",
+      "git_blob_sha": "c9aaad742faeddfb195ed67578a47738cbc7fe58"
+    },
+    {
+      "path": "匿名化材料_AI与数据出境_相关政策（文玥）/04_国家标准索引_非全文/S01_GB_T_37964-2019_个人信息去标识化指南_官方详情页_非全文.html",
+      "source": "匿名化材料_AI与数据出境_相关政策（文玥）.zip",
+      "bytes": 2337,
+      "sha256": "85475e7fd00de5f7402f3eb53f65cbc91003f97beae86560f1d71a3c2634cde5",
+      "git_blob_sha": "2ea897b020b3342a9373fa56103be1ccf0df0d0d"
+    },
+    {
+      "path": "匿名化材料_AI与数据出境_相关政策（文玥）/04_国家标准索引_非全文/S02_GB_T_42460-2023_个人信息去标识化效果评估指南_官方详情页_非全文.html",
+      "source": "匿名化材料_AI与数据出境_相关政策（文玥）.zip",
+      "bytes": 2402,
+      "sha256": "4032655473dbb327fe2ed851c6470234d965ec2714b6f5cf8ce2ca336820e78c",
+      "git_blob_sha": "ae11b1e3b6c103ec51ff0c7f0cd9e47d9dd7cea9"
+    },
+    {
+      "path": "匿名化材料_AI与数据出境_相关政策（文玥）/04_国家标准索引_非全文/S03_GB_T_43697-2024_数据分类分级规则_官方详情页_非全文.html",
+      "source": "匿名化材料_AI与数据出境_相关政策（文玥）.zip",
+      "bytes": 2308,
+      "sha256": "dc100082237c8a8dbea96e59d86ca62c30556cfb51758ab9ba4caaccc123fc81",
+      "git_blob_sha": "d64df723c77b6548561deee1d998428b43016d13"
+    },
+    {
+      "path": "匿名化材料_AI与数据出境_相关政策（文玥）/04_国家标准索引_非全文/S04_GB_T_45654-2025_生成式人工智能服务安全基本要求_官方详情页_非全文.html",
+      "source": "匿名化材料_AI与数据出境_相关政策（文玥）.zip",
+      "bytes": 2398,
+      "sha256": "1c4573771e44fa04024f0a50d1bb488adeb80dd33ea239e99a58692c7ab236f7",
+      "git_blob_sha": "548539747f464d56a932b531cb3e0a12603ed5ab"
+    },
+    {
+      "path": "匿名化材料_AI与数据出境_相关政策（文玥）/05_部门规章_单独分类/R01_促进和规范数据跨境流动规定_官网正文离线阅读版.html",
+      "source": "匿名化材料_AI与数据出境_相关政策（文玥）.zip",
+      "bytes": 6896,
+      "sha256": "77d4aeab0ae30707767345680a4d8d0c91e8847e7306e050a3c8b507707b12d7",
+      "git_blob_sha": "6aefd083ed0fd0e625ace446c16df8f97e35d1e2"
+    },
+    {
+      "path": "匿名化材料_AI与数据出境_相关政策（文玥）/05_部门规章_单独分类/R02_数据出境安全评估办法_官网正文离线阅读版.html",
+      "source": "匿名化材料_AI与数据出境_相关政策（文玥）.zip",
+      "bytes": 9639,
+      "sha256": "f5342f557365d4eb419a9b703558cc8a2d14f49c1987d9ebd6ee3df85ea871ad",
+      "git_blob_sha": "fb979395f99fdeb260cb184598d8510f7c5bbb3e"
+    },
+    {
+      "path": "匿名化材料_AI与数据出境_相关政策（文玥）/05_部门规章_单独分类/R03_个人信息出境标准合同办法_官网正文离线阅读版.html",
+      "source": "匿名化材料_AI与数据出境_相关政策（文玥）.zip",
+      "bytes": 5634,
+      "sha256": "de7f0cb7117392462da2e1e6dc07892c954e04f544313714377f266bc063201d",
+      "git_blob_sha": "73c80fac554c36ed8ed94aa64306751915fc4920"
+    },
+    {
+      "path": "匿名化材料_AI与数据出境_相关政策（文玥）/05_部门规章_单独分类/R04_生成式人工智能服务管理暂行办法_官网正文离线阅读版.html",
+      "source": "匿名化材料_AI与数据出境_相关政策（文玥）.zip",
+      "bytes": 11320,
+      "sha256": "f50f5121fb2dffb39f2f3a4336d02150cb2a69d6b7971295931b8e7c8cb151e0",
+      "git_blob_sha": "976d28a80531556df356fc48fe9384b12f3c83de"
+    },
+    {
+      "path": "匿名化材料_AI与数据出境_相关政策（文玥）/05_部门规章_单独分类/R05_个人信息出境认证办法_官网正文离线阅读版.html",
+      "source": "匿名化材料_AI与数据出境_相关政策（文玥）.zip",
+      "bytes": 8479,
+      "sha256": "e9c3d30d364104b5d5334d3a3f7a420e8551757c58ef3303f47ad91ad9121c60",
+      "git_blob_sha": "2b6180be5ca3b11b5dc6766c6c8d175ac7b1699b"
+    },
+    {
+      "path": "匿名化材料_AI与数据出境_相关政策（文玥）/05_部门规章_单独分类/R06_个人信息出境标准合同_部门规章附件.pdf",
+      "source": "匿名化材料_AI与数据出境_相关政策（文玥）.zip",
+      "bytes": 221464,
+      "sha256": "e020e222d2c9fc804087ef2ab762efa611a80484b71dc1d89465fd21066ee161",
+      "git_blob_sha": "7cabc8327e5ad4d041a04c08cf87218b95a2ba83"
+    },
+    {
+      "path": "匿名化材料_AI与数据出境_相关政策（文玥）/06_境外与研究机构参考_非国内政策/X01_数据清洗去标识化匿名化业务规程（试行）.pdf",
+      "source": "匿名化材料_AI与数据出境_相关政策（文玥）.zip",
+      "bytes": 900484,
+      "sha256": "997cae32e4473951c94c2c13e58c3b6e2fd46ea857294e201520fb75d9d69691",
+      "git_blob_sha": "b28ad3223570bf4103ba244707926d34b08d8a57"
+    },
+    {
+      "path": "匿名化材料_AI与数据出境_相关政策（文玥）/06_境外与研究机构参考_非国内政策/X02_EDPB_Opinion_28_2024_AI模型与个人数据_英文原文.pdf",
+      "source": "匿名化材料_AI与数据出境_相关政策（文玥）.zip",
+      "bytes": 728647,
+      "sha256": "addcafb4e28028fa87d13a15f91d593ac4b38c4d897be901e38556b5f816a50e",
+      "git_blob_sha": "8543d01fc8ae185ec6d2535a9d8a60e74217d75d"
+    },
+    {
+      "path": "匿名化材料_AI与数据出境_相关政策（文玥）/07_行业条件性参考/H01_汽车数据出境安全指引（2026版）.pdf",
+      "source": "匿名化材料_AI与数据出境_相关政策（文玥）.zip",
+      "bytes": 462203,
+      "sha256": "299faa8d2cf82aebe2166a26b6b17a2901b4b888e298c3d48212515b8814a9e0",
+      "git_blob_sha": "230bb5fcbc8b01648f946c596da6bc7a9fbe52db"
+    },
+    {
+      "path": "匿名化材料_AI与数据出境_相关政策（文玥）/08_征求意见稿_不作现行依据/D01_数据匿名化流通实施及评估指南（征求意见稿）.pdf",
+      "source": "匿名化材料_AI与数据出境_相关政策（文玥）.zip",
+      "bytes": 1003684,
+      "sha256": "382a99f39771e93f7e44190b413bce575c873b26da31b3115cae59237e51c953",
+      "git_blob_sha": "165272c75ff585766daf3608c800bd85294751f7"
+    },
+    {
+      "path": "匿名化材料_AI与数据出境_相关政策（文玥）/文件清单.json",
+      "source": "匿名化材料_AI与数据出境_相关政策（文玥）.zip",
+      "bytes": 30800,
+      "sha256": "1e03f5bca894436c4eb5c0a7162fa70a33c9d6f1f950c7b1fed18f9c2a25a008",
+      "git_blob_sha": "4cf3c2c3cec6ce66dffc531461fbe8142c5fbd43"
+    },
+    {
+      "path": "匿名化材料向大模型及境外服务传输的风险分析.docx",
+      "source": "匿名化材料向大模型及境外服务传输的风险分析.docx",
+      "bytes": 18763,
+      "sha256": "e3fb4effbb1419ae8ef468a3ac8ee01db81dd035c362ec571601b603c268a2ba",
+      "git_blob_sha": "3760308be2a5b6361243257ca45bf6d97e7e1037"
+    }
+  ],
+  "excluded_metadata": [
+    "案隐盾法律法规/.DS_Store",
+    "__MACOSX/案隐盾法律法规/._.DS_Store",
+    "__MACOSX/案隐盾法律法规/._匿名化材料外发与跨境法律适用说明.docx",
+    "案隐盾法律法规/.~化材料外发与跨境法律适用说明.docx",
+    "__MACOSX/案隐盾法律法规/._.~化材料外发与跨境法律适用说明.docx",
+    "__MACOSX/案隐盾法律法规/法规原文/._数据出境安全评估办法_中央网络安全和信息化委员会办公室.pdf",
+    "__MACOSX/案隐盾法律法规/法规原文/._中华人民共和国数据安全法_中国人大网.pdf",
+    "__MACOSX/案隐盾法律法规/法规原文/._国家互联网信息办公室令（第16号）　　促进和规范数据跨境流动规定__2024年第15号国务院公报_中国政府网.pdf",
+    "__MACOSX/案隐盾法律法规/法规原文/._中华人民共和国个人信息保护法_中央网络安全和信息化委员会办公室.pdf",
+    "__MACOSX/案隐盾法律法规/法规原文/._​中华人民共和国网络安全法_中央网络安全和信息化委员会办公室.pdf"
+  ],
+  "identical_content_groups": []
+}
