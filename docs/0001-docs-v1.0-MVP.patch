@@ -1,0 +1,417 @@
+From 4075e6463ba43fe868d77ae01786a7e7b899185e Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 30 Oct 2026 00:50:42 -0400
+Subject: [PATCH] =?UTF-8?q?docs:=20=E6=96=B0=E5=A2=9E=20v1.0=20MVP=20?=
+ =?UTF-8?q?=E9=97=AD=E7=8E=AF=E8=90=BD=E5=9C=B0=E6=8A=80=E6=9C=AF=E6=96=B9?=
+ =?UTF-8?q?=E6=A1=88?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+依据法学方案（PRD）与 v3 重构规格，按 PRD 核心控制闭环七步给出 W1–W10
+工作项：L0–L4 分级路由、四门聚合与按 L 级审批、合成材料真实云调用、
+反证漏记校核、修订与异议、分层证明复用、审批生成请求级策略、外发能力
+计算化、正式案 cloud 入口、中老跨境演示登记；附 PR 拆分、特性开关回退、
+测试矩阵、法学交付与 v1.0 发布清单。仅文档，不改代码。
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01MQReFctoNTwWA54628qKTY
+---
+ docs/V1_0_MVP_TECHNICAL_PLAN.md | 385 ++++++++++++++++++++++++++++++++
+ 1 file changed, 385 insertions(+)
+ create mode 100644 docs/V1_0_MVP_TECHNICAL_PLAN.md
+
+diff --git a/docs/V1_0_MVP_TECHNICAL_PLAN.md b/docs/V1_0_MVP_TECHNICAL_PLAN.md
+new file mode 100644
+index 0000000..ff315e8
+--- /dev/null
++++ b/docs/V1_0_MVP_TECHNICAL_PLAN.md
+@@ -0,0 +1,385 @@
++# 案隐盾 LexAegis v1.0 MVP 闭环落地技术方案
++
++> **文档状态**：Proposed，待研发、法学联合评审。本文是实施方案，不是已实现声明，也不是外发授权。
++> **需求来源**：法学方案《案隐盾 LexAegis——基于云边协同与双链审查的跨境劳动争议材料最小化披露系统｜项目简介》（以下称 PRD）。
++> **工程参考**：`docs/lexaegis-v3-refactor-20261026` 分支上的 `V3_0_REFACTOR_SPEC.md`、`V3_0_GATE_SIMPLIFICATION_ADR.md`、`V3_0_DELIVERY_MATRIX.md`（以下称 v3 规格，“v3”仅为文档名）。
++> **代码基线**：`main` @ `4a084dc`。
++> **版本口径**：本轮完成后对外称 **v1.0**，包版本 `1.0.0` 不变；当前 `main` 回溯称“v1.0 预览基线”，建议补打 `v1.0-preview` 标签。
++
++---
++
++## 1. 目标
++
++本轮只做一件事：**MVP 闭环可用**。PRD“核心控制闭环”七步，在 `production` 上由具名用户真实走完一遍，包括真实云端调用与人工采纳；任何异常逐请求失败关闭。
++
++| # | PRD 闭环步骤 | 仓库现状 | 本轮补齐（工作项） |
++| --- | --- | --- | --- |
++| 1 | 任务定义与材料导入 | 可用：上传、`DocumentIR`、`SourceAnchor`、边侧 MiniCPM 提取 | — |
++| 2 | 最小事实卡 | 可用：逐项披露、`[[LEX:P0001]]` 令牌化、信息损失说明 | — |
++| 3 | 风险门禁（L0–L4 与红队） | G0–G10、四类攻击执行器；无 L 级 | W1 |
++| 4 | 人工知情审批 | 具名审批、`request_hash` 冻结；正式外发需逐案重签 9 份收据 | W2、W7 |
++| 5 | 受控 API 调用 | 网关双槽、一次性许可、unknown 不重发；`production` 实际不可用 | W3、W6、W8、W9 |
++| 6 | 来源回链核验 | 九阶段返回管道、7 类回包校核 | W4 |
++| 7 | 人工采纳 / 修订 / 阻断 | 只有采纳与否决 | W5 |
++
++另有 W10：中老跨境案例以离线演示跑通同一闭环（只登记数据，不改逻辑）。
++
++### 1.1 MVP 验收（v1.0 发布条件）
++
++1. `production` 上由不同具名角色（`case_operator`、`legal_reviewer`、`approver`）走完七步；至少 2 个案件真实发出（`provenance=cloud`），并被采纳或修订；全程可按 Task ID 追溯。
++2. 负向：L4、L3 未满足审批、未审批、请求哈希变化、证明失效或撤销、grant 重放，均逐请求拦截，且不影响其他请求。
++3. `demo` 下中老案例 `XB-LA-001` 走通七步（mock），界面标注“合成演示，非真实跨境传输”。
++4. 既有 pytest 全绿；V2 wire 与 `request_hash` 黄金样本不变；LA-001 首案策略仍可执行。
++
++### 1.2 不在本轮
++
++约 80 例基准样本与双人标注、PRD §六优化方向、v3 的 S0–S2 分类器 / DP / Ianvs / KubeEdge 研究项、A 链（业务协作链）正式实现、V3 契约全集、前端大拆分。
++
++---
++
++## 2. 不变式
++
++1. **一张门禁表**：正式外发只走 `outbound_gate.collect_outbound_blockers` 与 `formal_release.evaluate_release`；编号只用 G0–G10。L0–L4 与 G-L / G-D / G-H / G-S 四门是派生与聚合层。
++2. **放开只靠计算**：`validate_formal_gate`、`authorize_dispatch`、`_REQUIRED_GATES` 不削弱；`product_dispatch_state()` 改为计算值，禁止直接改常量。
++3. **能力可用 ≠ 请求已授权**：每个请求独立冻结、独立审批、一次性许可；可复用的只有部署、接收方、规则三层证明。
++4. **禁止的捷径**（沿用 v3 ADR §8）：翻转 `PRODUCT_DISPATCH_BLOCKED`、清空 `_REQUIRED_GATES`、让 `GateHit` 全部 allowed、把 L3 当 L1、伪造 `resisted`、复制不同载荷的 G8 / G9 收据、用 `mock` 冒充 `cloud`。
++5. **边侧数据不出域**：`mapping`、`original_value`、`local_text`、`anchors` 不进 wire、网关账本或日志。
++6. **可回退**：P0-B 的行为变化全部挂在特性开关后（见 §8），关闭即回到预览基线行为。
++
++---
++
++## 3. 闭环时序与改动位置
++
++```mermaid
++sequenceDiagram
++  autonumber
++  actor OP as case_operator
++  actor LR as legal_reviewer
++  actor AP as approver
++  participant API as api / service
++  participant GATE as outbound_gate + gate_orchestrator
++  participant REL as formal_release / release_service
++  participant WK as worker
++  participant GW as gateway（凭据域）
++  participant CL as 云端模型
++  participant RP as return_pipeline
++
++  OP->>API: 上传材料、边侧提取、建 fact_summary 任务（transport=cloud，W9）
++  OP->>API: 逐项披露 → evaluate
++  API->>GATE: collect_outbound_blockers → disposition → risk_level（W1）
++  GATE-->>API: 四门 bundle + 所需审批角色（W2）
++  LR->>API: 审批（L2/L3 角色）
++  AP->>API: 审批（G10）
++  API->>REL: 分层证明匹配（W6）+ 生成 request 级 policy 与 grant（W7）
++  API->>WK: enqueue（authorize_dispatch phase=enqueue）
++  WK->>GW: 签名请求 + grant + request_hash
++  GW->>GW: 能力状态 available（W8）、白名单、nonce、字节哈希
++  GW->>CL: 调用
++  CL-->>GW: 结果 / 错误 / 超时（unknown 不重发）
++  GW-->>WK: 账本记录
++  WK->>RP: 九阶段（新增 contrary_omission，W4）
++  LR->>API: 逐条核对 → adopt / revise / dissent / block（W5）
++```
++
++| 工作项 | 主要文件 | 线 |
++| --- | --- | --- |
++| W1 L0–L4 派生与路由 | `outbound_gate.py`、`policy.py`、`packs/*.json`（`gate_profile`） | P0-A |
++| W2 四门聚合与 L 级审批卡 | 新增 `gate_orchestrator.py`、`api.py`、`service.py`、`frontend/src/workspaces/ApprovalWorkspace.tsx` | P0-A |
++| W3 合成材料真实云调用 | `scripts/verify_three_layers_live.py`、`docs/VALIDATION.md` | P0-A |
++| W4 反证漏记校核 | `output_checks.py`、`return_pipeline.py` | P0-A |
++| W5 修订与异议 | `contracts.py`（`HumanDecision`）、`api.py`、`audit_chain.py`、`RestorationWorkspace.tsx` | P0-A |
++| W6 分层证明复用 | `contracts.py`（`GateEvidenceReceipt`）、`evidence.py`、`formal_release.py`、`release_api.py` | P0-B |
++| W7 审批一步生成请求级策略 | `release_service.py`、`formal_release.py`、`service.approve_task` | P0-B |
++| W8 外发能力计算化 | `outbound_gate.py`、`api.py`、`diagnostics.py`、`release_build.py`、`App.tsx` | P0-B |
++| W9 正式案 cloud 入口 | `runtime_profile.py`、`App.tsx`、`RiskWorkspace.tsx` | P0-B |
++| W10 中老演示登记 | `data/recording_adapted/*`、`recording_import.py`、`service.py` | P1 |
++
++---
++
++## 4. P0-A 闭环补齐
++
++### W1 L0–L4 风险分级与路由
++
++**目标**：PRD“任务实施 L0–L4 风险分级路由”成为生效逻辑，而不只是包内文字。
++
++**分级语义**（取自 v3 ADR §3，须法学按当前 PRD 签署；签署前以 `draft` 状态随 `gate_profile` 发布）：
++
++| 级别 | 适用内容 | 审批要求 | 允许 transport |
++| --- | --- | --- | --- |
++| L0 | 公开法律条文、抽象问题，不含案卷事实 | 1 名 `approver` | cloud、local |
++| L1 | 已令牌化并泛化的事实卡 | 1 名 `approver` | cloud、local |
++| L2 | 必须保留精确金额、日期等，组合检查已完成 | 1 名 `legal_reviewer` + 1 名 `approver`（可为同一授权人，需两个角色动作） | cloud、local |
++| L3 | 高敏或跨境受限 | 默认仅 local；若包内路由放开 cloud，须 `legal_reviewer` 与 `approver` 为**两个不同 actor** | local（默认） |
++| L4 | 命中硬性禁止 | 不可批准 | 无 |
++| UNKNOWN | 计算失败或输入缺失 | 不可批准 | 无 |
++
++**派生规则**（`outbound_gate.py` 新增）：
++
++```python
++RISK_LEVELS = ("L0", "L1", "L2", "L3", "L4", "UNKNOWN")
++
++def derive_risk_level(risk: dict, decisions: list[dict], profile: dict) -> str:
++    disposition = risk.get("disposition")
++    if disposition == "prohibited":
++        return "L4"
++    if disposition == "needs_verification":
++        return "L3"
++    if disposition not in ("allowed", "needs_minimization"):
++        return "UNKNOWN"
++    disclosed = [d for d in decisions if d.get("transform") != "delete" and not d.get("forbidden")]
++    if not disclosed:
++        return "L0"
++    precise = set(profile.get("precise_fields") or ("amount", "date"))
++    if disposition == "needs_minimization" or any(
++            d.get("field") in precise and d.get("transform") == "keep" for d in disclosed):
++        return "L2"
++    return "L1"
++```
++
++- `attach_disposition(risk)` 之后调用，写入 `risk["risk_level"]`、`risk["allowed_transports"]`、`risk["approval_requirement"]`。
++- 路由表与审批要求放在 `gate_profile` 包内容的新键 `risk_levels`（`domain_packages.split_monolithic_pack` 把单体包的 `risk_levels` 分到 `gate_profile`）；包内缺该键时用上表默认值，且默认值只会更严。
++- 所请求 transport 不在 `allowed_transports` → 追加 `_hit(G0, "风险等级 Lx 不允许 <transport>")`，kind=`verification`（L3）或 `prohibition`（L4 / UNKNOWN）。
++- `transform` 取值为契约枚举 `keep | pseudonymize | generalize | delete`（`contracts.py`）。
++
++**测试**（`tests/test_risk_level.py`）：每级至少 1 个正例；L3 请求 cloud → 409；L4 无审批入口；UNKNOWN → 阻断；包内放宽路由不能让 L4 / UNKNOWN 可发。
++
++### W2 四门聚合与按 L 级审批卡
++
++**目标**：审批人只看一张卡；旧 G0–G10 仍执行并落账。
++
++新增 `lexaegis/gate_orchestrator.py`（只读聚合，不做放行判定）：
++
++```python
++FOUR_GATES = {
++    "G-L": ("G1", "G2", "G3", "G5"),   # 法律与接收方
++    "G-D": ("G0", "G7", "G8"),          # 最小披露与风险
++    "G-H": ("G6", "G10"),               # 按 L 级一次确认
++    "G-S": ("G9",),                     # 网关即时执行
++}
++
++def gate_bundle(task: dict, release_decision: dict | None) -> dict:
++    """返回 {risk_level, approval_requirement, gates: {G-L: {status, legacy: {G1: ...}, reasons: [...]}, ...},
++    ready: bool}；ready 必须等于 risk.approval_allowed and (release_decision is None or approval_eligible)。"""
++```
++
++- API：`GET /api/v1/tasks/{task_id}/gate-bundle`（`api.py`），只读。
++- 审批：`service.approve_task` 增加 `task["approvals"]`（每个角色动作一条：actor、role、at、request_hash）；按 `approval_requirement` 判断是否满足，满足后才把任务置 `approved` 并进入 W7。L2 / L3 的第二个动作复用同一端点 `POST /api/v1/tasks/{id}/approve`，按身份角色累加。
++- 前端：`ApprovalWorkspace.tsx` 顶部新增四门卡片与 L 级徽标，显示“还需哪些角色批准”；保留现有逐门明细作为折叠区。
++
++**测试**：`tests/test_gate_orchestrator.py` 用现有门禁用例做等价性对照（同一输入下 `bundle.ready` 与旧判定一致，0 越权）；L2 缺 `legal_reviewer` 动作时不能 approved；L3 同一 actor 两角色不能满足。
++
++### W3 合成材料真实云调用（`integration`）
++
++**目标**：在不涉及真实案件、不依赖法学签署的前提下，先拿到真实 `provenance=cloud` 的端到端证据，作为 P0-B 上生产前的先行验证。
++
++1. `lexaegis start --profile integration`，网关 `.env` 配置 DeepSeek 主槽（可选百炼备槽）；API / worker 不持密钥（`LEX_GATEWAY_ROLE` 断言）。
++2. 运行 `python scripts/verify_three_layers_live.py --base-url http://127.0.0.1:58765 ...`，第三条路径以 `transport=cloud` 完成。
++3. 扩展该脚本，增加两条记录：**错误**（指向白名单内但无效的模型名，期望 `failed`）与 **unknown**（把网关读超时调到 1 秒，期望 `unknown` 且不重发）。超时参数通过网关环境变量注入，不进生产配置。
++4. 结果写入 `docs/VALIDATION.md` 新增一节，附网关账本哈希、`request_hash`、`provenance`、耗时；不贴任何密钥或原文。
++
++### W4 反证漏记校核（v3 E-02）
++
++`output_checks.py`：
++
++- `CHECKS` 增加 `contrary_omission`，`MESSAGES["contrary_omission"] = "存在未被引用的否认或反向证据，须人工并列审定"`，默认级别 `review`（包可上调为 `block`）。
++- `apply_return_checks` 增加参数 `unused_fact_ids`：若其中有事实的 `claim_stance` / `statement_status` / `dispute_status` ∈ {`deny`, `denied`, `disputed`, `contrary`}，且与某条 claim 的 `source_ids` 同字段（`field` 相同），则给该 claim 记 `contrary_omission`。
++- `return_pipeline.review_schema_stage` 把 `validated.get("unused_fact_ids")` 传入；该字段已由 `policy.py` 按“外发集合减去引用”在边侧核对（云端回写不一致只记 `feedback_issues`）。
++
++测试：工资表（应发）与聊天记录（否认）并存、摘要只引用前者 → `needs_review`；两者都被引用 → 不触发。
++
++### W5 修订与异议（人工采纳闭环）
++
++- `contracts.HumanDecision.decision` 扩为 `Literal["adopted", "revised", "dissent", "rejected"]`，新增可选字段：`revisions: list[{claim_id, before_hash, after_text, reason}]`、`dissent_note: str | None`、`supersedes_id: str | None`。
++- API：
++  - `POST /api/v1/tasks/{id}/claims/{claim_id}/revise`：`legal_reviewer` / `approver`；保存修订文本（边侧），记录前后哈希与理由；被 `blocked` 的 claim 不可修订，只能重做任务。
++  - `POST /api/v1/tasks/{id}/dissent`：任何具名复核角色可写异议，不改变采纳状态。
++  - 现有 `POST /confirm` 在存在修订时写 `decision="revised"`，`artifact_hash` 取修订后产物。
++- `audit_chain.py` 的 `human_decisions` 区段带出 `decision` 与 `supersedes_id`。
++- 前端 `RestorationWorkspace.tsx`：每条 claim 增加“修订”入口与修订前后对照；任务级“异议”输入框。
++
++测试：修订后 `artifact_hash` 变化且旧决定被 `supersedes`；blocked claim 修订返回 409；异议不改变 `confirmed`。
++
++---
++
++## 5. P0-B 常态受控外发（云边协同 B 链）
++
++**现状卡点**（已核对代码）：
++
++- `formal_release.evaluate_release` 对 `_REQUIRED_GATES = (G1, G2, G3, G5, G6, G7, G8, G9, G10)` 的收据按 `tuple == request.tuple` 精确匹配（`tuple` 为 `{case_id, purpose, recipient}`），每个新案件都要重签 9 份。
++- `FormalReleasePolicy.scope_kind="request"` 已支持（绑定单个 `bound_request_hash`、`maximum_dispatches=1`），但需管理员通过 `POST /api/v1/tasks/{id}/formal-release/policy` 另行安装。
++- `outbound_gate.product_dispatch_state()` 恒为 `blocked`，仅用于 `api.py` bootstrap、`diagnostics.py`、`release_build.py` 展示，不参与执法。
++- 正式案 `fact_summary` 默认 `transport=local`。
++
++### W6 分层证明复用（v3 PR-01b）
++
++`contracts.GateEvidenceReceipt` 新增：
++
++```python
++scope_level: Literal["request", "deployment", "recipient", "policy"] = "request"
++scope: dict[str, str] = Field(default_factory=dict)
++```
++
++| scope_level | 允许的 gate_id | `scope` 必填键 | 匹配条件 | 失效 |
++| --- | --- | --- | --- | --- |
++| `deployment` | G9（部署证明部分） | `build_manifest_hash`、`environment`、`network_policy_hash` | 与 `frozen.build_manifest_hash` 及当前运行身份一致 | 任一哈希变化、过期、撤销 |
++| `recipient` | G3 | `provider_id`、`provider_profile_hash`、`endpoint` | 与冻结请求主槽（及备槽）一致；仍须含法 03、法 04 两类模板 | 档案哈希、端点、合同或有效期变化 |
++| `policy` | G1、G5 | `domain`、`pack_id`、`pack_content_hash` | 与 `request.rule_versions` 中包哈希一致 | 包撤销、退役、法源失效 |
++| `request` | G2、G6、G7、G8、G9（当次网关核验）、G10 | 沿用 `tuple` + `request_hash` | 现有逻辑不变；G8 另须 `attack_input_hash` 相同 | 每请求重做 |
++
++实现要点：
++
++- `scope_level != "request"` 时 `tuple` 不填（`ReleaseTuple` 不允许通配符，不复用它表达范围）；`evidence._validate_tuple` 只对 request 层生效。
++- `formal_release.evaluate_release` 的收据循环改为：先按 `scope_level` 选择匹配函数（`_match_deployment / _match_recipient / _match_policy / _match_request`），其余校验（`conclusion == "pass"`、`_receipt_manifest_intact`、`_receipt_role_action`、`_g3_has_required_legal_reviews`、`_g1_adoption_valid`）保持不变。
++- G1 的 `_g1_adoption_valid` 依赖具体案件事实采纳：policy 层 G1 只证明“法源人审已完成”，**案件事实采纳仍由 request 层 G2 承担**；实现时若发现 `_g1_adoption_valid` 的语义无法拆分，则 G1 保留在 request 层，不强行复用。
++- `release_api.py`：`POST /api/v1/formal-release/receipts` 接受 `scope_level` 与 `scope`；新增 `GET /api/v1/formal-release/attestations` 列出有效的三层证明及到期时间。
++- `evidence._invalidate_receipt_dependents`：三层证明被撤销或过期时，传播到所有尚未 `claimed` 的依赖请求，使其 grant 失效。
++
++测试（`tests/test_layered_attestation.py`）：同一 recipient 证明支撑两个不同案件均可通过；改 `provider_profile_hash` 后两案均阻断；撤销 policy 证明后未发送任务 grant 失效、已发送不回滚；G8 用不同 `attack_input_hash` 的收据不被接受；request 层收据跨案件不被接受。
++
++### W7 审批一步生成请求级策略与许可
++
++- `release_service.approve`：当 `scope_kind` 可用且三层证明齐全时，在审批事务内调用 `formal_release.install_policy(... scope_kind="request", bound_request_hash=frozen.request_hash, maximum_dispatches=1)`，再 `issue_grant`。安装者记录为完成 G10 的 `approver`，不再需要管理员单独操作。
++- LA-001 的 `first_acceptance` 路径保持原样，仅在 `scope_kind="first_acceptance"` 时走旧逻辑。
++- 前端 `RiskWorkspace.tsx` 中管理员“安装策略”按钮保留为备用，默认隐藏。
++
++测试：审批后自动存在一条 `request` 策略且 `status="armed_once"`；同一请求再次审批不产生第二条策略；请求内容变化后旧策略不可用于新哈希。
++
++### W8 外发能力计算化（v3 PR-06）
++
++`outbound_gate.py`：
++
++```python
++def outbound_capability(repo, context) -> dict:
++    """返回 {state, missing:[...]}；state ∈ unconfigured | needs_readiness | available | suspended。"""
++```
++
++- `unconfigured`：非 `production`，或网关不可达。
++- `needs_readiness`：缺 verified 构建清单 / 有效 deployment 证明 / 至少一个 recipient 证明 / 已发布且有 policy 证明的劳动包；`missing` 列出缺项与对应操作。
++- `available`：以上齐全。
++- `suspended`：管理员显式暂停（新增 `POST /api/v1/formal-release/suspend`，写审计），或任一三层证明被撤销。
++- `product_dispatch_state()` 改为返回 `outbound_capability(...)["state"]` 的兼容映射：`available → "available"`，其余 → `"blocked"`；`api.py` bootstrap、`diagnostics.py`、`release_build.py` 改为读结构化结果。
++- 网关 `gateway.py` 在 claim 时追加校验 `state == "available"`（作为纵深防御，不替代 grant 校验）。
++- 前端 `App.tsx` 的 `formal_dispatch=` 展示改为“外发可用 / 待就绪（缺：…）/ 已暂停”，并与任务级“本请求已授权”分开显示。
++
++### W9 正式案开放 cloud 入口
++
++- 能力为 `available` 且 `risk.allowed_transports` 含 `cloud` 时，工作台新建任务提供“云端大模型 API”选项（`App.tsx` `startTask`），否则灰显并给出原因。
++- `runtime_profile.validate_transport` 不变（`production` 已允许 `cloud`，只拒 `mock`）。
++- 返回路径沿用 `return_pipeline` 九阶段与 `waiting-cloud`；`unknown` 不自动重发。
++
++### P0-B 验收
++
++- 正向：`production` 中至少 2 个非 LA-001 案件的 L1 / L2 请求真实发送，网关回执、grant 消耗、回链、人工采纳记录齐全。
++- 负向：L4；L3 未双签；provider 档案变更；包撤销；部署证明过期；请求哈希变化；grant 重放；能力 `suspended`。每项一条自动化测试 + 一次实机记录。
++- 兼容：LA-001 首案策略、V2 wire、`request_hash` 黄金样本、现有测试不变。
++
++---
++
++## 6. P1 中老跨境演示（W10）
++
++只登记数据，复用 LA-003“最小化后人工复核”分支。
++
++1. `data/recording_adapted/XB-LA-001_中老外派欠薪_完整版.docx`：考勤记录、工资台账、法定代表人签字的《情况说明》、跨境沟通记录四部分；正文保留“原始案件文书及标注”标记段；台账应发额与情况说明欠薪总额不一致。
++2. `data/recording_adapted/manifest.json` 写入正文 SHA-256；`scenarios.json` 的 `scenarios` 新增 `xbla001_crossborder`（假名化主体、工资期间、应发与实发、两个金额各一条事实、证据 ID），`documents` 新增“正文哈希 → `xbla001_crossborder`”（`demo.RECORDING_DOCUMENTS` 由此加载）。
++3. `lexaegis/demo.py` `_load_local_recording_bundle` 中写死了 `scenarios.json` 的 SHA-256，须同步更新为新文件哈希，否则启动即报“本地案例事实包校验失败”。
++4. `lexaegis/recording_import.py`：`SOURCE_TERMS`、`RECORDING_LOCAL_ARTIFACTS`、`RECORDING_STAGE_CONTENT` 各加一条；双链 A / B 判断、目标法域、人力资源豁免是否适用及理由写在 `RECORDING_STAGE_CONTENT` 的风险与审批说明中。
++5. `lexaegis/service.py` `_synthetic_edge_review`：把 `xbla001_crossborder` 加入 `allow_human_review` 分支集合。
++6. `tests/test_adapted_recording.py` 增加该场景的导入与走通用例；`frontend/e2e/recording-import.spec.ts` 增加一条。
++
++演示中 PRD 跨境要素的呈现：
++
++| PRD 要素 | 呈现 | 依托机制 |
++| --- | --- | --- |
++| 协作链 A | 审批说明单列：接收方角色、法域、豁免适用与理由 | `RECORDING_STAGE_CONTENT` + 具名复核记录 |
++| 模型链 B | 服务商治理页：处理地区、留存、训练、转委托 | `ProviderProfile` |
++| 两链独立 | 复核意见分两段，链 B 通过不替代链 A | 复核表单文字 |
++| 最小事实卡 | 令牌化主体、必要金额与期间 | 逐项披露 |
++| 金额冲突并列 | 两条事实并存；摘要写成确定欠薪额即被拦 | `Fact` 并存 + `claim_flattening` / `finding_upgrade` + W4 |
++| 失败安全 | 演示只走 mock | `validate_transport`（demo 禁 cloud） |
++
++---
++
++## 7. 交付拆分与依赖
++
++| PR | 内容 | 依赖 |
++| --- | --- | --- |
++| PR-1 | W1 L0–L4 + `gate_profile.risk_levels` + 测试 | — |
++| PR-2 | W2 `gate_orchestrator` + 多角色审批 + 审批卡前端 | PR-1 |
++| PR-3 | W4 反证漏记 + W5 修订 / 异议 | — |
++| PR-4 | W3 integration 真实调用脚本扩展与 VALIDATION 记录 | — |
++| PR-5 | W6 分层证明（契约、evidence、evaluate_release、API） | PR-1 |
++| PR-6 | W7 审批生成请求级策略 + W8 能力计算化 + W9 cloud 入口 | PR-2、PR-5 |
++| PR-7 | W10 中老演示登记 | — |
++| PR-8 | 发布：VALIDATION、README 状态、`v1.0` 标签 | 全部 |
++
++PR-3、PR-4、PR-7 可与主线并行。每个 PR 附：改动说明、测试、回退方式（§8）、是否涉及法学签署。
++
++---
++
++## 8. 特性开关与回退
++
++| 开关 | 默认 | 关闭时行为 |
++| --- | --- | --- |
++| `LEX_RISK_LEVEL_ROUTING` | 开 | 不按 L 级拦 transport，仅展示 |
++| `LEX_LAYERED_ATTESTATION` | 关（PR-5 合并时）→ 验收后开 | `evaluate_release` 只认 request 层收据（预览基线行为） |
++| `LEX_AUTO_REQUEST_POLICY` | 关 → 验收后开 | 审批不自动安装请求级策略，回到管理员手动安装 |
++| `LEX_COMPUTED_CAPABILITY` | 关 → 验收后开 | `product_dispatch_state()` 恒为 `blocked` |
++
++三个 P0-B 开关同时关闭即回到预览基线的外发行为；开关状态写入 `release_build` 清单与审计。
++
++---
++
++## 9. 测试矩阵
++
++| 类别 | 用例 | 文件 |
++| --- | --- | --- |
++| 分级 | L0–L4 / UNKNOWN 派生；路由拦截；包放宽不能越过 L4 | `tests/test_risk_level.py` |
++| 等价 | 四门 bundle 与旧判定一致 | `tests/test_gate_orchestrator.py` |
++| 审批 | L2 两角色动作；L3 两个不同 actor；审批后自动策略唯一 | `tests/test_multi_role_approval.py` |
++| 证明复用 | 跨案复用、各类失效、撤销传播、G8 精确复用、request 层不跨案 | `tests/test_layered_attestation.py` |
++| 能力 | 四种状态；`suspended` 拦截；网关纵深校验 | `tests/test_outbound_capability.py` |
++| 回链 | `contrary_omission` 正反例 | `tests/test_output_checks.py`（扩展） |
++| 采纳 | revise / dissent / supersedes / blocked 不可修订 | `tests/test_human_decision.py` |
++| 演示 | 中老场景导入与走通 | `tests/test_adapted_recording.py`、`frontend/e2e/recording-import.spec.ts` |
++| 兼容 | V2 wire 黄金样本、`request_hash` 不变、LA-001 首案流程、现有 656 项 | 现有套件 |
++| 实机 | integration 成功 / 错误 / unknown；production 2 案正向 + 负向 | `docs/VALIDATION.md` 记录 |
++
++---
++
++## 10. 法学交付
++
++| 交付 | 用途 | 层级 |
++| --- | --- | --- |
++| 法 11：L0–L4 定义与路由、审批要求签署 | W1、W2 | `gate_profile` 发布 |
++| 法 01：法源人审 | W6 policy 层 G1（若可拆分） | policy |
++| 法 05：劳动规则包发布 | W6 policy 层 G5 | policy |
++| 法 03、法 04：服务商证据包与 PIPIA | W6 recipient 层 G3 | recipient |
++| 法 10 / 技 06：部署隔离确认 | W6 deployment 层 G9 | deployment |
++| 法 02、法 07–法 09：本次授权、冻结范围、组合判断、攻击认可 | 每个请求 | request |
++| 中老案例材料正文与说明文字 | W10 | — |
++
++三层证明各签一次、带有效期；此后每个请求只需 request 层确认与按 L 级审批。
++
++---
++
++## 11. 风险
++
++| 风险 | 应对 |
++| --- | --- |
++| 证明复用范围过宽导致误放 | 三层按版本哈希精确匹配；G8 只精确复用；每种失效各有负向测试；开关可一键回退 |
++| 一次性法学签署延迟 | W3 在 integration 用合成材料先跑通全闭环；签署到位即切 production |
++| L0–L4 语义与法学理解不一致 | 路由与审批要求放在 `gate_profile` 包，改表不改代码；默认只更严 |
++| `_g1_adoption_valid` 无法拆到 policy 层 | G1 留在 request 层，不影响其他三层复用 |
++| 演示材料哈希与登记不一致 | 每次改 Word 或 `scenarios.json` 后重算 SHA-256，同步 `manifest.json` 与 `demo.py` 常量，并跑 `test_adapted_recording` |
++| 老挝文材料解析 | 演示材料以中文为主，老挝文支持放到 MVP 之后 |
++
++---
++
++## 12. v1.0 发布清单
++
++- [ ] §1.1 四项验收全部有记录（自动化 + 实机）
++- [ ] `docs/VALIDATION.md` 更新：integration 三类回执、production 正负向、开关状态
++- [ ] README / PROJECT_MAP 中“0 案真实发送”“formal_dispatch=blocked”等状态句按实测结果更新
++- [ ] 包版本 `1.0.0`（`pyproject.toml`、`lexaegis/__init__.py`、`frontend/package.json`）一致
++- [ ] 预览基线补 `v1.0-preview` 标签；发布提交打 `v1.0` 标签
++- [ ] PRD §七.2 “中越”更正为“中老”
+-- 
+2.43.0
+
