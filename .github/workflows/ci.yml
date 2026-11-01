@@ -61,6 +61,8 @@ jobs:
         working-directory: frontend
       - run: pnpm exec playwright test --config=playwright.v3-reapproval.config.ts
         working-directory: frontend
+      - run: pnpm exec playwright test --config=playwright.v3-grade.config.ts
+        working-directory: frontend
       - name: Prepare data directory for doctor
         run: python -c "from pathlib import Path; Path('.data/app').mkdir(parents=True, exist_ok=True)"
       - run: lexaegis doctor

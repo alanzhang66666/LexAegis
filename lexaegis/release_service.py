@@ -101,6 +101,22 @@ def evaluate(repo, task, case, context):
     return frozen, decision
 
 
+def _with_v3_grade_status(repo, task, case, result):
+    from . import v3_grade_guard
+    try:
+        if not v3_grade_guard.required(task):
+            return result
+        assessment = v3_grade_guard.require_current(repo, task, case)
+        result["v3_grade_guard"] = {"state": "satisfied", "grade": assessment["grade"],
+                                    "notice": "附加等级检查已满足，仍须通过原有正式门禁和一次性许可。"}
+    except (ValueError, TypeError, KeyError) as exc:
+        result["v3_grade_guard"] = {"state": "blocked", "reason": str(exc)}
+        result["state"] = "blocked"
+        result["reason"] = str(exc)
+        result["auto_policy_candidate"] = False
+    return result
+
+
 def status(repo, task, case, context):
     if not required(task):
         return {"state": "not_applicable", "reason": "非生产云端请求"}
@@ -123,7 +139,7 @@ def status(repo, task, case, context):
                 result["auto_policy_candidate"] = auto_request_policy_candidate(repo, task, case, context) is not None
             except (ValueError, TypeError, KeyError):
                 result["auto_policy_candidate"] = False
-        return result
+        return _with_v3_grade_status(repo, task, case, result)
     except (ValueError, TypeError, KeyError) as exc:
         result = {"state": "blocked", "reason": str(exc)}
         if os.getenv("LEX_AUTO_REQUEST_POLICY", "").strip() == "1":
@@ -131,7 +147,7 @@ def status(repo, task, case, context):
                 result["auto_policy_candidate"] = auto_request_policy_candidate(repo, task, case, context) is not None
             except (ValueError, TypeError, KeyError):
                 result["auto_policy_candidate"] = False
-        return result
+        return _with_v3_grade_status(repo, task, case, result)
 
 
 def assert_allowed(repo, task, case, context, phase):

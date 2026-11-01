@@ -140,6 +140,13 @@ class ApprovalInput(Input):
     actor_role: Literal["approver"] = "approver"
 
 
+class V3GradeAssessmentInput(Input):
+    request_hash: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
+    grade: Literal["L0", "L1", "L2", "L3", "L4", "UNKNOWN"]
+    profile_id: str | None = Field(default=None, min_length=1, max_length=200)
+    legal_review_id: str | None = Field(default=None, min_length=1, max_length=200)
+
+
 class ReviewIssueInput(Input):
     request_hash: str
     idempotency_key: str = Field(min_length=8, max_length=200)
@@ -1356,6 +1363,21 @@ def create_app(data_dir=None, password=None, build_manifest=None):
         context = release_service.collect_context(store, root, build_manifest=build_manifest)
         with store.transaction() as repo:
             return service.approve_task(repo, task_id, body.request_hash, identity["actor"], "approver", identity["user_id"], release_context=context)
+
+    @app.post("/api/v1/tasks/{task_id}/v3-grade-assessment")
+    def v3_grade_assessment(task_id: str, body: V3GradeAssessmentInput, request: Request):
+        identity = require_exact_role(request, "legal_reviewer")
+        from . import v3_grade_guard
+        with store.transaction() as repo:
+            task = repo.get(task_id, "task")
+            case = service.assert_current(repo, task)
+            if not release_service.required(task) or task.get("request_hash") != body.request_hash:
+                raise service.DomainError("V3 等级只适用于当前生产正式云端请求")
+            profile_id, review_id = v3_grade_guard.resolve_references(repo, task,
+                profile_id=body.profile_id, legal_review_id=body.legal_review_id)
+            assessment = v3_grade_guard.record(repo, task, case, grade=body.grade,
+                profile_id=profile_id, legal_review_id=review_id, actor=identity)
+            return {key: value for key, value in assessment.items() if key != "signature"}
 
     @app.post("/api/v1/tasks/{task_id}/review-draft")
     def review_draft(task_id: str, request: Request):
