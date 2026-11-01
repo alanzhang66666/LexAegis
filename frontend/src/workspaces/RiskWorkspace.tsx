@@ -6,6 +6,7 @@ import { FormalReleaseIntake } from "./FormalReleaseIntake";
 import { GateBundleView } from "./GateBundleView";
 import { ReapprovalControl } from "./ReapprovalControl";
 import { V3GradeControl } from "./V3GradeControl";
+import { V3L3RoleControl } from "./V3L3RoleControl";
 
 type Obj = Record<string, any>;
 
@@ -160,6 +161,7 @@ export function RiskWorkspace({ task, pack, busy, role, localReview = false, run
         <button className="secondary" disabled={busy} onClick={onSuccessor}>调整后创建关联后继任务</button>}
     </div>
     <V3GradeControl task={task} role={role} runtimeProfile={runtimeProfile} busy={busy} request={request} onRefreshCase={onRefreshCase}/>
+    <V3L3RoleControl task={task} role={role} runtimeProfile={runtimeProfile} busy={busy} request={request} onRefreshCase={onRefreshCase}/>
     <ReapprovalControl task={task} role={role} runtimeProfile={runtimeProfile} busy={busy} request={request} onRefreshCase={onRefreshCase}/>
     {runtimeProfile==="production"&&formal&&task.transport==="cloud"&&task.request_hash&&["technical_reviewer","legal_reviewer","approver","admin"].includes(role||"")&&
       <FormalReleaseIntake task={task} role={role} request={request} busy={busy} onRefreshCase={onRefreshCase}/>}
