@@ -1433,10 +1433,7 @@ def create_app(data_dir=None, password=None, build_manifest=None):
     def reconcile(task_id: str, request: Request):
         require_role(request, "case_operator")
         with store.transaction() as repo:
-            task = repo.get(task_id, "task")
-            if task["status"] != "unknown":
-                raise service.DomainError("仅对结果不明的请求查询网关记录")
-            return service.queue_job(repo, task["case_id"], "reconcile", {"task_id": task_id})
+            return service.queue_reconciliation(repo, task_id)
 
     @app.post("/api/v1/tasks/{task_id}/claims/{claim_id}/review")
     def review_claim(task_id: str, claim_id: str, request: Request, body: NamedConfirmation | None = None):

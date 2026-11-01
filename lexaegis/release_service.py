@@ -9,6 +9,8 @@ from pathlib import Path
 from datetime import datetime, timezone
 import httpx
 from . import formal_release as release
+from .gate_orchestrator import build_gate_bundle
+from .gate_evidence_scope import build_scope_diagnostics
 from .contracts import FormalReleasePolicy, OneTimeDispatchGrant
 from .evidence import EvidenceStore, EvidenceIntakeService
 from .runtime_identity import _load_manifest, runtime_identity
@@ -48,6 +50,43 @@ def required(task):
     return current_profile() == "production" and task.get("transport") == "cloud"
 
 
+def auto_request_policy_candidate(repo, task, case, context):
+    """Derive an exact, blocked candidate; never persist or grant permission."""
+    if os.getenv("LEX_AUTO_REQUEST_POLICY", "").strip() != "1" or not required(task):
+        return None
+    context = context or {}
+    manifest = release._manifest(context.get("build_manifest"))
+    frozen = release.freeze_request(repo, task=task, case=case, build_manifest=manifest,
+                                    runtime_identities=context.get("runtime_identities", []))
+    existing = repo.list("formal_release_policy")
+    if any(item.get("scope_kind") == "request" and item.get("bound_request_hash") == frozen.request_hash
+           for item in existing):
+        return None
+    # Preserve the original pilot path when its policy is already installed.
+    if any(item.get("scope_kind", "first_acceptance") == "first_acceptance"
+           and item.get("tuple") == frozen.tuple for item in existing):
+        return None
+    activations = [item for item in repo.list("runtime_pack_activation") if item.get("pack_id") == task.get("pack_id")]
+    if len(activations) != 1 or activations[0].get("artifact_sha256") != manifest.runtime_pack_hash:
+        return None
+    runtime_pack = repo.get(activations[0].get("runtime_pack_id", ""), "runtime_pack")
+    if runtime_pack.get("status") != "published" or runtime_pack.get("scope_kind") != "request":
+        return None
+    scope = release._tuple_for_request(case, task, task["request"], include_pilot=False)
+    if not release._published_scope_matches(runtime_pack.get("published_scope") or {}, case, scope):
+        return None
+    from .util import uid
+    return FormalReleasePolicy(
+        id=uid("release_policy"), scope_kind="request", bound_request_hash=frozen.request_hash,
+        tuple=scope, build_manifest_hash=frozen.build_manifest_hash,
+        allowed_target=frozen.target, allowed_model=frozen.model,
+        allowed_provider_profile_hash=frozen.provider_profile_hash,
+        allowed_standby_target=frozen.standby_target or "", allowed_standby_model=frozen.standby_model or "",
+        allowed_standby_provider_profile_hash=frozen.standby_provider_profile_hash or "",
+        maximum_dispatches=1, consumed_dispatches=0, status="blocked",
+    )
+
+
 def evaluate(repo, task, case, context):
     if not required(task):
         return None, None
@@ -67,10 +106,32 @@ def status(repo, task, case, context):
         return {"state": "not_applicable", "reason": "非生产云端请求"}
     try:
         frozen, decision = evaluate(repo, task, case, context)
-        return {"state": "eligible" if decision.approval_eligible else "blocked",
-                "frozen_request": frozen.model_dump(mode="json"), "decision": decision.model_dump(mode="json")}
+        original_decision = decision.model_dump(mode="json")
+        # Shadow diagnostics are informational and cannot change eligibility.
+        # If diagnostics fail, retain the original decision and mark unavailable.
+        try:
+            scope_diagnostics = build_scope_diagnostics(frozen, repo.list("gate_evidence_receipt"))
+        except Exception:
+            scope_diagnostics = {"schema_version": 1, "state": "unavailable",
+                                 "authoritative": False, "validated": False}
+        result = {"state": "eligible" if decision.approval_eligible else "blocked",
+                  "frozen_request": frozen.model_dump(mode="json"), "decision": original_decision,
+                  "gate_bundle": build_gate_bundle(original_decision),
+                  "scope_diagnostics": scope_diagnostics}
+        if not decision.approval_eligible and os.getenv("LEX_AUTO_REQUEST_POLICY", "").strip() == "1":
+            try:
+                result["auto_policy_candidate"] = auto_request_policy_candidate(repo, task, case, context) is not None
+            except (ValueError, TypeError, KeyError):
+                result["auto_policy_candidate"] = False
+        return result
     except (ValueError, TypeError, KeyError) as exc:
-        return {"state": "blocked", "reason": str(exc)}
+        result = {"state": "blocked", "reason": str(exc)}
+        if os.getenv("LEX_AUTO_REQUEST_POLICY", "").strip() == "1":
+            try:
+                result["auto_policy_candidate"] = auto_request_policy_candidate(repo, task, case, context) is not None
+            except (ValueError, TypeError, KeyError):
+                result["auto_policy_candidate"] = False
+        return result
 
 
 def assert_allowed(repo, task, case, context, phase):
@@ -90,6 +151,8 @@ def assert_allowed(repo, task, case, context, phase):
             expired = True
         if grant.request_hash != task["request_hash"] or expired:
             raise ValueError("一次性许可不匹配或已过期")
+        if grant.gate_snapshot_hash != decision.snapshot_hash:
+            raise ValueError("正式放行证据快照已变化，请重新评估并批准")
         if (bundle.get("frozen_request") or {}).get("request_hash") != frozen.request_hash:
             raise ValueError("正式冻结请求不匹配")
 

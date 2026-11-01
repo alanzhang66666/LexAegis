@@ -85,6 +85,27 @@ def finish_response(repo, task, record):
           edge_node_id=edge_node_id())
 
 
+def _safe_to_requeue_interrupted_send(repo, task):
+    """Only a provably unclaimed queued send can resume after worker restart."""
+    if not release_service.required(task):
+        return not task.get("formal_release")
+    from sqlalchemy import text
+    try:
+        grant_id = task["formal_release"]["grant"]["id"]
+        grant = repo.get(grant_id, "one_time_dispatch_grant")
+        policy = repo.get(grant["release_policy_id"], "formal_release_policy")
+        if (grant.get("state") != "reserved" or grant.get("request_hash") != task.get("request_hash")
+                or policy.get("status") != "armed_once" or policy.get("consumed_dispatches") != 0):
+            return False
+        claimed = repo.conn.execute(
+            text("SELECT 1 FROM formal_release_claims WHERE request_hash=:h OR policy_id=:p LIMIT 1"),
+            {"h": grant["request_hash"], "p": grant["release_policy_id"]},
+        ).first()
+        return not claimed
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
 def recover(store):
     with store.transaction() as repo:
         for job in repo.list("job"):
@@ -92,9 +113,12 @@ def recover(store):
                 continue
             if job["kind"] in ("send", "reconcile"):
                 task = repo.get(job["payload"]["task_id"], "task")
-                if task.get("status") in {"rejected", "review_blocked", "stopped"}:
+                if job["kind"] == "reconcile" and task.get("status") != "unknown":
+                    job.update(status="cancelled", error="任务状态已变化，取消过期查询")
+                elif task.get("status") in {"rejected", "review_blocked", "stopped"}:
                     job.update(status="cancelled", error="人工决定已阻止尚未发送的请求")
-                elif task.get("status") == "queued" and job["kind"] == "send":
+                elif (task.get("status") == "queued" and job["kind"] == "send"
+                      and _safe_to_requeue_interrupted_send(repo, task)):
                     # The durable sending boundary was never crossed.
                     job.update(status="pending", error=None)
                 else:
@@ -308,6 +332,11 @@ def process_one(store, root, gateway_client=None, redteam_client=None):
                     release_service.mark_sending(repo, task)
                     orchestrator.transition_task(repo, task, "sending", "STATE_TRANSITION")
                     repo.put("task", task, task["case_id"])
+                elif task.get("status") != "unknown":
+                    job.update(status="cancelled", error="任务状态已变化，取消过期查询", finished_at=now())
+                    repo.put("job", job, job["case_id"])
+                    audit(repo, job["case_id"], "reconcile.stale_cancelled", job_id=job["id"])
+                    return True
             secret = os.getenv("LEX_GATEWAY_SECRET", "")
             base = os.getenv("LEX_GATEWAY_URL", "http://127.0.0.1:8766")
             client = gateway_client or httpx.Client(timeout=100, trust_env=False)
@@ -323,17 +352,28 @@ def process_one(store, root, gateway_client=None, redteam_client=None):
                 else:
                     ident = task["request"]["request_id"]
                     response = client.get(base+"/requests/"+ident, headers={"X-Gateway-Signature": sign({"op": "status", "request_id": ident}, secret)})
-                if response.status_code in (400, 403, 409, 422):
+                if ((job["kind"] == "reconcile" and response.status_code != 200)
+                        or (job["kind"] == "send" and release_service.required(task) and response.status_code >= 400)):
+                    # A failed lookup or a non-success after the formal claim
+                    # does not prove that no disclosure happened.
+                    record = {"status": "unknown"}
+                elif response.status_code in (400, 403, 409, 422):
                     record = {"status": "rejected"}
                 elif response.status_code == 404:
                     record = {"status": "unknown"}
                 else:
                     response.raise_for_status()
                     record = response.json()
+                    if job["kind"] == "reconcile" and (
+                            not isinstance(record, dict) or record.get("id") != task["request"]["request_id"]
+                            or record.get("request_hash") != task.get("request_hash")
+                            or record.get("status") not in {"complete", "unknown", "sending"}):
+                        record = {"status": "unknown"}
             except Exception as error:
-                # Edge autonomy: a connect failure means nothing crossed the
-                # send boundary — suspend waiting-cloud instead of 'unknown'.
-                if job["kind"] == "send" and return_pipeline.is_connect_error(error):
+                # A production formal grant is durably claimed before this
+                # call. Never automatically retry after that boundary.
+                if (job["kind"] == "send" and not release_service.required(task)
+                        and not task.get("formal_release") and return_pipeline.is_connect_error(error)):
                     suspended = True
                 else:
                     record = {"status": "unknown"}
@@ -344,10 +384,30 @@ def process_one(store, root, gateway_client=None, redteam_client=None):
                 with store.transaction() as repo:
                     task = repo.get(job["payload"]["task_id"], "task")
                     job = repo.get(job["id"], "job")
+                    if job.get("status") != "running" or task.get("status") != "sending":
+                        job.update(status="cancelled", error="任务状态已变化，取消过期重试", finished_at=now())
+                        repo.put("job", job, job["case_id"])
+                        audit(repo, job["case_id"], "send.stale_cancelled", job_id=job["id"])
+                        return True
                     return_pipeline.mark_waiting_cloud(repo, task, job)
                 return True
             with store.transaction() as repo:
+                prior_task = task
                 task = repo.get(task["id"], "task")
+                current_job = repo.get(job["id"], "job")
+                if job["kind"] == "send" and (current_job.get("status") != "running" or task.get("status") != "sending"):
+                    current_job.update(status="cancelled", error="任务状态已变化，丢弃过期发送结果", finished_at=now())
+                    repo.put("job", current_job, current_job["case_id"])
+                    audit(repo, current_job["case_id"], "send.stale_cancelled", job_id=job["id"])
+                    return True
+                if job["kind"] == "reconcile" and (
+                        current_job.get("status") != "running" or task.get("status") != "unknown"
+                        or task.get("request_hash") != prior_task.get("request_hash")
+                        or (task.get("request") or {}).get("request_id") != (prior_task.get("request") or {}).get("request_id")):
+                    current_job.update(status="cancelled", error="任务状态已变化，丢弃过期查询结果", finished_at=now())
+                    repo.put("job", current_job, current_job["case_id"])
+                    audit(repo, current_job["case_id"], "reconcile.stale_cancelled", job_id=job["id"])
+                    return True
                 finish_response(repo, task, record)
         with store.transaction() as repo:
             job = repo.get(job["id"], "job")

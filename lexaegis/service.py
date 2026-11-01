@@ -164,6 +164,19 @@ def queue_job(repo, case_id, kind, payload):
     return job
 
 
+def queue_reconciliation(repo, task_id):
+    """Queue at most one read-only gateway status lookup for an unknown task."""
+    task = repo.get(task_id, "task")
+    get_case(repo, task["case_id"])
+    if task.get("status") != "unknown":
+        raise DomainError("仅对结果不明的请求查询网关记录")
+    for job in repo.list("job", task["case_id"]):
+        if (job.get("kind") == "reconcile" and job.get("status") in {"pending", "running"}
+                and (job.get("payload") or {}).get("task_id") == task_id):
+            return job
+    return queue_job(repo, task["case_id"], "reconcile", {"task_id": task_id})
+
+
 def queue_attack_run(repo, task_id, auxiliary_by_protocol=None):
     task = repo.get(task_id, "task")
     case = assert_current(repo, task)
@@ -1122,29 +1135,114 @@ def evaluate_task(repo, task_id, release_context=None, *, edge_review_override=N
     return task
 
 
+def prepare_formal_reapproval(repo, task_id, expected_hash, *, reason, actor, actor_role, actor_user_id):
+    """Retire one unclaimed formal grant and return its task to human review.
+
+    Call only inside Store.transaction. This action does not approve or send.
+    Any durable claim, send job, disclosure, or competing live grant blocks it.
+    """
+    from sqlalchemy import text
+    from .contracts import FormalReleasePolicy, OneTimeDispatchGrant
+
+    if (actor_role != "approver" or not isinstance(actor, str) or not actor.strip()
+            or not isinstance(actor_user_id, str) or not actor_user_id.strip()
+            or not isinstance(reason, str) or not reason.strip() or len(reason) > 1000):
+        raise DomainError("须由具名审批人填写重新审批原因")
+    task = repo.get(task_id, "task")
+    case = assert_current(repo, task)
+    orchestrator.assert_consistent(repo, task)
+    if not release_service.required(task) or case.get("mode") != "formal" or task.get("status") != "approved":
+        raise DomainError("仅已批准且尚未排队的正式云端请求可准备重新审批")
+    assert_editable(repo, case["id"])
+    assert_frozen_dependencies(repo, task)
+    review.assert_review_allows(repo, task)
+    request = task.get("request")
+    if (not isinstance(request, dict) or not expected_hash or task.get("request_hash") != expected_hash
+            or digest(request) != expected_hash or (task.get("approval") or {}).get("request_hash") != expected_hash):
+        raise DomainError("请求或审批哈希不一致，请重新检验")
+    if (task.get("risk") or {}).get("ledger_version") != case.get("ledger_version"):
+        raise DomainError("累计披露已变化，请重新检验")
+    bundle = task.get("formal_release") or {}
+    grant_id = (bundle.get("grant") or {}).get("id")
+    if not grant_id:
+        raise DomainError("当前请求没有可核对的正式许可")
+    raw = repo.get(grant_id, "one_time_dispatch_grant")
+    # Receipt revocation retains these two audit fields on the stored grant.
+    grant = OneTimeDispatchGrant.model_validate({k: v for k, v in raw.items()
+                                                  if k not in {"revoked_at", "revocation_reason"}})
+    if grant.request_hash != expected_hash or grant.state not in {"issued", "revoked", "expired"}:
+        raise DomainError("许可已预留、已使用或与当前请求不匹配")
+    policy = FormalReleasePolicy.model_validate(repo.get(grant.release_policy_id, "formal_release_policy"))
+    if (policy.tuple != grant.tuple or policy.consumed_dispatches != 0
+            or policy.status not in {"armed_once", "blocked"}
+            or (policy.scope_kind == "request" and policy.bound_request_hash != expected_hash)):
+        raise DomainError("一次性策略已消费、不可用或与请求不匹配")
+    if repo.conn.execute(text("SELECT 1 FROM formal_release_claims WHERE request_hash=:h OR policy_id=:p LIMIT 1"),
+                         {"h": expected_hash, "p": policy.id}).first():
+        raise DomainError("已存在网关领取记录，不能重新打开许可")
+    for other in repo.list("one_time_dispatch_grant"):
+        if (other.get("id") != grant.id
+                and (other.get("request_hash") == expected_hash or other.get("release_policy_id") == policy.id)
+                and other.get("state") not in {"revoked", "expired"}):
+            raise DomainError("存在其他未结束的许可，不能重新审批")
+    request_id = request.get("request_id")
+    if any(row.get("kind") == "send" and (row.get("payload") or {}).get("task_id") == task_id
+           for row in repo.list("job", case["id"])):
+        raise DomainError("已有发送作业记录，请另行核对")
+    if any(row.get("id") == request_id or (row.get("request") or {}).get("request_id") == request_id
+           for row in repo.list("disclosure", case["id"])):
+        raise DomainError("已有披露记录，请另行核对")
+    release_service.revoke(repo, task, "准备重新审批：" + reason.strip(), actor=actor.strip())
+    current_policy = FormalReleasePolicy.model_validate(repo.get(policy.id, "formal_release_policy"))
+    if current_policy.status == "armed_once":
+        # Already-revoked/expired grants do not cause revoke() to disarm it.
+        repo.put("formal_release_policy", current_policy.model_copy(update={
+            "status": "blocked", "valid_from": None, "valid_until": None,
+        }).model_dump(mode="json"))
+    orchestrator.transition_task(repo, task, "review", "HUMAN", actor=actor.strip(),
+                                 approval=None, formal_release=None,
+                                 product_release={"state": "needs_approval", "reason": "须重新评估并由审批人批准"})
+    repo.put("task", task, case["id"])
+    audit(repo, case["id"], "formal_release.reapproval_prepared", actor=actor.strip(),
+          actor_user_id=actor_user_id.strip(), actor_role=actor_role, task_id=task_id,
+          request_hash=expected_hash, old_grant_id=grant.id, reason=reason.strip())
+    return task
+
+
 def approve_task(repo, task_id, expected_hash, actor="local-lawyer", actor_role="approver", actor_user_id=None, release_context=None):
     from datetime import datetime, timezone, timedelta
     task = repo.get(task_id, "task")
-    case = authorize_dispatch(repo, task, phase="approve", release_context=release_context)
-    if expected_hash != task["request_hash"] or digest(task["request"]) != expected_hash:
+    orchestrator.assert_consistent(repo, task)
+    if expected_hash != task.get("request_hash") or digest(task.get("request")) != expected_hash:
         raise DomainError("请求版本不一致")
     if actor_role != "approver" or not actor.strip():
         raise DomainError("只有具名 approver 可以批准外发")
-    task["approval"] = {"id": uid("approval"), "actor": actor.strip(), "actor_role": "approver", "actor_user_id": actor_user_id, "request_hash": expected_hash,
-                        "dependencies": task["request"]["dependencies"], "at": now(),
-                        "expires_at": (datetime.now(timezone.utc)+timedelta(minutes=30)).isoformat()}
-    task["status"] = "approved"
-    repo.put("task", task, case["id"])
-    release_service.approve(repo, task, case, release_context)
-    repo.put("task", task, case["id"])
-    orchestrator.transition_task(repo, task, step_type="HUMAN",
-                                 from_status="review", actor=actor)
-    audit(repo, case["id"], "request.approved", task_id=task_id,
-          request_hash=expected_hash, cause_id=case.get("domain"),
-          domain_runtime_snapshot_id=task.get("domain_runtime_snapshot_id"),
-          capability_id=task.get("capability_id"),
-          approval_id=task["approval"]["id"], actor=actor,
-          edge_node_id=edge_node_id())
+    # Even a caller catching an error inside its transaction cannot commit a
+    # provisional policy or approval when any subsequent gate fails.
+    with repo.conn.begin_nested():
+        if task.get("status") == "review" and release_service.required(task):
+            case = assert_current(repo, task)
+            candidate = release_service.auto_request_policy_candidate(repo, task, case, release_context)
+            if candidate is not None:
+                if not isinstance(actor_user_id, str) or not actor_user_id.strip():
+                    raise DomainError("自动策略需要具名审批人账户")
+                from . import formal_release
+                formal_release.install_policy(repo, candidate, actor=actor, actor_role=actor_role,
+                                              actor_user_id=actor_user_id)
+        case = authorize_dispatch(repo, task, phase="approve", release_context=release_context)
+        task["approval"] = {"id": uid("approval"), "actor": actor.strip(), "actor_role": "approver", "actor_user_id": actor_user_id, "request_hash": expected_hash,
+                            "dependencies": task["request"]["dependencies"], "at": now(),
+                            "expires_at": (datetime.now(timezone.utc)+timedelta(minutes=30)).isoformat()}
+        task["status"] = "approved"
+        repo.put("task", task, case["id"])
+        release_service.approve(repo, task, case, release_context)
+        repo.put("task", task, case["id"])
+        orchestrator.transition_task(repo, task, step_type="HUMAN", from_status="review", actor=actor)
+        audit(repo, case["id"], "request.approved", task_id=task_id,
+              request_hash=expected_hash, cause_id=case.get("domain"),
+              domain_runtime_snapshot_id=task.get("domain_runtime_snapshot_id"),
+              capability_id=task.get("capability_id"), approval_id=task["approval"]["id"], actor=actor,
+              edge_node_id=edge_node_id())
     return task
 
 

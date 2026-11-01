@@ -5,14 +5,14 @@ recorded as a VALIDATION task_step; a stage failure raises ValueError which
 the caller maps to ``invalid_cloud_result`` — candidate outputs are never
 adopted until all stages pass.
 
-Edge autonomy: when the gateway is provably unreachable (TCP connect failed,
-so nothing could have crossed the send boundary), cloud-required work is
-suspended as ``waiting-cloud`` instead of failing or faking a result. Local
-steps keep running. Mock transports can never claim cloud provenance.
+Edge autonomy: only an unclaimed non-formal send with an explicit HTTP client
+connect failure may return to queued as ``waiting-cloud``. A production
+formal claim is never automatically retried. Mock transports cannot claim
+cloud provenance.
 """
 import httpx
 
-from . import domain_runtime
+from . import domain_runtime, orchestrator
 from .task_engine import validate_cloud_result
 
 STAGES = (
@@ -231,16 +231,26 @@ def execute(repo, task, record):
 
 
 def is_connect_error(error):
-    """True only when the TCP connect provably failed — nothing could have
-    crossed the send boundary, so retrying is safe."""
-    return isinstance(error, (httpx.ConnectError, ConnectionError, OSError))
+    """Recognize only httpx's explicit connection-establishment failure.
+
+    Generic OS/connection exceptions can occur after transmission; their
+    phase is unknown and they must not be interpreted as proof of no send.
+    """
+    return isinstance(error, httpx.ConnectError)
 
 
 def mark_waiting_cloud(repo, task, job):
     """Suspend a cloud-required job while the edge is disconnected.
 
-    Task stays queued; the job goes back to pending with a not-before delay.
-    No status is advanced and no provenance is fabricated."""
+    The unclaimed task returns from sending to queued; the job goes back to
+    pending with a not-before delay. No provenance is fabricated."""
+    from . import release_service
+    if (release_service.required(task) or task.get("formal_release") or task.get("status") != "sending"
+            or job.get("kind") != "send" or job.get("status") != "running"):
+        raise ValueError("已领取或状态不一致的发送任务不能自动重试")
+    orchestrator.assert_consistent(repo, task)
+    orchestrator.transition_task(repo, task, "queued", "STATE_TRANSITION")
+    repo.put("task", task, task["case_id"])
     domain_runtime.record_task_step(
         repo, task, "CLOUD", WAITING_CLOUD, from_status=task.get("status"))
     job.update(status="pending", error="云端不可达，挂起等待重连",

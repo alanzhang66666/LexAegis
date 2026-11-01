@@ -3,6 +3,8 @@ import { AlertTriangle, ArrowRight, Check, Play, ShieldCheck } from "lucide-reac
 import { Empty, IssueList, Tag } from "../components/ui";
 import { ApprovalWorkspace, dispositionCopy } from "./ApprovalWorkspace";
 import { FormalReleaseIntake } from "./FormalReleaseIntake";
+import { GateBundleView } from "./GateBundleView";
+import { ReapprovalControl } from "./ReapprovalControl";
 
 type Obj = Record<string, any>;
 
@@ -84,9 +86,11 @@ export function RiskWorkspace({ task, pack, busy, role, localReview = false, run
       <span>{task.status === "stopped" ? "当前任务已终止，原请求及初检记录保留；如需继续处理，请新建任务。" : task.review_status === "rejected" || task.status === "rejected" ? "否决仅针对当前请求；请调整后创建关联后继任务。" : task.review_status === "blocked" || task.status === "review_blocked" ? "原初检结果保留供追溯，当前请求已停止。" : reviewBlocked ? "完成具名人工复核后才能继续。" : "人工复核状态已解除；仍需通过其余风险门禁和审批。"}</span>
     </div>
     {runtimeProfile!=="demo"&&<div className={"product-release-state " + (releaseAllowed ? "ready" : "blocked")}>
-      <b>正式放行门：{releaseState === "eligible" ? "符合当前放行范围" : releaseState === "armed_once" ? "一次性许可已就绪" : releaseState === "not_applicable" ? "本任务不适用正式外发" : "未满足，禁止审批或发送"}</b>
+      <b>正式放行门：{releaseState === "eligible" ? "符合当前放行范围" : releaseState === "armed_once" ? "一次性许可已就绪" : releaseState === "not_applicable" ? "本任务不适用正式外发" : release.auto_policy_candidate === true ? "待完整核验，不代表可发送" : "未满足，禁止审批或发送"}</b>
       {releaseReasons.length > 0 && <ul>{[...new Set(releaseReasons)].map((message:string)=><li key={message}>{message}</li>)}</ul>}
     </div>}
+    {runtimeProfile === "production" && formal && task.transport === "cloud" &&
+      <GateBundleView bundle={release.gate_bundle} scopeDiagnostics={release.scope_diagnostics} requestHash={task.request_hash} stale={Boolean(task.stale)}/>}
     <IssueList issues={task.risk.blockers}/>
     {localReview && <ApprovalWorkspace task={task} pack={pack} busy={busy} role="legal_reviewer" onSubmit={onLegalReview} onTechnicalIssue={onTechnicalIssue} onDraft={onDraft}/>}
     <h4 className="subheading">四类攻击运行</h4>
@@ -142,7 +146,7 @@ export function RiskWorkspace({ task, pack, busy, role, localReview = false, run
     <div className="approval-actions">
       {runtimeProfile==="production"&&task.request?.mode==="formal"&&task.transport==="cloud"&&task.request_hash&&role==="admin"&&onInstallPolicy&&
         <button className="secondary" disabled={busy||Boolean(release.policy_id||release.policy?.id||task.formal_release_policy_id)} onClick={onInstallPolicy}>为当前完整请求创建阻断策略</button>}
-      {task.status === "review" && (role === "approver" || localReview) && !reviewBlocked && releaseAllowed && <button className="primary" disabled={busy} onClick={onApprove}><Check size={16}/>审批当前完整请求</button>}
+      {task.status === "review" && (role === "approver" || localReview) && !reviewBlocked && (releaseAllowed || (role === "approver" && release.auto_policy_candidate === true)) && <button className="primary" disabled={busy} onClick={onApprove}><Check size={16}/>{releaseAllowed ? "审批当前完整请求" : "核验并审批当前完整请求"}</button>}
       {task.status === "approved" && ["case_operator","admin"].includes(role||"") && <button className="primary" disabled={busy || reviewBlocked || !releaseAllowed} onClick={()=>onAction("send")}><Play size={15}/>
         {task.transport === "mock" ? "执行任务" : task.transport === "local" ? "生成本地摘要草稿" : "发送至已批准云端"}</button>}
       {task.status === "approved" && !["case_operator","admin"].includes(role||"") && <p className="small-note">当前具名角色不能执行发送；请交由案件操作人员完成发送。</p>}
@@ -154,6 +158,7 @@ export function RiskWorkspace({ task, pack, busy, role, localReview = false, run
       {(task.status === "rejected" || task.status === "review_blocked" || task.review_status === "rejected") &&
         <button className="secondary" disabled={busy} onClick={onSuccessor}>调整后创建关联后继任务</button>}
     </div>
+    <ReapprovalControl task={task} role={role} runtimeProfile={runtimeProfile} busy={busy} request={request} onRefreshCase={onRefreshCase}/>
     {runtimeProfile==="production"&&formal&&task.transport==="cloud"&&task.request_hash&&["technical_reviewer","legal_reviewer","approver","admin"].includes(role||"")&&
       <FormalReleaseIntake task={task} role={role} request={request} busy={busy} onRefreshCase={onRefreshCase}/>}
     {task.status === "complete" && <button className="primary" onClick={onResult}>查看摘要与回链 <ArrowRight size={16}/></button>}

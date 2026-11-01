@@ -2,3 +2,6 @@ hypothesis==6.168.0
 sortedcontainers==2.4.0
 setuptools==84.0.0
 wheel==0.48.0
+cryptography==50.0.2
+cffi==2.1.1
+pycparser==3.12
