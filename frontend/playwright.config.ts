@@ -33,6 +33,8 @@ export default defineConfig({
     gracefulShutdown: { signal: "SIGTERM", timeout: 15000 },
     timeout: 120000,
     env: {
+      // The launcher writes Chinese to a pipe; Windows runners may default to cp1252.
+      PYTHONIOENCODING: "utf-8",
       LEX_API_PORT: apiPort,
       LEX_GATEWAY_PORT: gatewayPort,
       LEX_GATEWAY_URL: `http://127.0.0.1:${gatewayPort}`,
