@@ -1,0 +1,56 @@
+{
+  "request": {
+    "request_id": "request-001",
+    "case_id": "LA-001",
+    "task_id": "task-001",
+    "mode": "formal",
+    "transport": "cloud",
+    "target": "https://api.deepseek.com/v1/chat/completions",
+    "wire_payload": {
+      "facts": [
+        {
+          "id": "fact-1",
+          "text": "合成事实"
+        }
+      ]
+    },
+    "body": {
+      "model": "deepseek-chat",
+      "messages": [
+        {
+          "role": "system",
+          "content": "只摘要给定事实"
+        }
+      ]
+    },
+    "dependencies": {
+      "primary_provider_id": "deepseek-profile",
+      "primary_provider_hash": "5a8cd774ae35e3addfe99369d2d2fc98dccc06c330a5db4bb6bd4b78e897d84a",
+      "provider_id": "deepseek-profile",
+      "provider_hash": "5a8cd774ae35e3addfe99369d2d2fc98dccc06c330a5db4bb6bd4b78e897d84a",
+      "material_versions": {},
+      "pack_hash": "84b7519cd21fff23d80e35247c80815909a872308a1ef4260253561e87adb0f2",
+      "mapping_version": 1,
+      "ledger_version": 0,
+      "combination_input_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "risk_protocol_hashes": {
+        "identity": "1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      "dual_slot": {
+        "primary": {
+          "target": "https://api.deepseek.com/v1/chat/completions",
+          "model": "deepseek-chat"
+        }
+      },
+      "runtime_profile": "production",
+      "data_origin": "customer_material"
+    },
+    "policy": {
+      "approved_for_dispatch": true,
+      "demo_exception": false,
+      "risk_completion": "complete"
+    }
+  },
+  "canonical": "{\"body\":{\"messages\":[{\"content\":\"只摘要给定事实\",\"role\":\"system\"}],\"model\":\"deepseek-chat\"},\"case_id\":\"LA-001\",\"dependencies\":{\"combination_input_hash\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"data_origin\":\"customer_material\",\"dual_slot\":{\"primary\":{\"model\":\"deepseek-chat\",\"target\":\"https://api.deepseek.com/v1/chat/completions\"}},\"ledger_version\":0,\"mapping_version\":1,\"material_versions\":{},\"pack_hash\":\"84b7519cd21fff23d80e35247c80815909a872308a1ef4260253561e87adb0f2\",\"primary_provider_hash\":\"5a8cd774ae35e3addfe99369d2d2fc98dccc06c330a5db4bb6bd4b78e897d84a\",\"primary_provider_id\":\"deepseek-profile\",\"provider_hash\":\"5a8cd774ae35e3addfe99369d2d2fc98dccc06c330a5db4bb6bd4b78e897d84a\",\"provider_id\":\"deepseek-profile\",\"risk_protocol_hashes\":{\"identity\":\"1111111111111111111111111111111111111111111111111111111111111111\"},\"runtime_profile\":\"production\"},\"mode\":\"formal\",\"policy\":{\"approved_for_dispatch\":true,\"demo_exception\":false,\"risk_completion\":\"complete\"},\"request_id\":\"request-001\",\"target\":\"https://api.deepseek.com/v1/chat/completions\",\"task_id\":\"task-001\",\"transport\":\"cloud\",\"wire_payload\":{\"facts\":[{\"id\":\"fact-1\",\"text\":\"合成事实\"}]}}",
+  "sha256": "940d1093b9d41dc3b658281ad784fb3afe28777175b82195f6d87ab9a00db7ec"
+}
