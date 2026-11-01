@@ -12,6 +12,8 @@ const python = process.env.PYTHON || (existsSync(venvPython) ? venvPython : "pyt
 export default defineConfig({
   metadata: { runtimeProfile: "demo" },
   testDir: "./e2e",
+  // These component fixtures need their own Vite servers, not the demo API.
+  testIgnore: ["gate-bundle.spec.ts", "reapproval.spec.ts"],
   timeout: liveEdge ? 240000 : 45000,
   expect: { timeout: liveEdge ? 180000 : 5000 },
   workers: 1,

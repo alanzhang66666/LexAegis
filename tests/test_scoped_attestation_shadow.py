@@ -176,7 +176,7 @@ def test_domain_separation_prevents_attestation_signature_as_revocation_signatur
 def test_no_production_gate_imports_experimental_module():
     root=Path(__file__).resolve().parents[1]/"lexaegis"
     for name in ("formal_release.py","release_service.py","outbound_gate.py","gateway.py","evidence.py"):
-        assert "scoped_attestation_shadow" not in (root/name).read_text()
+        assert "scoped_attestation_shadow" not in (root/name).read_text(encoding="utf-8")
 
 
 def test_shadow_ledger_persists_revocation_and_requires_external_anchor(tmp_path):

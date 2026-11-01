@@ -45,6 +45,7 @@ services:
   worker:
     <<: *runtime
     command: [python, -m, lexaegis.worker]
+    healthcheck: {disable: true}
     depends_on:
       api: {condition: service_healthy}
     environment:
@@ -63,6 +64,11 @@ services:
   gateway:
     <<: *runtime
     command: [python, -m, uvicorn, "lexaegis.gateway:create_gateway", --factory, --host, 0.0.0.0, --port, "8766", --no-access-log]
+    healthcheck:
+      test: [CMD, python, -m, lexaegis.gateway_health]
+      interval: 10s
+      timeout: 5s
+      retries: 6
     environment:
       LEX_RUN_PROFILE: demo
       LEX_GATEWAY_DIR: /data
@@ -77,6 +83,11 @@ services:
   redteam:
     <<: *runtime
     command: [python, -m, uvicorn, "lexaegis.redteam:app", --host, 0.0.0.0, --port, "8767", --no-access-log]
+    healthcheck:
+      test: [CMD, python, -c, "import socket; socket.create_connection(('127.0.0.1', 8767), 2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
     environment:
       LEX_REDTEAM_SECRET: ${LEX_REDTEAM_SECRET:?Set a separate demo red-team secret}
       LEX_RUNTIME_ROLE: redteam

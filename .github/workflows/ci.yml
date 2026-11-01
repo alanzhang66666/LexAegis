@@ -54,6 +54,12 @@ jobs:
         working-directory: frontend
       - run: pnpm exec playwright test --config=playwright.runtime-pack.config.ts
         working-directory: frontend
+      - run: pnpm exec playwright test --config=playwright.v3-gate.config.ts
+        working-directory: frontend
+      - run: pnpm exec playwright test --config=playwright.v3-reapproval.config.ts
+        working-directory: frontend
+      - name: Prepare data directory for doctor
+        run: python -c "from pathlib import Path; Path('.data/app').mkdir(parents=True, exist_ok=True)"
       - run: lexaegis doctor
       - uses: actions/upload-artifact@v4
         if: always()
@@ -140,5 +146,10 @@ jobs:
       - run: docker compose --profile redteam build
       - run: docker compose --profile redteam up -d --pull never --wait
       - run: lexaegis check-isolation
+      - name: Collect compose diagnostics on failure
+        if: failure()
+        run: |
+          docker compose --profile redteam ps -a
+          docker compose --profile redteam logs --no-color --tail 100
       - if: always()
         run: docker compose --profile redteam down -v

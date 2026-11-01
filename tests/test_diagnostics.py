@@ -227,7 +227,7 @@ def test_host_publish_available_when_loopback_health_ok(monkeypatch):
     assert "打开登录页" in report["detail"]
 
 
-def test_doctor_host_publish_does_not_fail_close(monkeypatch):
+def test_doctor_host_publish_does_not_fail_close(monkeypatch, doctor_core_ready):
     monkeypatch.setattr(
         "lexaegis.diagnostics.host_publish_capability",
         lambda **kwargs: {
@@ -299,7 +299,7 @@ class _FakeOCR:
         yield "模拟识别文本", 0.92, [10, 5, 90, 25]
 
 
-def test_doctor_ocr_unconfigured_when_disabled(monkeypatch):
+def test_doctor_ocr_unconfigured_when_disabled(monkeypatch, doctor_core_ready):
     monkeypatch.setenv("LEX_OCR_ENABLED", "0")
     monkeypatch.delenv("LEX_OCR_MODELS_READY", raising=False)
     report = doctor_report()
@@ -311,7 +311,7 @@ def test_doctor_ocr_unconfigured_when_disabled(monkeypatch):
     assert report["ok"] is True
 
 
-def test_doctor_ocr_unconfigured_when_models_not_attested(monkeypatch):
+def test_doctor_ocr_unconfigured_when_models_not_attested(monkeypatch, doctor_core_ready):
     monkeypatch.setenv("LEX_OCR_ENABLED", "1")
     monkeypatch.setenv("LEX_OCR_MODELS_READY", "0")
     monkeypatch.setenv("LEX_OCR_PROVIDER", "paddle")
@@ -323,7 +323,7 @@ def test_doctor_ocr_unconfigured_when_models_not_attested(monkeypatch):
     assert report["ok"] is True
 
 
-def test_doctor_ocr_failed_when_ready_but_provider_missing(monkeypatch):
+def test_doctor_ocr_failed_when_ready_but_provider_missing(monkeypatch, doctor_core_ready):
     monkeypatch.setenv("LEX_OCR_ENABLED", "1")
     monkeypatch.setenv("LEX_OCR_MODELS_READY", "1")
     monkeypatch.setenv("LEX_OCR_PROVIDER", "missing")
@@ -334,7 +334,7 @@ def test_doctor_ocr_failed_when_ready_but_provider_missing(monkeypatch):
     assert report["ok"] is True
 
 
-def test_doctor_ocr_available_with_registered_fake(monkeypatch):
+def test_doctor_ocr_available_with_registered_fake(monkeypatch, doctor_core_ready):
     register_ocr_provider(_FakeOCR())
     monkeypatch.setenv("LEX_OCR_PROVIDER", "fake")
     monkeypatch.setenv("LEX_OCR_ENABLED", "1")
@@ -347,7 +347,7 @@ def test_doctor_ocr_available_with_registered_fake(monkeypatch):
     assert report["ok"] is True
 
 
-def test_doctor_whisper_unconfigured_when_disabled(monkeypatch):
+def test_doctor_whisper_unconfigured_when_disabled(monkeypatch, doctor_core_ready):
     monkeypatch.setenv("LEX_WHISPER_ENABLED", "0")
     report = doctor_report()
     check = report["checks"]["whisper"]
@@ -356,7 +356,7 @@ def test_doctor_whisper_unconfigured_when_disabled(monkeypatch):
     assert report["ok"] is True
 
 
-def test_doctor_ocr_failed_when_construct_raises(monkeypatch):
+def test_doctor_ocr_failed_when_construct_raises(monkeypatch, doctor_core_ready):
     monkeypatch.setenv("LEX_OCR_ENABLED", "1")
     monkeypatch.setenv("LEX_OCR_MODELS_READY", "1")
     monkeypatch.setenv("LEX_OCR_PROVIDER", "paddle")
@@ -373,3 +373,17 @@ def test_doctor_ocr_failed_when_construct_raises(monkeypatch):
     assert check["ok"] is False
     assert check["status"] == "failed"
     assert report["ok"] is True
+
+
+def test_doctor_still_fails_when_required_frontend_is_missing(doctor_core_ready, monkeypatch):
+    monkeypatch.setattr("lexaegis.diagnostics.frontend_location", lambda: None)
+    report = doctor_report()
+    assert report["checks"]["frontend"]["ok"] is False
+    assert report["ok"] is False
+
+
+def test_doctor_still_fails_when_required_data_directory_is_missing(doctor_core_ready, tmp_path, monkeypatch):
+    monkeypatch.setenv("LEX_DATA_DIR", str(tmp_path / "missing"))
+    report = doctor_report()
+    assert report["checks"]["data_directory"]["ok"] is False
+    assert report["ok"] is False
