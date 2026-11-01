@@ -6,6 +6,9 @@ on:
 
 jobs:
   cross-platform:
+    # Redirected Python stdout on Windows may otherwise use a legacy code page.
+    env:
+      PYTHONIOENCODING: utf-8
     strategy:
       fail-fast: false
       matrix:
