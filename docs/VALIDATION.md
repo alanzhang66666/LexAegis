@@ -252,3 +252,7 @@ pnpm exec playwright test --config=playwright.runtime-pack.config.ts
 ## V3 HTTP 请求体字节绑定（2026-11-01，开发分支）
 
 生产 cloud 审批、排队、网关与 HTTP transport 共享版本化最终请求体摘要；主备槽分别核验，摘要落盘失败不调用 transport。字节准备回执随 Attempt 回到任务/披露账本，不当作服务商收妥证明。新增场景为合成正式流程及 httpx MockTransport，非真实云验收；迁移限制与范围见 `V3_WIRE_BODY_BINDING.md`。旧 V2 request_hash 不变，缺少新绑定的未发送旧批准需要重新审批。
+
+## V3 回流金额一致性（2026-11-01，开发分支）
+
+返回管道按引用的已披露 fact output 精确比较 Decimal 金额、单位与常见倍率；原数字子串存在不能支持不同金额。逐条复核和最终确认会重验候选，旧的 reviewed 标记不覆盖新增 hard blocker；历史人工决定不被改写。新增 `amount_support` 明示只做数值校核、不证明语义。测试采用合成案件，未覆盖完整原文支持/反证关系，见 `V3_AMOUNT_SUPPORT.md`。
