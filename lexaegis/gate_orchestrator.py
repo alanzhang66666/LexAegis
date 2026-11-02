@@ -77,7 +77,7 @@ def _group_state(states):
     return "pending"
 
 
-def evaluate_gate_bundle(decision, task, case, phase="approve"):
+def evaluate_gate_bundle(decision, task, case, phase="approve", attestation=None):
     """Derive the authoritative four-gate state from a completed evaluation.
 
     Fail closed: an aborted evaluation leaves every receipt gate "unknown",
@@ -85,6 +85,12 @@ def evaluate_gate_bundle(decision, task, case, phase="approve"):
     result allows approval for the expected disclosure ledger. Before enqueue
     that is the assessed ledger; at send it is the ledger recorded at enqueue,
     matching ``service.authorize_dispatch``. The phase is not hashed.
+
+    ``attestation`` is an optional, opt-in extra member supplied by
+    ``attestation_registry``: its legal state is ANDed into G-L and its
+    deployment state into G-S, and its summary hash enters the bundle hash.
+    Passing it can only withhold a group, never satisfy one, and it never sets
+    ``dispatch_allowed``. ``None`` leaves the bundle byte-identical to before.
     """
     if hasattr(decision, "model_dump"):
         decision = decision.model_dump(mode="json")
@@ -121,12 +127,23 @@ def evaluate_gate_bundle(decision, task, case, phase="approve"):
     known = set(RECEIPT_GATES) | {"G-product"}
     global_hits = [deepcopy(hit) for hit in hits if hit["gate_id"] not in known
                    or (hit["gate_id"] == "G-product" and hit.get("reason_code") != _ISOLATION_MISSING)]
+    members_extra = {}
+    if attestation is not None:
+        members_extra = {"G-L": attestation.get("legal_state") or "unknown",
+                         "G-S": attestation.get("deployment_state") or "unknown"}
     groups = []
     for group_id, members in AUTHORITATIVE_GROUPS.items():
         member_hits = [deepcopy(hit) for hit in hits if hit["gate_id"] in members
                        or ("isolation" in members and hit in isolation_hits)]
-        groups.append({"id": group_id, "label": LABELS[group_id], "legacy_gate_ids": list(members),
-                       "state": _group_state([gates[gate] for gate in members]), "hits": member_hits})
+        states = [gates[gate] for gate in members]
+        extra = members_extra.get(group_id)
+        if extra is not None:
+            states.append(extra)
+        group = {"id": group_id, "label": LABELS[group_id], "legacy_gate_ids": list(members),
+                 "state": _group_state(states), "hits": member_hits}
+        if extra is not None:
+            group["attestation_state"] = extra
+        groups.append(group)
     eligible = (decision.get("approval_eligible") is True and not global_hits
                 and all(group["state"] == "pass" for group in groups))
     body = {
@@ -137,6 +154,15 @@ def evaluate_gate_bundle(decision, task, case, phase="approve"):
         "groups": groups, "global_hits": global_hits,
         "approval_eligible": eligible, "dispatch_allowed": False,
     }
+    if attestation is not None:
+        # Bound into the hash: revoking or replacing a proof after approval
+        # changes the recomputed bundle and the send is refused.
+        body["attestation"] = {
+            "state": attestation.get("state"), "legal_state": attestation.get("legal_state"),
+            "deployment_state": attestation.get("deployment_state"),
+            "matched": attestation.get("matched"), "summary_hash": attestation.get("summary_hash"),
+            "grants_reuse": False,
+        }
     return {**body, "bundle_hash": "sha256:" + digest({"domain": "lexaegis.v3.GateEvaluationBundle",
                                                         "value": body})}
 

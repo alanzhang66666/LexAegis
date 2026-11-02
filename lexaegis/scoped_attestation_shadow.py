@@ -1,10 +1,12 @@
-"""Offline V3 Ed25519 scope-attestation and revocation experiment.
+"""V3 Ed25519 scope-attestation and revocation primitives.
 
-No production route imports this module. Signature verification is NOT proof
-of an authenticated human, legal review, evidence verification, isolation, reusable
+These models and verifiers are now reused by ``attestation_registry`` on the
+production path, which supplies the external trust anchor, the persisted
+revocation snapshot and the four-gate binding. This module itself still holds
+no key, no anchor and no authority: signature verification is NOT proof of an
+authenticated human, legal review, evidence verification, isolation, reusable
 authorization, or permission to send. Keys and the monotonic revocation floor
-must come from a trusted external authority. This module is a testable
-compatibility building block, not a production key or revocation service.
+must come from a trusted external authority (``LEX_V3_TRUST_ANCHOR``).
 """
 from __future__ import annotations
 
