@@ -54,6 +54,9 @@ services:
   worker:
     <<: *runtime
     command: [python, -m, lexaegis.worker]
+    # The image's default probe targets the API port, which the worker does not serve.
+    # Compose verifies that this process is running; no worker-readiness claim is made.
+    healthcheck: {disable: true}
     depends_on:
       api: {condition: service_healthy}
     environment:
@@ -77,6 +80,11 @@ services:
   gateway:
     <<: *runtime
     command: [python, -m, uvicorn, "lexaegis.gateway:create_gateway", --factory, --host, 0.0.0.0, --port, "8766", --no-access-log]
+    healthcheck:
+      test: [CMD, python, -m, lexaegis.gateway_health]
+      interval: 10s
+      timeout: 5s
+      retries: 6
     environment:
       LEX_RUN_PROFILE: ${LEX_RUN_PROFILE:-production}
       LEX_RELEASE_BUILD_MANIFEST_PATH: /release/release-build-manifest.json

@@ -25,6 +25,12 @@ class TaskPolicyInput(BaseModel):
     scope_kind: str = Field(default="request", pattern="^(request|first_acceptance)$")
 
 
+class ReapprovalInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    request_hash: str = Field(min_length=64, max_length=71)
+    reason: str = Field(min_length=1, max_length=1000)
+
+
 def _current_request_scope(repo, request_hash, context):
     matches = [item for item in repo.list("task")
                if item.get("request_hash") == request_hash and item.get("request")]
@@ -348,6 +354,14 @@ def register_release_routes(app, store, root, require_role, require_exact_role, 
             audit(repo, case["id"], "isolation.confirmed", receipt_id=receipt_id,
                   actor_user_id=actor["user_id"], actor_role=actor["role"], at=now())
             return value
+
+    @app.post("/api/v1/tasks/{task_id}/formal-release/reapproval")
+    def prepare_reapproval(task_id: str, body: ReapprovalInput, request: Request):
+        identity = require_exact_role(request, "approver")
+        with store.transaction() as repo:
+            return service.prepare_formal_reapproval(
+                repo, task_id, body.request_hash, reason=body.reason, actor=identity["actor"],
+                actor_role=identity["role"], actor_user_id=identity["user_id"])
 
     @app.post("/api/v1/tasks/{task_id}/formal-release/check")
     def check_release(task_id: str, request: Request):

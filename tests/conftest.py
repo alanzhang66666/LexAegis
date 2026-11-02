@@ -13,6 +13,17 @@ EXAMPLE_FILES = (
 )
 
 
+@pytest.fixture
+def doctor_core_ready(tmp_path, monkeypatch):
+    """Supply explicit required inputs to tests focused on optional probes."""
+    data = tmp_path / "doctor-data"
+    data.mkdir()
+    index = tmp_path / "index.html"
+    index.write_text("<!doctype html>", encoding="utf-8")
+    monkeypatch.setenv("LEX_DATA_DIR", str(data))
+    monkeypatch.setattr("lexaegis.diagnostics.frontend_location", lambda: index)
+
+
 @pytest.fixture(scope="session", autouse=True)
 def ensure_examples():
     if all(path.exists() for path in EXAMPLE_FILES):

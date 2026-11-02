@@ -53,7 +53,7 @@ def test_connect_error_suspends_waiting_cloud(demo_env):
     state = task_state(env, case["id"], task["id"])
     # The durable send boundary was provably never crossed: the task is not
     # advanced to unknown/failed and no result is fabricated.
-    assert state["status"] == "sending"
+    assert state["status"] == "queued"
     assert not state.get("artifact")
     with env["app"].state.store.read() as repo:
         job = next(j for j in repo.list("job") if j["kind"] == "send")

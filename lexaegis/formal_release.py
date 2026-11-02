@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import hashlib
+import os
 import secrets
 from typing import Any, Mapping, Sequence
 
@@ -417,7 +418,8 @@ def freeze_request(
     return frozen
 
 
-def install_policy(repo, policy: FormalReleasePolicy | Mapping[str, Any], *, actor: str, actor_role: str, at=None) -> FormalReleasePolicy:
+def install_policy(repo, policy: FormalReleasePolicy | Mapping[str, Any], *, actor: str, actor_role: str, at=None,
+                   actor_user_id: str | None = None) -> FormalReleasePolicy:
     """Install a blocked pilot policy or one exact-request policy."""
     candidate = policy if isinstance(policy, FormalReleasePolicy) else FormalReleasePolicy.model_validate(policy)
     if candidate.maximum_dispatches != 1 or candidate.consumed_dispatches != 0:
@@ -454,7 +456,25 @@ def install_policy(repo, policy: FormalReleasePolicy | Mapping[str, Any], *, act
             raise FormalReleaseError("request has a standby slot but the policy does not authorize it")
     if candidate.status != "blocked":
         raise FormalReleaseError("a new formal release policy must start blocked")
-    if actor_role != "admin" or not actor.strip():
+    if not actor.strip():
+        raise FormalReleaseError("only a named administrator may install formal release policy")
+    if (actor_role == "approver" and candidate.scope_kind == "request"
+            and os.getenv("LEX_AUTO_REQUEST_POLICY", "").strip() == "1"):
+        # A named G10 action is necessary even to create a blocked policy;
+        # full live evidence and approval are still required to arm it.
+        matching_g10 = [item for item in repo.list(_RECEIPT_KIND)
+                        if item.get("gate_id") == "G10"
+                        and item.get("request_hash") == candidate.bound_request_hash
+                        and item.get("confirmed_by") == actor.strip()
+                        and item.get("confirmed_role") == "approver"
+                        and _receipt_live(repo, item, at, candidate.tuple)]
+        action_ids = {item.get("receipt_id") for item in repo.list(_ACTION_KIND)
+                      if item.get("action") == "g10_approval" and item.get("role") == "approver"
+                      and item.get("actor") == actor.strip() and item.get("recorded_by") == actor_user_id}
+        if (not isinstance(actor_user_id, str) or not actor_user_id.strip()
+                or not any(item.get("id") in action_ids for item in matching_g10)):
+            raise FormalReleaseError("request policy requires the named approver's live G10 receipt")
+    elif actor_role != "admin":
         raise FormalReleaseError("only a named administrator may install formal release policy")
     if not _sha256(candidate.build_manifest_hash) or not _sha256(candidate.allowed_provider_profile_hash):
         raise FormalReleaseError("policy requires explicit build and provider profile hashes")
@@ -471,7 +491,10 @@ def install_policy(repo, policy: FormalReleasePolicy | Mapping[str, Any], *, act
     installed = candidate.model_copy(update={"installed_by": actor.strip(), "installed_at": _iso(at)})
     repo.put("formal_release_policy", installed.model_dump(mode="json"))
     audit(repo, installed.tuple["case_id"], "formal_release.policy_installed", policy_id=installed.id,
-          scope_kind=installed.scope_kind, bound_request_hash=installed.bound_request_hash, actor=actor.strip())
+          scope_kind=installed.scope_kind, bound_request_hash=installed.bound_request_hash,
+          actor=actor.strip(), actor_role=actor_role,
+          actor_user_id=actor_user_id if actor_role == "approver" else actor.strip(),
+          authorization_mode="auto_request_g10" if actor_role == "approver" else "admin")
     return installed
 
 
@@ -573,6 +596,9 @@ def evaluate_release(
     """Return a fail-closed receipt-backed eligibility decision."""
     request = frozen if isinstance(frozen, FrozenFormalRequest) else FrozenFormalRequest.model_validate(frozen)
     hits: list[GateHit] = []
+    # Receipt dependencies must include exact-tuple receipts without a request
+    # hash; otherwise their revocation cannot locate a dependent snapshot.
+    matched_receipt_ids: set[str] = set()
     try:
         manifest = _manifest(build_manifest)
         if not _identity_hashes(runtime_identities, manifest):
@@ -650,6 +676,8 @@ def evaluate_release(
                 if (data.get("conclusion") == "pass" and data.get("request_hash") in (None, request.request_hash)
                         and _receipt_manifest_intact(repo, data) and _receipt_role_action(repo, data)):
                     valid.append(data)
+                    if data.get("id"):
+                        matched_receipt_ids.add(data["id"])
             if gate_id == "G3" and not _g3_has_required_legal_reviews(valid):
                 valid = []
             if not valid:
@@ -671,6 +699,8 @@ def evaluate_release(
                         and _receipt_role_action(repo, data)
                         and _receipt_live(repo, data, at, standby_tuple)):
                     standby_reviews.append(data)
+                    if data.get("id"):
+                        matched_receipt_ids.add(data["id"])
             if not _g3_has_required_legal_reviews(standby_reviews):
                 hits.append(GateHit(gate_id="G3", status="pending", kind="verification",
                                     reason_code="standby_legal_reviews_missing",
@@ -694,24 +724,30 @@ def evaluate_release(
                      and item.get("generated_at") and item.get("expires_at")
                      and _time(item["generated_at"]) <= _time(at) < _time(item["expires_at"])
                      and _isolation_legal_confirmation(repo, item, request.request_hash, at, request.tuple)]
+        matched_receipt_ids.update(item["legal_confirmation_receipt_id"] for item in isolation)
         if not isolation:
             hits.append(GateHit(gate_id="G-product", status="pending", kind="engineering",
                                 reason_code="isolation_receipt_missing", message="缺少绑定本次请求的有效隔离收据"))
     except (FormalReleaseError, ValidationError, KeyError, TypeError, ValueError) as exc:
         hits.append(GateHit(gate_id="G-product", status="fail", kind="engineering",
                             reason_code="formal_release_blocked", message=str(exc)))
+    receipt_ids = sorted(matched_receipt_ids | {
+        receipt["id"] for receipt in repo.list(_RECEIPT_KIND)
+        if receipt.get("request_hash") == request.request_hash and receipt.get("id")
+    })
+    # Keep the conservative dependency list, but separately hash the receipts
+    # that passed this evaluation. Expiry of one of several request-bound
+    # receipts must change the grant binding even if the gate still passes.
+    validated_receipt_ids = sorted(matched_receipt_ids)
     snapshot = {"request_hash": request.request_hash, "build_manifest_hash": request.build_manifest_hash,
-                "hits": [hit.model_dump(mode="json") for hit in hits]}
+                "hits": [hit.model_dump(mode="json") for hit in hits], "evidence_receipt_ids": receipt_ids,
+                "validated_receipt_ids": validated_receipt_ids}
     snapshot_hash = "sha256:" + hashlib.sha256(canonical(snapshot).encode()).hexdigest()
     allowed = not hits
     decision = GateDecision(phase="evaluate", request_hash=request.request_hash, hits=hits,
                         snapshot_hash=snapshot_hash, disposition="allowed" if allowed else "needs_verification",
                         system_readiness="ready" if allowed else "blocked", approval_eligible=allowed,
                         dispatch_allowed=False, evaluated_at=_iso(at))
-    receipt_ids = sorted(
-        receipt.get("id", "") for receipt in repo.list(_RECEIPT_KIND)
-        if receipt.get("request_hash") == request.request_hash and receipt.get("id")
-    )
     snapshot_id = "formal-release-snapshot-" + snapshot_hash.removeprefix("sha256:")
     repo.put("gate_snapshot", {
         "id": snapshot_id,
@@ -719,6 +755,7 @@ def evaluate_release(
         "snapshot_hash": snapshot_hash,
         "build_manifest_hash": request.build_manifest_hash,
         "evidence_receipt_ids": receipt_ids,
+        "validated_receipt_ids": validated_receipt_ids,
         "status": "current" if allowed else "blocked",
         "approval_eligible": allowed,
         "dispatch_allowed": False,

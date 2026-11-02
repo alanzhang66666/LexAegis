@@ -634,7 +634,7 @@ def test_doctor_edge_json_failure_is_not_fatal(monkeypatch):
     assert report["ok"] == all(item["ok"] for item in required.values())
 
 
-def test_doctor_edge_json_unconfigured_when_server_down(monkeypatch):
+def test_doctor_edge_json_unconfigured_when_server_down(monkeypatch, doctor_core_ready):
     monkeypatch.setenv("LEX_EDGE_MODEL", "edge-small")
     monkeypatch.setenv("LEX_EDGE_URL", "http://127.0.0.1:11434/v1")
     monkeypatch.setattr(EdgeClient, "health", lambda self: {"status": "failed", "detail": "无法连接边侧模型服务"})
