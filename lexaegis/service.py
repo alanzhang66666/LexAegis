@@ -601,6 +601,12 @@ def authorize_dispatch(repo, task, *, phase, release_context=None):
         raise DomainError("红队检验尚未完成，不允许审批或发送")
     assert_frozen_dependencies(repo, task)
     review.assert_review_allows(repo, task)
+    # A V3 grade is a supplemental, fail-closed prerequisite. It cannot
+    # replace the existing formal gate, approval, one-time grant, or gateway.
+    if release_service.required(task):
+        from . import v3_grade_guard
+        if v3_grade_guard.required(task):
+            v3_grade_guard.require_current(repo, task, case)
     release_service.assert_allowed(repo, task, case, release_context, phase)
     if phase == "approve":
         if task["status"] != "review" or not (task.get("risk") or {}).get("approval_allowed"):
@@ -1275,8 +1281,15 @@ def task_view(repo, task):
     status = task.get("review_status", "pending")
     if opens and task.get("status") not in {"sending", "unknown", "complete", "rejected", "failed", "stopped"}:
         status = "blocked"
-    return {**task, "review_status": status, "review_issues": list(issues.values()),
-            "review_events": state["events"], "open_review_issues": opens}
+    result = {**task, "review_status": status, "review_issues": list(issues.values()),
+              "review_events": state["events"], "open_review_issues": opens}
+    if release_service.required(task) and task.get("status") in {"review", "approved", "queued"}:
+        case = repo.get(task["case_id"], "case")
+        projection = release_service._with_v3_grade_status(
+            repo, task, case, dict(task.get("product_release") or {"state": "blocked"}))
+        if task.get("product_release") is not None or "v3_grade_guard" in projection:
+            result["product_release"] = projection
+    return result
 
 
 def stop_task(repo, task_id):
