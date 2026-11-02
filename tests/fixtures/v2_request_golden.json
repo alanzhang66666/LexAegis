@@ -1,0 +1,23 @@
+{
+  "request": {
+    "request_id": "fixture-v2-001",
+    "mode": "formal",
+    "transport": "cloud",
+    "target": "https://example.invalid/v1",
+    "body": {
+      "model": "fixture-model",
+      "facts": [
+        {
+          "id": "f1",
+          "text": "合成工资事实"
+        }
+      ]
+    },
+    "dependencies": {
+      "mapping_version": 1,
+      "ledger_version": 2
+    }
+  },
+  "canonical": "{\"body\":{\"facts\":[{\"id\":\"f1\",\"text\":\"合成工资事实\"}],\"model\":\"fixture-model\"},\"dependencies\":{\"ledger_version\":2,\"mapping_version\":1},\"mode\":\"formal\",\"request_id\":\"fixture-v2-001\",\"target\":\"https://example.invalid/v1\",\"transport\":\"cloud\"}",
+  "sha256": "a8850c68101cee986412cb6ae990528facd67ce87e10b61cea29447cd63f8e40"
+}
