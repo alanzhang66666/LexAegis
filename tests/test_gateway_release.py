@@ -118,6 +118,9 @@ def _envelope(request, formal_release=None, include_bundle_in_signature=True):
     approval = {"actor": "approver-1", "actor_role": "approver", "request_hash": digest(request),
                 "dependencies": request["dependencies"],
                 "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()}
+    if formal_release is not None:
+        from lexaegis.wire_bytes import approval_binding
+        approval["wire_binding"] = approval_binding(request)
     content = {"request": request, "approval": approval}
     if formal_release is not None and include_bundle_in_signature:
         content["formal_release"] = formal_release
@@ -132,10 +135,11 @@ class _Outcome:
     result = {"claims": [], "unused_fact_ids": [], "gaps": []}
 
     def ledger_fields(self):
-        return {"selected_slot": "primary", "attempts": [], "authorized_recipients": []}
+        return {"selected_slot": "primary", "attempts": getattr(self, "attempts", []), "authorized_recipients": []}
 
 
 class _Provider:
+    supports_wire_binding = True
     primary_key = "test-primary-key"
     standby_key = "test-standby-key"
 
@@ -149,7 +153,17 @@ class _Provider:
         self.slots.append(dual_slot)
         if self.fail:
             raise RuntimeError("simulated crash after claim")
-        return _Outcome()
+        # Synthetic byte-ready receipt, not a real HTTP transmission.
+        from lexaegis.cloud import _begin_attempt
+        attempt = _begin_attempt(dual_slot["primary"], body, "primary")
+        attempt.update(attempted_wire_body_sha256=attempt["prepared_wire_body_sha256"],
+                       transmission_state="response_received")
+        if persist_attempt:
+            persist_attempt([attempt], [])
+        result = _Outcome()
+        result.selected_slot = "primary"
+        result.attempts = [attempt]
+        return result
 
 
 def test_production_cloud_requires_signed_formal_bundle(monkeypatch, tmp_path):

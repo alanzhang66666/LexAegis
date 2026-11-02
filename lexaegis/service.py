@@ -626,6 +626,9 @@ def authorize_dispatch(repo, task, *, phase, release_context=None):
         raise DomainError("审批已过期，请重新检验和审批")
     if digest(task["request"]) != approval.get("request_hash"):
         raise DomainError("请求或累计披露已变化，请重新检验")
+    if release_service.required(task):
+        from .wire_bytes import require_binding
+        require_binding(task["request"], approval.get("wire_binding"))
     if not (task.get("risk") or {}).get("approval_allowed"):
         raise DomainError("风险门禁阻断")
     if phase == "enqueue":
@@ -1239,6 +1242,9 @@ def approve_task(repo, task_id, expected_hash, actor="local-lawyer", actor_role=
         task["approval"] = {"id": uid("approval"), "actor": actor.strip(), "actor_role": "approver", "actor_user_id": actor_user_id, "request_hash": expected_hash,
                             "dependencies": task["request"]["dependencies"], "at": now(),
                             "expires_at": (datetime.now(timezone.utc)+timedelta(minutes=30)).isoformat()}
+        if release_service.required(task):
+            from .wire_bytes import approval_binding
+            task["approval"]["wire_binding"] = approval_binding(task["request"])
         task["status"] = "approved"
         repo.put("task", task, case["id"])
         release_service.approve(repo, task, case, release_context)
@@ -1248,6 +1254,7 @@ def approve_task(repo, task_id, expected_hash, actor="local-lawyer", actor_role=
               request_hash=expected_hash, cause_id=case.get("domain"),
               domain_runtime_snapshot_id=task.get("domain_runtime_snapshot_id"),
               capability_id=task.get("capability_id"), approval_id=task["approval"]["id"], actor=actor,
+              wire_binding_hash=digest(task["approval"]["wire_binding"]) if "wire_binding" in task["approval"] else None,
               edge_node_id=edge_node_id())
     return task
 

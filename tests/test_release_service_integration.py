@@ -58,10 +58,11 @@ class _Outcome:
               "unused_fact_ids": [], "gaps": []}
 
     def ledger_fields(self):
-        return {"selected_slot": "primary", "attempts": [], "authorized_recipients": []}
+        return {"selected_slot": "primary", "attempts": getattr(self, "attempts", []), "authorized_recipients": []}
 
 
 class _Provider:
+    supports_wire_binding = True
     primary_key = "local-test-key"
     standby_key = ""
 
@@ -75,7 +76,17 @@ class _Provider:
         self.calls += 1
         if self.fail:
             raise RuntimeError("synthetic unknown provider result")
-        return _Outcome()
+        # Synthetic byte-ready receipt, not a real HTTP transmission.
+        from lexaegis.cloud import _begin_attempt
+        attempt = _begin_attempt(dual_slot["primary"], body, "primary")
+        attempt.update(attempted_wire_body_sha256=attempt["prepared_wire_body_sha256"],
+                       transmission_state="response_received")
+        if persist_attempt:
+            persist_attempt([attempt], [])
+        result = _Outcome()
+        result.selected_slot = "primary"
+        result.attempts = [attempt]
+        return result
 
 
 def _register_receipt(intake, evidence, gate_id, template, *, actor, role, versions,

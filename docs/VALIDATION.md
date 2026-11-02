@@ -248,3 +248,7 @@ pnpm exec playwright test --config=playwright.runtime-pack.config.ts
 ```
 
 浏览器测试配置会自行启动使用独立验收目录的应用，不访问真实边侧模型或云端模型。
+
+## V3 HTTP 请求体字节绑定（2026-11-01，开发分支）
+
+生产 cloud 审批、排队、网关与 HTTP transport 共享版本化最终请求体摘要；主备槽分别核验，摘要落盘失败不调用 transport。字节准备回执随 Attempt 回到任务/披露账本，不当作服务商收妥证明。新增场景为合成正式流程及 httpx MockTransport，非真实云验收；迁移限制与范围见 `V3_WIRE_BODY_BINDING.md`。旧 V2 request_hash 不变，缺少新绑定的未发送旧批准需要重新审批。

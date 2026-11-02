@@ -10,6 +10,7 @@ import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
+import httpx
 from fastapi.testclient import TestClient
 
 from lexaegis.contracts import FormalReleasePolicy, FrozenFormalRequest, OneTimeDispatchGrant, ReleaseBuildManifest
@@ -300,13 +301,22 @@ def _envelope(request, bundle):
     approval = {"actor": "approver-1", "actor_role": "approver", "request_hash": digest(request),
                 "dependencies": request["dependencies"],
                 "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()}
+    from lexaegis.wire_bytes import approval_binding
+    approval["wire_binding"] = approval_binding(request)
     content = {"request": request, "approval": approval, "formal_release": bundle}
     return {**content, "signature": sign(content, SECRET)}
 
 
 def test_gateway_accepts_standby_when_request_policy_authorizes(monkeypatch, tmp_path):
+    from lexaegis.cloud import DualSlotProvider
     monkeypatch.setenv("LEX_RUN_PROFILE", "production")
-    provider = _Provider()
+    captured = []
+    def respond(request):
+        captured.append(request)
+        result = json.dumps({"claims": [], "unused_fact_ids": [], "gaps": []})
+        return httpx.Response(200, json={"choices": [{"message": {"content": result}}]})
+    transport = httpx.Client(transport=httpx.MockTransport(respond))
+    provider = DualSlotProvider("synthetic-primary-key", "synthetic-standby-key", client=transport)
     manifest = _manifest()
     app = create_gateway(tmp_path / "gateway-standby", secret=SECRET, provider=provider,
                          build_manifest=manifest)
@@ -316,8 +326,11 @@ def test_gateway_accepts_standby_when_request_policy_authorizes(monkeypatch, tmp
     with TestClient(app) as client:
         response = client.post("/dispatch", json=envelope)
     assert response.status_code == 200, response.text
-    assert provider.calls == 1
-    assert provider.slots[0]["standby"]["target"] == STANDBY_TARGET
+    assert response.json()["status"] == "complete"
+    assert len(captured) == 1
+    assert envelope["approval"]["wire_binding"]["slots"]["standby"]["target"] == STANDBY_TARGET
+    assert response.json()["attempts"][0]["approved_wire_body_sha256"] == response.json()["attempts"][0]["attempted_wire_body_sha256"]
+    transport.close(); app.state.store.engine.dispose()
 
 
 def test_gateway_rejects_standby_without_policy_authorization(monkeypatch, tmp_path):
