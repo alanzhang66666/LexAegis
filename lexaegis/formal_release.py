@@ -644,26 +644,36 @@ def evaluate_release(
             "ledger": str(request.ledger_version),
             "combination": request.combination_input_hash,
         }
-        # Resolve each receipt against its own exact version binding. The
-        # service checks validity/revocation and verifies all referenced bytes
-        # through the configured controlled EvidenceStore.
-        for raw in repo.list(_RECEIPT_KIND):
+        # Group only within this invocation. No result survives a new evaluation,
+        # transaction or phase. Keep recipient/request/version scopes separate.
+        receipt_records = repo.list(_RECEIPT_KIND)
+        resolved_groups = {}
+        resolved_at = _time(at)
+
+        def resolve_group(scope, request_hash, versions):
+            key = canonical({"scope": scope, "request_hash": request_hash, "versions": versions})
+            if key not in resolved_groups:
+                try:
+                    resolved = evidence_intake.resolve_evidence(
+                        scope, request_hash=request_hash, bound_versions=versions, at=resolved_at)
+                except (KeyError, ValueError, TypeError):
+                    resolved_groups[key] = {}
+                else:
+                    resolved_groups[key] = {item.id: item for item in resolved}
+            return resolved_groups[key]
+
+        for raw in receipt_records:
             if raw.get("tuple") != request.tuple or raw.get("gate_id") not in _REQUIRED_GATES:
                 continue
             if raw.get("request_hash") not in (None, request.request_hash):
                 continue
             if raw.get("gate_id") in {"G1", "G2", "G3", "G5"} and raw.get("bound_versions") != expected_versions:
                 continue
-            try:
-                resolved = evidence_intake.resolve_evidence(
-                    request.tuple,
-                    request_hash=request.request_hash if raw.get("gate_id") in {"G6", "G7", "G8", "G9", "G10"} else None,
-                    bound_versions=raw.get("bound_versions") or {},
-                    at=_time(at),
-                )
-            except (KeyError, ValueError, TypeError):
-                continue
-            matched = next((item for item in resolved if item.id == raw.get("id")), None)
+            matched = resolve_group(
+                request.tuple,
+                request.request_hash if raw.get("gate_id") in {"G6", "G7", "G8", "G9", "G10"} else None,
+                raw.get("bound_versions") or {},
+            ).get(raw.get("id"))
             if matched is not None:
                 data = matched.model_dump(mode="json") if hasattr(matched, "model_dump") else dict(matched)
                 if matched.gate_id == "G1" and not _g1_adoption_valid(repo, data, task, case, task["request"]):
@@ -687,14 +697,17 @@ def evaluate_release(
             standby_tuple = {"case_id": request.tuple["case_id"], "purpose": request.tuple["purpose"],
                              "recipient": request.standby_provider_id}
             standby_reviews = []
-            for raw in repo.list(_RECEIPT_KIND):
+            for raw in receipt_records:
                 if raw.get("gate_id") != "G3" or raw.get("tuple") != standby_tuple:
                     continue
                 if raw.get("request_hash") not in (None, request.request_hash):
                     continue
                 if raw.get("bound_versions") != expected_versions:
                     continue
-                data = dict(raw)
+                matched = resolve_group(standby_tuple, raw.get("request_hash"), raw.get("bound_versions") or {}).get(raw.get("id"))
+                if matched is None:
+                    continue
+                data = matched.model_dump(mode="json")
                 if (data.get("conclusion") == "pass" and _receipt_manifest_intact(repo, data)
                         and _receipt_role_action(repo, data)
                         and _receipt_live(repo, data, at, standby_tuple)):
@@ -831,6 +844,15 @@ def issue_grant(repo, *, frozen, decision, actor: str, actor_role: str, approval
                and _isolation_legal_confirmation(repo, item, request.request_hash, at, request.tuple)
                for item in repo.list("isolation_receipt")):
         raise FormalReleaseError("isolation receipt expired or was revoked after evaluation")
+    if request.standby_provider_id:
+        standby_tuple = {**request.tuple, "recipient": request.standby_provider_id}
+        standby_reviews = [item for item in repo.list(_RECEIPT_KIND)
+            if item.get("gate_id") == "G3" and item.get("tuple") == standby_tuple
+            and item.get("request_hash") in (None, request.request_hash)
+            and item.get("bound_versions") == expected_versions
+            and _receipt_live(repo, item, at, standby_tuple)]
+        if not _g3_has_required_legal_reviews(standby_reviews):
+            raise FormalReleaseError("standby legal evidence expired, was revoked, or changed after evaluation")
     if approval.get("actor_role") != "approver" or not approval.get("actor") or approval.get("request_hash") != request.request_hash:
         raise FormalReleaseError("G10 approval does not bind this request")
     if approval.get("actor") != actor.strip():

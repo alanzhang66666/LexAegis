@@ -256,3 +256,7 @@ pnpm exec playwright test --config=playwright.runtime-pack.config.ts
 ## V3 回流金额一致性（2026-11-01，开发分支）
 
 返回管道按引用的已披露 fact output 精确比较 Decimal 金额、单位与常见倍率；原数字子串存在不能支持不同金额。逐条复核和最终确认会重验候选，旧的 reviewed 标记不覆盖新增 hard blocker；历史人工决定不被改写。新增 `amount_support` 明示只做数值校核、不证明语义。测试采用合成案件，未覆盖完整原文支持/反证关系，见 `V3_AMOUNT_SUPPORT.md`。
+
+## V3 单次评估证据去重与备槽原件校验（2026-11-01，开发分支）
+
+按接收方 tuple/request_hash/bound_versions 在单次 evaluate_release 内解析一次，后续评估和各执行阶段重新读取。合成主槽用例解析次数 10→2、文件读取 70→14；不是实发延迟指标。备槽原件现在也必须通过受控 intake，并在许可签发时重验其当前签署/范围/有效期；原件篡改/删除和评估后撤销等回归见 `V3_EVIDENCE_RESOLUTION.md`。这不是跨案件权威证明复用。
