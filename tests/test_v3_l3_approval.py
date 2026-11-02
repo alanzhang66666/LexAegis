@@ -56,6 +56,15 @@ def test_two_distinct_role_actions_do_not_authorize_send(graded):
         display = release_service._with_v3_grade_status(repo, *objects(f, repo), {'state': 'ready'})
         assert display['state'] == 'blocked'
         assert display['v3_grade_guard']['l3_roles']['state'] == 'roles_recorded'
+        assert '双人角色动作已登记' in display['reason']
+        assert 'PIA/CTIA' in display['reason'] and '禁止外发' in display['reason']
+        user = repo.get('user:dpo', 'user')
+        user['status'] = 'disabled'; repo.put('user', user)
+        stale = release_service._with_v3_grade_status(repo, *objects(f, repo), {'state': 'ready'})
+        assert stale['state'] == 'blocked'
+        assert stale['v3_grade_guard']['l3_roles']['state'] == 'pending_roles'
+        assert '双人角色动作已登记' not in stale['reason']
+        assert stale['auto_policy_candidate'] is False
         with pytest.raises(ValueError):
             approve(f, repo)
         assert repo.list('formal_release_policy') == []

@@ -125,6 +125,10 @@ def _with_v3_grade_status(repo, task, case, result):
             pass
         result["state"] = "blocked"
         result["reason"] = str(exc)
+        roles = result["v3_grade_guard"].get("l3_roles", {})
+        if roles.get("state") == "roles_recorded":
+            result["reason"] = "L3 双人角色动作已登记；法域、PIA/CTIA 与正式门禁仍须核验，禁止外发"
+            result["v3_grade_guard"]["reason"] = result["reason"]
         result["auto_policy_candidate"] = False
     return result
 
