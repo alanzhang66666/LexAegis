@@ -9,7 +9,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 import httpx
 from . import formal_release as release
-from . import gate_orchestrator
+from . import attestation_registry, gate_orchestrator
 from .gate_orchestrator import build_gate_bundle
 from .gate_evidence_scope import build_scope_diagnostics
 from .contracts import FormalReleasePolicy, OneTimeDispatchGrant
@@ -154,10 +154,12 @@ def status(repo, task, case, context):
         try:
             result["gate_evaluation"] = gate_orchestrator.evaluate_gate_bundle(
                 original_decision, task, case,
-                "send" if task.get("status") in {"queued", "sending"} else "approve")
+                "send" if task.get("status") in {"queued", "sending"} else "approve",
+                attestation=attestation_registry.gate_members(repo, frozen, task, case, now()))
         except (ValueError, TypeError, KeyError):
             result["gate_evaluation"] = {"schema_version": 2, "authoritative": True, "state": "unavailable",
                                          "approval_eligible": False, "dispatch_allowed": False}
+        result["attestations"] = attestation_registry.status(repo, frozen, task, case, now())
         if not decision.approval_eligible and os.getenv("LEX_AUTO_REQUEST_POLICY", "").strip() == "1":
             try:
                 result["auto_policy_candidate"] = auto_request_policy_candidate(repo, task, case, context) is not None
@@ -197,14 +199,18 @@ def assert_allowed(repo, task, case, context, phase):
             raise ValueError("正式冻结请求不匹配")
         # The four-gate result approved earlier must still hold exactly.
         gate_orchestrator.require_bound_bundle(
-            repo, task, gate_orchestrator.evaluate_gate_bundle(decision, task, case, phase))
+            repo, task, gate_orchestrator.evaluate_gate_bundle(
+                decision, task, case, phase,
+                attestation=attestation_registry.gate_members(repo, frozen, task, case, now())))
 
 
 def approve(repo, task, case, context):
     if not required(task):
         return
     frozen, decision = evaluate(repo, task, case, context)
-    gates = gate_orchestrator.evaluate_gate_bundle(decision, task, case)
+    gates = gate_orchestrator.evaluate_gate_bundle(
+        decision, task, case,
+        attestation=attestation_registry.gate_members(repo, frozen, task, case, now()))
     if not gates["approval_eligible"]:
         blocked = [group["id"] for group in gates["groups"] if group["state"] != "pass"]
         raise ValueError("四门评估未全部满足：" + "、".join(blocked or ["全局阻断"]))
