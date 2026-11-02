@@ -88,6 +88,21 @@ def _unconfigured(reason):
             "authoritative": False}
 
 
+def _anchor_permissions_ok(info, *, posix=None):
+    """Judge POSIX group/other write bits; report honestly where they do not exist.
+
+    On Windows ``os.stat`` synthesises writable bits for every user-writable
+    file, so the POSIX test would reject every real anchor. There is no
+    equivalent stdlib ACL check, so the verdict is reported as unverified
+    rather than faked as passed: an administrator must still keep the anchor
+    file writable only by the service account.
+    """
+    posix = (os.name == "posix") if posix is None else posix
+    if not posix:
+        return True, "unsupported_platform"
+    return not (info.st_mode & 0o022), "posix_mode"
+
+
 def load_anchor(path=None):
     """Read the external trust anchor. Never falls back to a repository default.
 
@@ -104,7 +119,10 @@ def load_anchor(path=None):
         info = anchor_path.stat()
     except OSError:
         return _unconfigured("trust_anchor_missing")
-    if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o022:
+    if not stat.S_ISREG(info.st_mode):
+        return _unconfigured("trust_anchor_not_a_regular_file")
+    permissions_ok, permission_check = _anchor_permissions_ok(info)
+    if not permissions_ok:
         return _unconfigured("trust_anchor_writable_by_others")
     try:
         document = json.loads(anchor_path.read_text(encoding="utf-8"))
@@ -135,6 +153,7 @@ def load_anchor(path=None):
         return _unconfigured("trust_anchor_has_no_keys")
     return {
         "state": "loaded", "loaded": True, "reasons": [], "authoritative": False,
+        "permission_check": permission_check,
         "trusted_keys": keys,
         "authority_id": str(revocation.get("authority_id") or ""),
         "ledger_id": str(revocation.get("ledger_id") or ""),

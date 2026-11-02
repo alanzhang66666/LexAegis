@@ -157,7 +157,15 @@ def test_anchor_requires_absolute_untampered_file(tmp_path, monkeypatch):
     assert registry.load_anchor("relative.json")["reasons"] == ["trust_anchor_must_be_absolute"]
     assert registry.load_anchor(str(tmp_path / "absent.json"))["state"] == "unconfigured"
     writable = _write_anchor(tmp_path, providers={}, policies={}, mode=0o666)
-    assert registry.load_anchor(str(writable))["reasons"] == ["trust_anchor_writable_by_others"]
+    # The POSIX verdict is asserted directly so both platforms are covered.
+    assert registry._anchor_permissions_ok(writable.stat(), posix=True) == (False, "posix_mode")
+    assert registry._anchor_permissions_ok(writable.stat(), posix=False) == (True, "unsupported_platform")
+    loaded = registry.load_anchor(str(writable))
+    if os.name == "posix":
+        assert loaded["reasons"] == ["trust_anchor_writable_by_others"]
+    else:
+        # Windows has no POSIX group/other bits; the check is reported unverified.
+        assert loaded["state"] == "loaded" and loaded["permission_check"] == "unsupported_platform"
 
 
 def test_anchor_loads_keys_and_facts(tmp_path):
@@ -168,6 +176,7 @@ def test_anchor_loads_keys_and_facts(tmp_path):
     assert set(anchor["trusted_keys"]) == {"legal-key", "tech-key", "rev-key"}
     assert anchor["network_policy_hash"] == _hash("b")
     assert anchor["providers"]["p1"]["jurisdiction"] == "SG"
+    assert anchor["permission_check"] in {"posix_mode", "unsupported_platform"}
 
 
 # --- scope derivation -------------------------------------------------------
