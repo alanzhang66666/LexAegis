@@ -1484,10 +1484,10 @@ def create_app(data_dir=None, password=None, build_manifest=None):
             service.assert_current(repo, task)
             if task["status"] != "complete" or not task["artifact"]:
                 raise service.DomainError("结果尚未完成")
+            service.recheck_return_claims(repo, task)
+            from .output_checks import cannot_adopt
             claim = next((c for c in task["artifact"]["claims"] if c["id"] == claim_id), None)
-            if not claim or not claim["anchors"] or claim.get("status") == "blocked" \
-                    or any(str(i).startswith("阻断：") for i in claim["issues"]) \
-                    or "引用不存在或指向未披露事实" in claim["issues"] or "日期或金额存在未在引用事实中出现的数字" in claim["issues"]:
+            if not claim or not claim["anchors"] or cannot_adopt(claim):
                 raise service.DomainError("存在无效引用、无依据数字或阻断级输出校核，不能确认；请重做任务")
             claim["reviewed"] = True
             claim["status"] = "confirmed"
@@ -1505,6 +1505,9 @@ def create_app(data_dir=None, password=None, build_manifest=None):
             service.assert_current(repo, task)
             if task["status"] != "complete" or not task["artifact"] or not all(c["reviewed"] for c in task["artifact"]["claims"]):
                 raise service.DomainError("请先逐项查看原文并确认摘要陈述")
+            from .output_checks import cannot_adopt
+            if any(cannot_adopt(claim) for claim in service.recheck_return_claims(repo, task)):
+                raise service.DomainError("结果含有阻断级证据校核，不能采纳；请重做任务")
             task["artifact"]["confirmed"] = True
             task["artifact"]["confirmed_by"] = identity["actor"]
             task["artifact"]["confirmed_at"] = now()

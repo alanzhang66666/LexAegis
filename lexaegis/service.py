@@ -1281,6 +1281,25 @@ def submit_review_issue(repo, task_id, body, actor):
     return result
 
 
+def recheck_return_claims(repo, task):
+    """Recheck persisted candidates before a new human action, including old results.
+
+    Existing review-level human decisions remain explicit; a newly detected hard
+    blocker always wins. This does not rewrite historical HumanDecision records.
+    """
+    from . import output_checks
+    claims = (task.get("artifact") or {}).get("claims")
+    if not isinstance(claims, list):
+        raise DomainError("结果缺少可复核陈述")
+    confirmed = {claim.get("id") for claim in claims if claim.get("reviewed") and claim.get("status") == "confirmed"}
+    pack = repo.get(task["pack_id"], "pack") if task.get("pack_id") else {}
+    output_checks.apply_return_checks(claims, task.get("decisions"), task.get("fact_snapshot"), pack)
+    for claim in claims:
+        if claim.get("id") in confirmed and not output_checks.cannot_adopt(claim):
+            claim["status"] = "confirmed"
+    return claims
+
+
 def task_view(repo, task):
     state = review.review_state(repo, task)
     opens = review.list_open_issues(repo, task["case_id"])

@@ -1,20 +1,15 @@
-"""Return-side output verification (C3): what the cloud wrote back must not
-commit the five legally-material distortion classes against the wire payload
-that was actually sent.
+"""Return-side deterministic distortion and monetary-token checks.
 
-Each check mirrors an outbound-side rule already enforced in
-``disclosure.constraint_reasons`` but compares the returned claim text
-against the disclosed decision outputs instead of the local originals.
-Severity is declared by the pack (``return_check_severity``); the default for
-every class is ``block`` — the legal ruling on date truncation is
-unconditional, and a pack may only downgrade a class to ``review``
-explicitly.
+Inputs are cited disclosed decision outputs, not unrelated or local-only facts.
+Default severity blocks; a versioned pack may explicitly request review/off.
+These checks do not establish semantic entailment or legal correctness.
 """
 from __future__ import annotations
 
 import re
 
 from .policy import TOKEN
+from . import amount_support
 from .disclosure import (
     HOLDER_VALUES,
     _flattens_dispute,
@@ -29,7 +24,7 @@ from .disclosure import (
 
 CHECKS = (
     "month_truncation", "calendar_shift", "claim_flattening",
-    "finding_upgrade", "subject_swap", "negation_loss", "holder_flip",
+    "finding_upgrade", "subject_swap", "negation_loss", "holder_flip", "unsupported_amount",
 )
 
 MESSAGES = {
@@ -40,6 +35,7 @@ MESSAGES = {
     "subject_swap": "主体归属被改写为其他主体",
     "negation_loss": "否认或抗辩被删成肯定陈述",
     "holder_flip": "证据持有人被改挂",
+    "unsupported_amount": "金额或币种未得到当前引用的已披露事实支持",
 }
 
 
@@ -94,21 +90,24 @@ def apply_return_checks(claims, decisions, facts, pack) -> dict:
     for claim in claims:
         outputs = [decisions[i]["output"] for i in claim.get("source_ids") or []
                    if i in decisions and decisions[i].get("output")]
-        if not outputs:
-            continue
         text = claim.get("text") or ""
         hits = set()
+        claim["amount_support"] = amount_support.assess(text, [
+            (source_id, decisions[source_id]["output"]) for source_id in claim.get("source_ids") or []
+            if source_id in decisions and decisions[source_id].get("output")])
+        if levels["unsupported_amount"] != "off" and claim["amount_support"]["unsupported_amounts"]:
+            hits.add("unsupported_amount")
         if levels["month_truncation"] != "off" and any(
                 month_truncated(output, text) for output in outputs):
             hits.add("month_truncation")
         if levels["calendar_shift"] != "off" and any(
                 shifted_calendar(output, text) for output in outputs):
             hits.add("calendar_shift")
-        anchored = [facts.get(i) for i in claim.get("source_ids") or []]
-        anchored = [f for f in anchored if f]
-        for fact, output in zip(anchored,
-                                [decisions[f["id"]]["output"] for f in anchored
-                                 if f["id"] in decisions]):
+        for source_id in claim.get("source_ids") or []:
+            fact = facts.get(source_id)
+            output = decisions.get(source_id, {}).get("output")
+            if not fact or not output:
+                continue
             stance = fact_attr(fact, "claim_stance") or fact.get("statement_status") \
                 or fact.get("dispute_status")
             if levels["claim_flattening"] != "off" and stance in {
@@ -141,3 +140,12 @@ def apply_return_checks(claims, decisions, facts, pack) -> dict:
         elif hits and claim.get("status") not in {"needs_review", "blocked"}:
             claim["status"] = "needs_review"
     return counts
+
+
+def cannot_adopt(claim):
+    """Shared guard for per-claim review and final artifact adoption."""
+    issues = claim.get("issues") or []
+    return bool(claim.get("blocked") or claim.get("status") == "blocked"
+                or any(str(issue).startswith("阻断：") for issue in issues)
+                or "引用不存在或指向未披露事实" in issues
+                or "日期或金额存在未在引用事实中出现的数字" in issues)
