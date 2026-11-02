@@ -2370,6 +2370,17 @@ pre {
 .intake-receipts .panel-actions { align-items: center; flex-wrap: wrap; }
 .panel-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
 .panel-actions > button { color: var(--green); font-size: 12px; }
+.readiness-panel { margin: 18px 0; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius-panel); background: var(--surface-muted); }
+.readiness-heading, .readiness-row-title, .readiness-legal { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.readiness-heading h3 { margin: 0 0 4px; font-size: 15px; }
+.readiness-legal { margin: 12px 0; padding: 9px 10px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); font-size: 13px; }
+.readiness-pass { color: var(--green); }
+.readiness-pending { color: var(--muted); }
+.readiness-list { display: grid; gap: 8px; }
+.readiness-row { padding: 10px; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--paper); }
+.readiness-details { display: grid; grid-template-columns: 86px minmax(0, 1fr); gap: 4px 10px; margin: 8px 0 0; font-size: 12px; line-height: 1.6; }
+.readiness-details dt { color: var(--muted); }
+.readiness-details dd { margin: 0; overflow-wrap: anywhere; }
 .data-table { background: var(--paper); border-radius: var(--radius-panel); overflow: auto; margin: 16px 0 24px; }
 .data-table-row { display: grid; grid-template-columns: repeat(5,minmax(110px,1fr)); min-width: 620px; border-top: 1px solid var(--line); }
 .data-table-row:first-child { border-top: 0; }

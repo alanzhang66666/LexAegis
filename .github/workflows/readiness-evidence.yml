@@ -1,0 +1,92 @@
+name: readiness-evidence
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  readiness-evidence:
+    runs-on: ubuntu-latest
+    # A missing secret, runtime or KubeEdge sandbox is an evidence failure.
+    # This job intentionally has no skip/continue-on-error path.
+    env:
+      LEX_LOCAL_PASSWORD: ci-local-password-only
+      LEX_GATEWAY_SECRET: ci-gateway-signing-secret-at-least-32
+      LEX_REDTEAM_SECRET: ci-redteam-signing-secret-at-least-32
+      LEX_KUBEEDGE_DRILL_PASSWORD: ${{ secrets.LEX_KUBEEDGE_DRILL_PASSWORD }}
+      SYFT_IMAGE: anchore/syft:v1.44.0@sha256:586fe0c6f26f023501fba6121fbca58504743cac82732cdf365c9ed056835637
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install application
+        run: |
+          python -m pip install -r requirements.lock -c constraints/linux.txt
+          python -m pip install --no-deps -e .
+      - name: Require evidence credentials and runtimes
+        run: |
+          test -n "$LEX_KUBEEDGE_DRILL_PASSWORD"
+          command -v docker
+          command -v kubectl
+          command -v kind
+          docker info >/dev/null
+          kubectl cluster-info >/dev/null
+          docker image inspect "$SYFT_IMAGE" >/dev/null 2>&1 || docker pull "$SYFT_IMAGE"
+      - name: Prepare Compose sandbox
+        run: |
+          python scripts/prepare_ci_runtime.py
+          mkdir -p .artifacts/readiness .data/production/app .data/production/gateway
+          sudo chown -R 10001:10001 .data/production
+          sudo chmod 700 .data/production/app .data/production/gateway
+          docker compose --profile redteam build
+          docker compose --profile redteam up -d --pull never --wait
+      - name: Generate Compose isolation evidence
+        run: lexaegis check-isolation --report .artifacts/readiness/compose-isolation.json
+      - name: Generate immutable-pinned SBOM
+        run: |
+          mkdir -p .artifacts/readiness
+          docker run --rm -v "$PWD:/src:ro" -v "$PWD/.artifacts/readiness:/out" "$SYFT_IMAGE" dir:/src -o cyclonedx-json=/out/sbom.cdx.json
+          test -s .artifacts/readiness/sbom.cdx.json
+      - name: Require a ready KubeEdge sandbox
+        run: |
+          # The repository documents the reproducible local kind + KubeEdge setup.
+          # CI must fail closed until that sandbox is provisioned on the runner.
+          kubectl get nodes
+          kubectl get pods --all-namespaces
+          test -n "$(docker ps --filter name=edge-node-1 --format '{{.Names}}')"
+          test -n "$(docker ps --filter name=cloudcore --format '{{.Names}}')"
+      - name: Run synthetic KubeEdge drill
+        run: |
+          python scripts/kubeedge_local_drill.py --report .artifacts/readiness/kubeedge.md --json-report .artifacts/readiness/kubeedge.json
+      - name: Validate strict evidence reports
+        run: |
+          python scripts/validate_readiness_report.py docs/examples/release-readiness.example.json
+          python scripts/validate_readiness_report.py .artifacts/readiness/compose-isolation.json
+          python scripts/validate_readiness_report.py .artifacts/readiness/kubeedge.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          required = {'schema_version', 'check_id', 'status', 'source_commit', 'image_digests', 'source_kind', 'source_command', 'environment', 'generated_at', 'valid_until', 'redaction_profile', 'results'}
+          for path, check_id in [(Path('.artifacts/readiness/compose-isolation.json'), 'compose_isolation'), (Path('.artifacts/readiness/kubeedge.json'), 'k8s_conformance')]:
+              data = json.loads(path.read_text())
+              assert set(data) >= required, (path, sorted(required - set(data)))
+              assert data['check_id'] == check_id and data['source_kind'] == 'command_generated'
+              assert len(data['source_commit']) == 40 and all(c in '0123456789abcdef' for c in data['source_commit'])
+              assert data['redaction_profile'] == 'synthetic-v1'
+              assert 'password' not in path.read_text().lower() and 'token' not in path.read_text().lower()
+          k8s = json.loads(Path('.artifacts/readiness/kubeedge.json').read_text())
+          assert set(k8s['results']) == {'registration', 'delivery', 'disconnect', 'bundle_absent_while_disconnected', 'reconnect', 'bundle_synced', 'revocation', 'reconcile'}
+          assert all(k8s['results'].values()) and k8s['status'] == 'pass'
+          PY
+      - name: Upload readiness evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: readiness-evidence
+          path: .artifacts/readiness
+      - name: Tear down Compose sandbox
+        if: always()
+        run: docker compose --profile redteam down -v

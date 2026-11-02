@@ -12,6 +12,15 @@ from .storage import Store
 from .util import exclusive_lock, restrict_mode
 
 
+def _write_json_once(path: Path, payload: object) -> None:
+    """Write an evidence document without silently replacing an earlier result."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("x", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=2)
+        handle.write("\n")
+
+
 def _profile_app_dir():
     from .runtime_profile import profile_config
     return profile_config()["app_dir"]
@@ -189,6 +198,8 @@ def main():
     p.add_argument("--migration-revision", help="默认使用本构建声明的存储修订号")
     p.add_argument("--validation-report", type=Path, help="目标验证结果JSON；缺省即视为未验证")
     p.add_argument("--reference", type=Path, help="已冻结build manifest；用于报告漂移字段")
+    p.add_argument("--request-hash", default="", help="可选的当前请求哈希，用于 readiness 绑定")
+    p.add_argument("--readiness-output", type=Path, help="写出机器可读 readiness 报告，拒绝覆盖")
     p = commands.add_parser("backup")
     p.add_argument("destination", type=Path)
     p.add_argument("--profile", choices=["production", "demo", "integration"])
@@ -213,7 +224,8 @@ def main():
     p = commands.add_parser("edge", help="探测或拉起本机边侧 llama-server")
     p.add_argument("--start", action="store_true", help="端口未监听时尝试启动本机 llama-server")
     commands.add_parser("doctor", help="检查平台、目录、前端和可选能力")
-    commands.add_parser("check-isolation", help="从宿主机验证 Compose 出口与卷/密钥隔离并记录结果")
+    p = commands.add_parser("check-isolation", help="从宿主机验证 Compose 出口与卷/密钥隔离并记录结果")
+    p.add_argument("--report", type=Path, help="写出脱敏 JSON 工程证据，拒绝覆盖")
     commands.add_parser("_record-isolation", help=argparse.SUPPRESS)
     p = commands.add_parser("bench", help="运行隔离实验能力检查")
     p.add_argument("--profile", choices=["ianvs-pipl", "comparable"], required=True)
@@ -311,8 +323,12 @@ def main():
             reference=reference,
             reference_readable=reference_readable,
             validation_report_status=validation_report_status,
+            request_hash=args.request_hash,
         )
-        print(json.dumps(report.public(), ensure_ascii=False, indent=2))
+        public = report.public()
+        print(json.dumps(public, ensure_ascii=False, indent=2))
+        if args.readiness_output and report.readiness is not None:
+            _write_json_once(args.readiness_output, report.readiness.model_dump(mode="json"))
         if not report.build_baseline_verified:
             print("未验收：发布候选未形成可验证基线，正式外发保持 blocked")
         raise SystemExit(0 if report.build_baseline_verified else 1)
@@ -356,8 +372,50 @@ def main():
         raise SystemExit(0 if report["ok"] else 1)
     elif args.command == "check-isolation":
         from .diagnostics import compose_isolation_report
+        from .contracts import ReadinessCheck
+        from datetime import datetime, timedelta, timezone
         report = compose_isolation_report()
         print(json.dumps(report, ensure_ascii=False, indent=2))
+        if args.report:
+            stamp = datetime.now(timezone.utc).replace(microsecond=0)
+            generated = stamp.isoformat().replace("+00:00", "Z")
+            valid_until = (stamp + timedelta(hours=24)).isoformat().replace("+00:00", "Z")
+            try:
+                source_commit = __import__("subprocess").run(
+                    ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+                ).stdout.strip()
+            except Exception:
+                source_commit = ""
+            checks = report.get("checks") or {}
+            check_status = "pass" if report.get("ok") and all(checks.values()) else "fail"
+            evidence = {
+                "schema_version": 1,
+                "check_id": "compose_isolation",
+                "status": check_status,
+                "source_commit": source_commit,
+                "image_digests": {},
+                "source_kind": "command_generated",
+                "source_command": "lexaegis check-isolation --report PATH",
+                "environment": {"deployment": "compose", "synthetic_only": "true"},
+                "generated_at": generated,
+                "valid_until": valid_until,
+                "redaction_profile": "synthetic-v1",
+                "results": {str(key): value is True for key, value in checks.items()},
+                "checks": {str(key): value is True for key, value in checks.items()},
+                "evidence_hashes": {},
+                "readiness": {"compose_isolation": ReadinessCheck(
+                    status=check_status,
+                    artifact_ids=[],
+                    source_kind="command_generated",
+                    source_command="lexaegis check-isolation --report PATH",
+                    environment={"deployment": "compose", "synthetic_only": "true"},
+                    generated_at=generated,
+                    valid_until=valid_until,
+                    redaction_profile="synthetic-v1",
+                    reason=("五项 Compose 探测全部通过" if check_status == "pass" else "；".join(report.get("gaps") or ["Compose 探测未全部通过"])),
+                ).model_dump(mode="json")},
+            }
+            _write_json_once(args.report, evidence)
         if not report["ok"]:
             print("未验收")
             for gap in report.get("gaps") or []:

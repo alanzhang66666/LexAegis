@@ -116,6 +116,11 @@ class EvidenceStore:
         source_path_hint: str,
         actor: str,
         template_kind: str | None = None,
+        source_kind: str = "manual_upload",
+        source_command: str = "",
+        environment: dict[str, str] | None = None,
+        valid_until: str | None = None,
+        redaction_profile: str = "manual",
     ) -> EvidenceArtifact:
         """Persist bytes once and append metadata plus a plaintext-free audit event."""
         if not isinstance(content, bytes) or not content:
@@ -124,6 +129,9 @@ class EvidenceStore:
         actor = actor.strip()
         source_path_hint = source_path_hint.strip()
         template_kind = template_kind.strip() if template_kind else None
+        source_kind = source_kind.strip()
+        source_command = source_command.strip()
+        environment = dict(environment or {})
         if not media_type or len(media_type) > 255:
             raise ValueError("media_type must be between 1 and 255 characters")
         if not actor:
@@ -132,6 +140,10 @@ class EvidenceStore:
             raise ValueError("source_path_hint must not exceed 1000 characters")
         if template_kind is not None and len(template_kind) > 100:
             raise ValueError("template_kind must not exceed 100 characters")
+        if source_kind not in {"manual_upload", "command_generated"}:
+            raise ValueError("source_kind must be manual_upload or command_generated")
+        if any(not isinstance(key, str) or not isinstance(value, str) for key, value in environment.items()):
+            raise ValueError("evidence environment must contain string values")
 
         content_hash = hashlib.sha256(content).hexdigest()
         storage_ref = f"sha256:{content_hash}"
@@ -154,6 +166,11 @@ class EvidenceStore:
                     created_at=now(),
                     registered_by=actor,
                     storage_ref=storage_ref,
+                    source_kind=source_kind,
+                    source_command=source_command,
+                    environment=environment,
+                    valid_until=valid_until,
+                    redaction_profile=redaction_profile,
                 )
                 repo.put(_ARTIFACT_KIND, artifact.model_dump(mode="json"))
                 audit(

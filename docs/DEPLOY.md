@@ -51,3 +51,9 @@ lexaegis check-isolation
 若 `lexaegis start` 报端口占用（Windows `10048`）或 `worker.lock` 权限错误，说明旧 API/网关/worker 仍在运行。结束占用 `127.0.0.1:8765` 与 `8766` 的进程后再启动。请使用 **http://127.0.0.1:8765**，不要用 `localhost`。
 
 `python scripts/dev.py` 仍可用，内部转调同一启动器，便于 Playwright 与旧命令。新流程请使用 `lexaegis start`。
+
+## Readiness 证据（放行前置）
+
+放行前置报告固定包含构建清单、Compose 隔离、kind/KubeEdge 一致性、宿主机防火墙和供应链五项。可用 `lexaegis check-isolation --report PATH`、`lexaegis release verify-candidate --readiness-output PATH` 以及 `scripts/kubeedge_local_drill.py --report PATH --json-report PATH` 生成脱敏工程证据；密码必须由 `LEX_KUBEEDGE_DRILL_PASSWORD` 注入，控制面地址由 `LEX_KUBEEDGE_CONTROL_PLANE_URL` 指定且默认仅为本地回环地址。
+
+`k8s_conformance` 仅是合成演练的工程附件，不能替代 G9 或打开 `formal_dispatch`。demo/integration 只报告；production 在 approve、reserve/enqueue 和发送前重新绑定构建、请求、镜像 digest 及有效证据，缺失时失败关闭。真实生产集群和真实外发仍未验收。

@@ -556,6 +556,62 @@ class TaskArtifact(Contract):
 # fail-closed states; a caller must supply reviewed evidence before any pass.
 GateID = Literal["G0", "G1", "G2", "G3", "G5", "G6", "G7", "G8", "G9", "G10", "G-product"]
 GateStatus = Literal["unknown", "pending", "pass", "fail", "expired", "stale", "revoked", "not_applicable"]
+
+ReadinessCheckId = Literal[
+    "build_manifest", "compose_isolation", "k8s_conformance", "host_firewall", "supply_chain"
+]
+ReadinessMode = Literal["report_only", "enforced"]
+ReadinessState = Literal["blocked", "eligible"]
+ReadinessSourceKind = Literal["manual_upload", "command_generated"]
+READINESS_CHECK_IDS = (
+    "build_manifest", "compose_isolation", "k8s_conformance", "host_firewall", "supply_chain"
+)
+_HASH_RE = r"^(?:sha256:)?[0-9a-f]{64}$"
+_COMMIT_RE = r"^(?:[0-9a-f]{40})?$"
+
+
+class ReadinessCheck(Contract):
+    """One immutable engineering or manual readiness observation.
+
+    Command-generated observations are append-only evidence. They are never a
+    legal receipt and cannot be changed into a passing result by the UI.
+    """
+
+    status: Literal[
+        "unknown", "pending", "pass", "fail", "expired", "stale", "revoked", "not_applicable"
+    ] = "pending"
+    artifact_ids: list[str] = Field(default_factory=list)
+    source_kind: ReadinessSourceKind = "command_generated"
+    source_command: str = ""
+    environment: dict[str, str] = Field(default_factory=dict)
+    generated_at: str = Field(min_length=1)
+    valid_until: str | None = None
+    redaction_profile: str = "synthetic-v1"
+    reason: str = ""
+
+
+class ReadinessReport(Contract):
+    """The fixed five-check report shared by CLI, API and formal intake UI."""
+
+    mode: ReadinessMode = "report_only"
+    state: ReadinessState = "blocked"
+    source_commit: str = Field(default="", pattern=_COMMIT_RE)
+    build_manifest_hash: str = Field(default="", pattern=r"^(?:|(?:sha256:)?[0-9a-f]{64})$")
+    request_hash: str = Field(default="", pattern=r"^(?:|(?:sha256:)?[0-9a-f]{64})$")
+    checks: dict[ReadinessCheckId, ReadinessCheck]
+    generated_at: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def fixed_checks_and_state(self):
+        if set(self.checks) != set(READINESS_CHECK_IDS):
+            raise ValueError("readiness checks must contain exactly the five fixed check ids")
+        required = ("build_manifest", "compose_isolation", "host_firewall", "supply_chain")
+        computed = all(self.checks[name].status == "pass" for name in required)
+        if self.state == "eligible" and not computed:
+            raise ValueError("eligible readiness requires build, compose, host firewall, and supply chain")
+        if self.state == "blocked" and computed:
+            raise ValueError("blocked readiness cannot contain all required checks as pass")
+        return self
 ReleaseTuple = dict[str, str]
 
 
@@ -629,6 +685,11 @@ class EvidenceArtifact(Contract):
     created_at: str = Field(min_length=1)
     registered_by: str = Field(min_length=1)
     storage_ref: str = Field(min_length=1)
+    source_kind: ReadinessSourceKind = "manual_upload"
+    source_command: str = ""
+    environment: dict[str, str] = Field(default_factory=dict)
+    valid_until: str | None = None
+    redaction_profile: str = "manual"
 
 
 class GateReceiptInput(Contract):
@@ -834,6 +895,7 @@ class GateDecision(Contract):
     approval_eligible: bool = False
     dispatch_allowed: bool = False
     evaluated_at: str | None = None
+    readiness: ReadinessReport | None = None
 
 
 class IsolationReceipt(Contract):
