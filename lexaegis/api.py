@@ -147,6 +147,11 @@ class V3GradeAssessmentInput(Input):
     legal_review_id: str | None = Field(default=None, min_length=1, max_length=200)
 
 
+class V3L3RoleInput(Input):
+    request_hash: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
+    organization_role: Literal["legal_partner", "data_protection_officer"]
+
+
 class ReviewIssueInput(Input):
     request_hash: str
     idempotency_key: str = Field(min_length=8, max_length=200)
@@ -1378,6 +1383,20 @@ def create_app(data_dir=None, password=None, build_manifest=None):
             assessment = v3_grade_guard.record(repo, task, case, grade=body.grade,
                 profile_id=profile_id, legal_review_id=review_id, actor=identity)
             return {key: value for key, value in assessment.items() if key != "signature"}
+
+    @app.post("/api/v1/tasks/{task_id}/v3-l3-role-action")
+    def v3_l3_role_action(task_id: str, body: V3L3RoleInput, request: Request):
+        expected = "legal_reviewer" if body.organization_role == "legal_partner" else "approver"
+        identity = require_exact_role(request, expected)
+        from . import v3_l3_approval
+        with store.transaction() as repo:
+            task = repo.get(task_id, "task")
+            case = service.assert_current(repo, task)
+            if not release_service.required(task) or task.get("request_hash") != body.request_hash:
+                raise service.DomainError("L3 角色确认只适用于当前生产正式云端请求")
+            action = v3_l3_approval.record(repo, task, case, organization_role=body.organization_role,
+                                           actor=identity)
+            return {key: value for key, value in action.items() if key != "signature"}
 
     @app.post("/api/v1/tasks/{task_id}/review-draft")
     def review_draft(task_id: str, request: Request):

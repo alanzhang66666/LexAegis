@@ -202,8 +202,8 @@ def record(repo, task, case, *, grade, profile_id, legal_review_id, actor):
     return row
 
 
-def require_current(repo, task, case):
-    """Enforce an extra gate; never replaces G0-G10 or an authorized grant."""
+def validated_assessment(repo, task, case):
+    """Revalidate a persisted assessment and its signed policy dependencies."""
     _current_request(task, case)
     ident = task.get("v3_grade_assessment_id")
     if not ident:
@@ -228,6 +228,13 @@ def require_current(repo, task, case):
             or assessment.get("reviewer_state_hash") != _reviewer_state(reviewer)
             or review.get("reviewer_user_id") != assessment.get("reviewer_user_id")):
         raise ValueError("V3 等级评估依赖已变化")
+    return assessment, config
+
+
+def require_current(repo, task, case):
+    """Enforce an extra gate; never replaces G0-G10 or an authorized grant."""
+    assessment, _config = validated_assessment(repo, task, case)
+    grade = assessment.get("grade")
     if grade in {"L4", "UNKNOWN"}:
         raise ValueError("V3 L4 或未知等级禁止外发")
     if grade == "L3":

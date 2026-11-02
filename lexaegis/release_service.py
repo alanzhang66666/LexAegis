@@ -111,6 +111,18 @@ def _with_v3_grade_status(repo, task, case, result):
                                     "notice": "附加等级检查已满足，仍须通过原有正式门禁和一次性许可。"}
     except (ValueError, TypeError, KeyError) as exc:
         result["v3_grade_guard"] = {"state": "blocked", "reason": str(exc)}
+        try:
+            assessment, _config = v3_grade_guard.validated_assessment(repo, task, case)
+            if assessment.get("grade") == "L3":
+                from . import v3_l3_approval
+                result["v3_grade_guard"]["grade"] = "L3"
+                try:
+                    result["v3_grade_guard"]["l3_roles"] = v3_l3_approval.status(repo, task, case)
+                except (ValueError, TypeError, KeyError) as detail:
+                    result["v3_grade_guard"]["l3_roles"] = {"state":"unconfigured", "reason":str(detail),
+                                                               "authorized_to_send":False}
+        except (ValueError, TypeError, KeyError):
+            pass
         result["state"] = "blocked"
         result["reason"] = str(exc)
         result["auto_policy_candidate"] = False

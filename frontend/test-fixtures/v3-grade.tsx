@@ -12,12 +12,12 @@ function Fixture() {
     version:1,risk:{disposition:"allowed",system_readiness:"ready",completion:"complete",blockers:[],findings:[],attacks:[],gates:[]},
     review_status:params.get("unreviewed") ? "pending" : "cleared",
     legal_review:params.get("unreviewed") ? null : {id:"synthetic-review"},
-    product_release:params.get("no-guard") ? {} : {v3_grade_guard:{state:"blocked"}},
+    product_release:params.get("no-guard") ? {} : {v3_grade_guard:params.get("l3") ? {state:"blocked",grade:"L3",l3_roles:{state:params.get("unconfigured") ? "unconfigured" : "pending_roles",legal_partner:false,data_protection_officer:false,reason:"模拟未配置",authorized_to_send:false}} : {state:"blocked"}},
     ...(params.get("old") ? {v3_grade_assessment_id:"old-grade",v3_grade_assessment_request_hash:"b".repeat(64)} : {})});
   const [calls,setCalls] = useState<any[]>([]);
   const request = async (path:string,method?:string,body?:any) => {
     setCalls(old=>[...old,{path,method,body}]);
-    if (params.get("error") && path.endsWith("v3-grade-assessment")) throw new Error("模拟拒绝");
+    if (params.get("error") && (path.endsWith("v3-grade-assessment") || path.endsWith("v3-l3-role-action"))) throw new Error("模拟拒绝");
     if (params.get("check-error") && path.endsWith("formal-release/check")) throw new Error("模拟检查失败");
     return {id:"synthetic-grade"};
   };
