@@ -62,7 +62,7 @@ export function V3GradeControl({task, role, runtimeProfile, busy, request, onRef
         <option value="L0">L0 - 公开内容</option>
         <option value="L1">L1 - 常规确认</option>
         <option value="L2">L2 - 具名专业复核</option>
-        <option value="L3">L3 - 双重授权待完成</option>
+        <option value="L3">L3 - 需双人角色及法域评估</option>
         <option value="L4">L4 - 禁止外发</option>
         <option value="UNKNOWN">未知 - 禁止外发</option>
       </select>{" "}

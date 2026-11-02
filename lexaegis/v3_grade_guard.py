@@ -238,7 +238,7 @@ def require_current(repo, task, case):
     if grade in {"L4", "UNKNOWN"}:
         raise ValueError("V3 L4 或未知等级禁止外发")
     if grade == "L3":
-        raise ValueError("V3 L3 尚缺组织角色双重授权，禁止外发")
+        raise ValueError("V3 L3 需要组织角色、法域及 PIA/CTIA 核验，当前禁止外发")
     if grade == "L0":
         raise ValueError("V3 L0 尚缺公开内容证明，禁止自动外发")
     if grade not in {"L1", "L2"}:
