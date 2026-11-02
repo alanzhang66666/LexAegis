@@ -6,6 +6,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Header
 from pydantic import BaseModel
 from .cloud import DualSlotProvider, cloud_endpoint_allowed, wire_contract_error
+from . import wire_bytes
 from .contracts import (ApprovedRequest, FormalReleasePolicy, FrozenFormalRequest,
                         OneTimeDispatchGrant, ReleaseBuildManifest)
 from .formal_release import FIRST_RELEASE_TUPLE, FormalReleaseError, complete_gateway_claim, gateway_claim
@@ -169,6 +170,14 @@ def create_gateway(data_dir=None, secret=None, provider=None, build_manifest=Non
                         raise HTTPException(403, "Standby slot is outside the signed formal policy scope")
                 if not slots.get("primary") or slots["primary"].get("target") != request["target"]:
                     raise HTTPException(403, "Formal request target must match its primary slot")
+        binding = None
+        if startup_profile == "production" and request["transport"] == "cloud":
+            try:
+                binding = wire_bytes.require_binding(request, approval.get("wire_binding"))
+            except (ValueError, TypeError) as error:
+                raise HTTPException(403, str(error)) from error
+            if getattr(provider, "supports_wire_binding", False) is not True:
+                raise HTTPException(403, "Provider does not support approved HTTP wire bytes")
         with store.transaction() as repo:
             try:
                 old = repo.get(request["request_id"], "send")
@@ -186,14 +195,23 @@ def create_gateway(data_dir=None, secret=None, provider=None, build_manifest=Non
                                                          app.state.build_manifest)
             record = {"id": request["request_id"], "request_hash": digest(request), "status": "sending",
                       "at": now(), "result": None, "attempts": [], "authorized_recipients": [],
-                      "formal_claim_id": formal_claim["id"] if formal_claim else None}
+                      "formal_claim_id": formal_claim["id"] if formal_claim else None,
+                      "approved_wire_binding": binding}
             repo.put("send", record)
 
+        persisted_transport_receipts = set()
+
         def persist_attempt(attempts, authorized):
+            if binding is not None:
+                for attempt in attempts:
+                    attempt["approved_wire_body_sha256"] = wire_bytes.validate_attempt(binding, attempt)
             record["attempts"] = attempts
             record["authorized_recipients"] = authorized
             with store.transaction() as repo:
                 repo.put("send", record)
+            for attempt in attempts:
+                if attempt.get("attempted_wire_body_sha256"):
+                    persisted_transport_receipts.add((attempt.get("id"), attempt["attempted_wire_body_sha256"]))
 
         try:
             if request["transport"] == "mock":
@@ -205,6 +223,21 @@ def create_gateway(data_dir=None, secret=None, provider=None, build_manifest=Non
             elif hasattr(provider, "dispatch"):
                 outcome = provider.dispatch(request["target"], request["body"], dual_slot=dual_slot,
                                            persist_attempt=persist_attempt)
+                if binding is not None:
+                    # A provider claiming support must supply the persisted transport receipt.
+                    # Missing receipts cannot become a successful formal send.
+                    attempts = outcome.ledger_fields().get("attempts") or []
+                    if (outcome.status == "complete" and not any(item.get("attempted_wire_body_sha256")
+                            and item.get("slot") == outcome.selected_slot for item in attempts)):
+                        raise ValueError("complete provider result has no selected-slot transport receipt")
+                    if not attempts or any(not item.get("attempted_wire_body_sha256") for item in attempts
+                                           if item.get("transmission_state") != "not_left_local"):
+                        raise ValueError("provider did not return transport byte receipts")
+                    if any(item.get("attempted_wire_body_sha256") and
+                           (item.get("id"), item["attempted_wire_body_sha256"]) not in persisted_transport_receipts
+                           for item in attempts):
+                        raise ValueError("transport receipt was not persisted before provider result")
+                    persist_attempt(attempts, outcome.ledger_fields().get("authorized_recipients") or [])
                 record.update(outcome.ledger_fields())
                 if outcome.status == "complete":
                     record.update(status="complete", result=outcome.result)

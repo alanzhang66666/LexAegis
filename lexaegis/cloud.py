@@ -8,6 +8,7 @@ import httpx
 
 from .d_path import D_PATH_HOST, d_path_active, d_path_flag
 from .util import digest, now, uid
+from . import wire_bytes
 
 DEFAULT_CLOUD_HOSTS = "api.deepseek.com,dashscope.aliyuncs.com,dashscope-intl.aliyuncs.com,api.openai.com"
 PRIMARY_HOST = "api.deepseek.com"
@@ -148,15 +149,7 @@ def _http_reason(status):
 
 
 def _slot_body(body, slot):
-    clean = {key: body[key] for key in _BODY_KEYS if key in body}
-    clean["model"] = slot["model"]
-    clean["temperature"] = 0
-    clean["response_format"] = {"type": "json_object"}
-    clean["stream"] = True
-    if slot.get("host") == PRIMARY_HOST or "deepseek" in (slot.get("host") or ""):
-        clean["thinking"] = {"type": "disabled"}
-    clean.pop("enable_thinking", None)
-    return clean
+    return wire_bytes.provider_body(body, slot)
 
 
 def _delta_parts(event):
@@ -176,11 +169,16 @@ _CONNECT_FAILURES = (httpx.ConnectError, httpx.ConnectTimeout) + (
 )
 
 
-def assemble_chat_completion(target, body, api_key, *, client=None, timeout=90):
+def assemble_chat_completion(target, body, api_key, *, client=None, timeout=90,
+                             expected_wire_body_sha256=None, on_wire_ready=None):
     if not api_key:
         raise PreGenerationError("unconfigured", left_local=False)
-    payload = _slot_body(body, {"host": urlparse(target).hostname or "", "model": body.get("model") or PRIMARY_MODEL})
-    headers = {"Authorization": f"Bearer {api_key}", "Accept": "text/event-stream"}
+    model = body.get("model") or PRIMARY_MODEL
+    content = wire_bytes.serialize_body(target, body, model)
+    receipt = wire_bytes.receipt_for_content(target, model, content)
+    if expected_wire_body_sha256 is not None and receipt["body_sha256"] != expected_wire_body_sha256:
+        raise PreGenerationError("wire_body_mismatch", left_local=False)
+    headers = {"Authorization": f"Bearer {api_key}", "Accept": "text/event-stream", "Content-Type": "application/json"}
     close = False
     if client is None:
         client = httpx.Client(timeout=timeout, follow_redirects=False, trust_env=False)
@@ -191,7 +189,9 @@ def assemble_chat_completion(target, body, api_key, *, client=None, timeout=90):
     usage = None
     try:
         try:
-            with client.stream("POST", target, json=payload, headers=headers) as response:
+            if on_wire_ready:
+                on_wire_ready(receipt)
+            with client.stream("POST", target, content=content, headers=headers) as response:
                 got_response = True
                 if response.status_code >= 400:
                     raise PreGenerationError(_http_reason(response.status_code), left_local=True)
@@ -342,12 +342,16 @@ def _recipient(slot, name):
 def _begin_attempt(slot, body, name):
     request_body = {key: (body or {}).get(key) for key in ("model", "messages", "temperature", "response_format") if key in (body or {})}
     request_body["model"] = slot.get("model") or request_body.get("model") or PRIMARY_MODEL
+    wire = wire_bytes.body_receipt(slot.get("target") or "", request_body, request_body["model"])
     return {
         "id": uid("attempt"),
         "slot": name,
         "target": slot.get("target") or "",
         "model": slot.get("model") or request_body["model"],
         "request_digest": digest(request_body),
+        "serializer": wire_bytes.SERIALIZER,
+        "prepared_wire_body_sha256": wire["body_sha256"],
+        "wire_body_size": wire["body_size"],
         "started_at": now(),
         "finished_at": None,
         "generation_state": "not_started",
@@ -374,6 +378,8 @@ def _finish_attempt(attempt, outcome):
 
 
 class DualSlotProvider:
+    supports_wire_binding = True
+
     def __init__(self, primary_key=None, standby_key=None, client=None):
         self.primary_key = primary_key if primary_key is not None else primary_key_from_env()
         self.standby_key = standby_key if standby_key is not None else standby_key_from_env()
@@ -434,7 +440,15 @@ class DualSlotProvider:
             attempts.append(attempt)
             if persist_attempt:
                 persist_attempt(snapshot(), authorized)
-            outcome = self._attempt(slot, body, key, name)
+            def wire_ready(receipt):
+                if receipt["body_sha256"] != attempt["prepared_wire_body_sha256"]:
+                    raise PreGenerationError("wire_body_mismatch", left_local=False)
+                attempt["attempted_wire_body_sha256"] = receipt["body_sha256"]
+                attempt["transport_prepared_at"] = now()
+                if persist_attempt:
+                    persist_attempt(snapshot(), authorized)
+            outcome = self._attempt(slot, body, key, name,
+                expected_wire_body_sha256=attempt["prepared_wire_body_sha256"], on_wire_ready=wire_ready)
             _finish_attempt(attempt, outcome)
             if persist_attempt:
                 persist_attempt(snapshot(), authorized)
@@ -444,7 +458,7 @@ class DualSlotProvider:
 
         first = run(primary, self.primary_key, "primary")
         first.duration_ms = _elapsed_ms(started_at)
-        if first.status == "complete":
+        if first.status == "complete" or first.error == "wire_body_mismatch":
             return first
         if first.generation_started or first.disclosure_state != "undisclosed":
             first.status = "unknown"
@@ -462,12 +476,13 @@ class DualSlotProvider:
             second.error = second.error or "调用后结果不明；禁止自动重发，请核对服务商记录"
         return second
 
-    def _attempt(self, slot, body, key, name):
+    def _attempt(self, slot, body, key, name, *, expected_wire_body_sha256=None, on_wire_ready=None):
         target = slot.get("target") or ""
         request_body = dict(body or {})
         request_body["model"] = slot.get("model") or request_body.get("model") or PRIMARY_MODEL
         try:
-            result, started, usage = assemble_chat_completion(target, request_body, key, client=self._client)
+            result, started, usage = assemble_chat_completion(target, request_body, key, client=self._client,
+                expected_wire_body_sha256=expected_wire_body_sha256, on_wire_ready=on_wire_ready)
             if not isinstance(result, dict):
                 return DispatchOutcome(
                     "unknown", error="invalid_json", selected_slot=name, generation_started=True, usage=usage,
