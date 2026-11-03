@@ -1,6 +1,15 @@
 """V2.2 P8: DomainAcceptanceSuite runner — package-level baselines."""
+import json
 from lexaegis import acceptance_suite
 from lexaegis.domain_packages import _package_content_hash
+
+
+def test_suite_cli_accepts_directory_path(env, capsys):
+    assert acceptance_suite.main(["--data", str(env["root"]), "--cause", "labor"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["asserted"] == 10
+    assert report["asserted_failed"] == []
+    assert report["manual_gate"] == ["g10_real_send"]
 
 
 def test_suite_passes_on_seeded_labor(env):

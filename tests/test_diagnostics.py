@@ -19,6 +19,21 @@ from lexaegis.storage import Store
 from .test_redteam_workflow import frozen_protocol, KINDS
 
 
+@pytest.fixture(autouse=True)
+def diagnostic_data_root(tmp_path, monkeypatch):
+    """Doctor checks a started runtime's writable data root, not test order."""
+    root = tmp_path / "doctor-app"
+    root.mkdir()
+    monkeypatch.setenv("LEX_DATA_DIR", str(root))
+
+
+def test_doctor_rejects_missing_required_data_root(tmp_path, monkeypatch):
+    monkeypatch.setenv("LEX_DATA_DIR", str(tmp_path / "missing-app"))
+    report = doctor_report()
+    assert report["ok"] is False
+    assert report["checks"]["data_directory"]["ok"] is False
+
+
 def test_resolve_redteam_url_native_default(monkeypatch):
     monkeypatch.delenv("LEX_REDTEAM_URL", raising=False)
     monkeypatch.delenv("LEX_ISOLATED", raising=False)

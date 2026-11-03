@@ -9,6 +9,7 @@ by human acceptance, and are NEVER silently marked passed here.
 CLI: ``python -m lexaegis.acceptance_suite --data <app data dir> --cause labor``
 """
 import argparse
+from pathlib import Path
 import re
 import sys
 
@@ -191,11 +192,11 @@ def _manifest_integrity(repo, manifests):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="DomainAcceptanceSuite runner")
-    parser.add_argument("--data", required=True, help="app data dir (contains app.sqlite)")
+    parser.add_argument("--data", required=True, type=Path, help="app data dir (contains app.sqlite)")
     parser.add_argument("--cause", default="labor")
     args = parser.parse_args(argv)
     from .storage import Store
-    store = Store(f"{args.data}/app.sqlite")
+    store = Store(args.data / "app.sqlite")
     with store.read() as repo:
         report = run_suite(repo, args.cause)
     import json
