@@ -2,7 +2,25 @@
 
 本目录只放**声明**，不放权重。`models/` 下的 GGUF 等权重要被 gitignore。
 
-当前本机边侧只有一个生产模型：**MiniCPM5-2B Q4_K_M**（[openbmb/MiniCPM5-2B](https://huggingface.co/openbmb/MiniCPM5-2B)，权重取 [MiniCPM5-2B-GGUF](https://huggingface.co/openbmb/MiniCPM5-2B-GGUF)）。生产调用点仍只有事实提取，不生成 `fact_summary`，也不用模型改写 `local_text`。仓库不随代码分发权重。下文是部署方案，**不是本机已安装或已跑通的结论**。
+当前本机边侧只有一个生产模型：**MiniCPM5-2B Q4_K_M**（[openbmb/MiniCPM5-2B](https://huggingface.co/openbmb/MiniCPM5-2B)，权重取 [MiniCPM5-2B-GGUF](https://huggingface.co/openbmb/MiniCPM5-2B-GGUF)）。生产调用点仍只有事实提取，不生成 `fact_summary`，也不用模型改写 `local_text`。Git 源码不包含权重；同一份权重另作为本仓库 Releases 附件分发。下文是部署方案，**不是本机已安装或已跑通的结论**。
+
+## 下载固定版本权重
+
+[模型附件与校验文件](https://github.com/alanzhang66666/LexAegis/releases/tag/model-minicpm5-2b-q4km-20261103)提供 `MiniCPM5-2B-Q4_K_M.gguf`，大小为 **1,561,318,368 字节**。它与 OpenBMB 官方 GGUF 仓库版本 `2079a22f3beaa4e306449978533478fe0522f4b3` 的文件逐字节一致，没有本项目的微调或权重修改。该附件是模型镜像，使用上游 Apache-2.0 许可证；不是 LexAegis 产品正式发行或模型质量验收。
+
+从源码根目录使用 GitHub CLI 下载，已有同名文件时 CLI 会拒绝覆盖：
+
+```powershell
+New-Item -ItemType Directory -Path models -Force | Out-Null
+gh release download model-minicpm5-2b-q4km-20261103 --repo alanzhang66666/LexAegis --pattern MiniCPM5-2B-Q4_K_M.gguf --dir models
+if ($LASTEXITCODE -ne 0) { throw '模型下载失败；请检查已有文件或重试下载。' }
+$expected = 'ec2d5801640099e97d8d7e8003ad4d81f336e757811f03a26173dddf386602fd'
+if ((Get-FileHash -LiteralPath models/MiniCPM5-2B-Q4_K_M.gguf -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected) {
+    throw '模型校验失败，禁止使用该文件。'
+}
+```
+
+也可直接在附件页面下载。默认 `git clone` 和 GitHub 的源码 ZIP 均不包含该 1.56 GB 文件。完整来源、固定下载地址和哈希见 [分发清单](MiniCPM5-2B-Q4_K_M.provenance.json)，许可证见 [LICENSE-MiniCPM5-2B.txt](LICENSE-MiniCPM5-2B.txt)。
 
 ## 声明
 
