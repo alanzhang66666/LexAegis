@@ -1,4 +1,6 @@
-# 阿里云试用部署：PAI-DSW + Qwen3.5-9B
+# 版本 A · 阿里云：PAI-DSW 试用 + ECS GPU 部署（Qwen3.5-9B）
+
+> 三个版本的对比和怎么选见 [deploy/README.md](../README.md)：A（本文）、B [腾讯 Cloud Studio](../cloudstudio/README.md)、C [CPU](../cpu/README.md)。
 
 **结论**：试用阶段在 PAI-DSW 的免费 GPU 实例（A10 24G）上原生运行工作台，边侧模型用 **Qwen3.5-9B Q8_0**（约 10GB），只放合成材料。确认可用后，再用 `deploy.sh --gpu` 在阿里云 ECS 上做 Compose 隔离部署。
 
@@ -19,6 +21,8 @@
 | `deploy.sh` | 阿里云 ECS 一键部署：装 Docker / NVIDIA 运行时、生成 `.env` 和密钥、生成未验证发布清单、准备数据目录、构建、启动、隔离自检 |
 | `compose.gpu.yaml` | 叠加在 `compose.yaml` 上：边侧模型改用 llama.cpp CUDA 镜像并占用一块 GPU，默认加载 Qwen3.5-9B |
 
+两个 `dsw_*.sh` 脚本放在仓库里运行时直接用当前检出的代码；单独拿到脚本时才会克隆仓库（`LEXAEGIS_REF=<分支>` 指定分支，代码未合并到默认分支前必填）。
+
 ## 3. 试用：PAI-DSW
 
 ### 3.1 资源与费用
@@ -33,10 +37,10 @@
 1. **领额度、开 PAI**：在免费试用页领取“交互式建模 PAI-DSW”；进入 PAI 控制台，选地域（如华东1 杭州），开通并创建默认工作空间。
 2. **建实例**：交互式建模（DSW）→ 新建实例。资源类型“公共资源”，规格选标明可用免费额度的 A10，镜像选官方带 CUDA 开发工具的 GPU 镜像（PyTorch 或 ModelScope）。
 3. **打开终端**：实例运行后点“打开”，在 JupyterLab 的 Launcher 里打开 Terminal，`nvidia-smi` 确认能看到显卡，`nvcc --version` 确认有 CUDA 编译器。
-4. **测模型**：把 `dsw_edge_test.sh` 和 `dsw_workbench.sh` 上传到 `/mnt/workspace`，执行：
+4. **测模型**：在终端里 `git clone` 本仓库（未合并时加 `-b <分支>`）并进入，执行：
 
    ```bash
-   bash dsw_edge_test.sh
+   bash deploy/aliyun/dsw_edge_test.sh
    ```
 
    首次约半小时以上（编译 llama.cpp、下载约 10GB 权重、准备 Python 环境）。可用 `HF_ENDPOINT`、`PIP_INDEX_URL` 换下载源（默认 hf-mirror.com 和阿里云 PyPI 镜像）。
@@ -45,28 +49,33 @@
 6. **启动工作台**：
 
    ```bash
-   bash dsw_workbench.sh          # 停止：bash dsw_workbench.sh stop
+   bash deploy/aliyun/dsw_workbench.sh          # 停止：bash deploy/aliyun/dsw_workbench.sh stop
    ```
 
-   首次会用 nodeenv 安装 Node 22（npmmirror 镜像）并构建前端。登录用户名 `admin`，口令在 `/mnt/workspace/workbench-password.txt`。看内置四条演示流程用 `PROFILE=demo bash dsw_workbench.sh`。
+   首次会用 nodeenv 安装 Node 22（npmmirror 镜像）并构建前端。登录用户名 `admin`，口令在 `/mnt/workspace/workbench-password.txt`。看内置四条演示流程用 `PROFILE=demo bash deploy/aliyun/dsw_workbench.sh`。
 
-### 3.3 访问方式：只能用 SSH 隧道
+### 3.3 访问方式
 
-工作台在代码里只接受本机地址：`TrustedHostMiddleware` 只放行 `127.0.0.1` / `localhost`，写操作（含登录）还会校验 `Origin`。实测结果：
+工作台默认只接受本机地址：`TrustedHostMiddleware` 只放行 `127.0.0.1` / `localhost`，写操作（含登录）还会校验 `Origin`。DSW 网关链接因此登录不了。两种访问方式：
 
-| 访问方式 | 结果 |
-| --- | --- |
-| 公网 IP（NAT 网关 + EIP） | `Invalid host header` |
-| DSW 网关链接 | 登录被拒：“不允许跨站请求” |
-| SSH 隧道到本机地址 | 正常 |
-
-做法：在 DSW 控制台按“远程连接 → ProxyClient 方式”配好 SSH（不需要 NAT 网关，无额外费用），然后在自己电脑上：
+**A. SSH 隧道（默认，不改配置）**。在 DSW 控制台按“远程连接 → ProxyClient 方式”配好 SSH（不需要 NAT 网关，无额外费用），然后在自己电脑上：
 
 ```bash
 ssh -N -L 38765:127.0.0.1:38765 <DSW 的 SSH 主机名>
 ```
 
-浏览器打开 `http://127.0.0.1:38765`。本方案不修改这两道检查。
+浏览器打开 `http://127.0.0.1:38765`。
+
+**B. 公网链接 `http://<EIP>`（`LEX_PUBLIC_ORIGIN`，默认关闭）**。设置后工作台额外接受**这一个**地址（协议、主机、端口都要一致），其他地址仍被拒：
+
+1. 在实例的“服务访问与端口配置”里添加端口 `38765` 并勾选公网访问，按提示配置 NAT 网关、EIP 和安全组（NAT 网关和 EIP 单独计费，实例停止后仍计费，用完要删除）。
+2. 地址要和浏览器地址栏完全一致（端口不是 80 时要带端口）：
+
+   ```bash
+   PUBLIC_ORIGIN=http://<EIP>[:端口] bash deploy/aliyun/dsw_workbench.sh
+   ```
+
+这是明文 HTTP，登录口令和会话不加密；只放合成材料，口令不要与其他账号相同。
 
 ### 3.4 验收
 
@@ -106,7 +115,7 @@ ssh -N -L 38765:127.0.0.1:38765 root@<ECS 公网 IP>    # 在自己电脑上
 
 - 原生方式启动 `production`，用假的模型服务跑通“新建案件 → 上传 Word → 解析 → 自动抽取 → 事实写回”；`integration` 新建案件返回 409
 - `dsw_edge_test.sh` 的计时、120 秒超时判定和多模型汇总表（假模型服务）
-- `dsw_workbench.sh` 启停；Host / Origin 三种访问方式的结果
+- `dsw_workbench.sh` 启停；默认配置下公网 IP、DSW 网关、SSH 隧道三种访问方式的结果；`PUBLIC_ORIGIN` 打开后，只有配置的那个 Host / Origin 能登录、新建案件，其他仍被拒（`tests/test_public_origin.py` 15 个单元测试）
 - `deploy.sh --prepare-only` 生成的 `.env` 被 Compose 正确解析（GPU 设备、CUDA 镜像、模型路径）；所有脚本通过 `bash -n` 和 shellcheck
 
 未验证：
@@ -114,4 +123,4 @@ ssh -N -L 38765:127.0.0.1:38765 root@<ECS 公网 IP>    # 在自己电脑上
 - Qwen3.5-9B 在 A10 / T4 上的速度、抽取质量，以及 `enable_thinking=false` 是否生效
 - DSW 镜像里编译 llama.cpp（CUDA）、nodeenv 安装 Node 22、uv 安装 Python 3.12
 - `deploy.sh` 的 Docker 构建、启动和 `check-isolation` 全流程（沙箱无法拉取 Docker Hub / ghcr.io 镜像）
-- ProxyClient SSH 的具体配置步骤
+- ProxyClient SSH 的具体配置步骤；DSW 端口映射到公网的控制台操作

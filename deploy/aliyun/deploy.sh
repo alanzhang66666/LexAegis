@@ -8,6 +8,7 @@
 # 用法（在仓库根目录，以 root 或 sudo 运行）：
 #   sudo bash deploy/aliyun/deploy.sh                # 无边侧模型（CPU 即可）
 #   sudo bash deploy/aliyun/deploy.sh --gpu          # 边侧 Qwen3.5-9B（Q8_0）上 GPU，需 ≥16G 显存
+#   sudo bash deploy/aliyun/deploy.sh --cpu          # 边侧 MiniCPM5-2B（Q4_K_M）用 CPU 跑，无需 GPU（见 deploy/cpu/README.md）
 #   sudo bash deploy/aliyun/deploy.sh --prepare-only # 只生成 .env/清单/目录，不动 Docker
 #   sudo bash deploy/aliyun/deploy.sh --docker-only  # 只装 Docker（+ --gpu 时装 NVIDIA 运行时），便于先 docker load 镜像
 #
@@ -18,32 +19,44 @@
 #   DOCKER_MIRROR=https://xxxx.mirror.aliyuncs.com   阿里云 ACR 镜像加速器地址（内地地域建议设置）
 #   PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/   宿主机 pip 镜像（内地地域建议设置）
 #   HF_ENDPOINT=https://hf-mirror.com     --gpu 时下载权重用的 HuggingFace 端点
-#   LEX_EDGE_GGUF_REPO / LEX_EDGE_GGUF_FILE   边侧权重，默认 unsloth/Qwen3.5-9B-GGUF / Qwen3.5-9B-Q8_0.gguf
+#   LEX_EDGE_GGUF_REPO / LEX_EDGE_GGUF_FILE   边侧权重；--gpu 默认 unsloth/Qwen3.5-9B-GGUF / Qwen3.5-9B-Q8_0.gguf，
+#                                             --cpu 默认 openbmb/MiniCPM5-2B-GGUF / MiniCPM5-2B-Q4_K_M.gguf
 #   LEX_EDGE_IMAGE=...                    --gpu 时 llama.cpp CUDA 镜像，默认 ghcr.io/ggml-org/llama.cpp:server-cuda
 set -euo pipefail
 
-GPU=0; PREPARE_ONLY=0; DOCKER_ONLY=0
+GPU=0; CPU=0; EDGE=0; PREPARE_ONLY=0; DOCKER_ONLY=0
 for arg in "$@"; do
   case "$arg" in
     --gpu) GPU=1 ;;
+    --cpu) CPU=1 ;;
     --prepare-only) PREPARE_ONLY=1 ;;
     --docker-only) DOCKER_ONLY=1 ;;
-    -h|--help) sed -n 2,22p "$0"; exit 0 ;;
+    -h|--help) sed -n 2,24p "$0"; exit 0 ;;
     *) echo "未知参数：$arg" >&2; exit 2 ;;
   esac
 done
+
+[ "$GPU" = 1 ] && [ "$CPU" = 1 ] && { echo "--gpu 和 --cpu 只能二选一" >&2; exit 2; }
+if [ "$GPU" = 1 ] || [ "$CPU" = 1 ]; then EDGE=1; fi
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO"
 PROFILE="${LEX_PROFILE:-production}"
 case "$PROFILE" in production|integration) ;; *) echo "LEX_PROFILE 只能是 production 或 integration（demo 请用 compose.demo.yaml）" >&2; exit 2 ;; esac
 DATA_ROOT="$REPO/.data/$PROFILE"
-GGUF_REPO="${LEX_EDGE_GGUF_REPO:-unsloth/Qwen3.5-9B-GGUF}"
-GGUF_FILE="${LEX_EDGE_GGUF_FILE:-Qwen3.5-9B-Q8_0.gguf}"
+if [ "$CPU" = 1 ]; then
+  GGUF_REPO="${LEX_EDGE_GGUF_REPO:-openbmb/MiniCPM5-2B-GGUF}"
+  GGUF_FILE="${LEX_EDGE_GGUF_FILE:-MiniCPM5-2B-Q4_K_M.gguf}"
+else
+  GGUF_REPO="${LEX_EDGE_GGUF_REPO:-unsloth/Qwen3.5-9B-GGUF}"
+  GGUF_FILE="${LEX_EDGE_GGUF_FILE:-Qwen3.5-9B-Q8_0.gguf}"
+fi
 GGUF="$REPO/models/$GGUF_FILE"
 EDGE_IMAGE="${LEX_EDGE_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-cuda}"
 if [ "$GPU" = 1 ]; then
   COMPOSE_FILE_VALUE="compose.yaml:deploy/aliyun/compose.gpu.yaml"; COMPOSE_PROFILES_VALUE="redteam,edge"
+elif [ "$CPU" = 1 ]; then
+  COMPOSE_FILE_VALUE="compose.yaml:deploy/cpu/compose.cpu.yaml"; COMPOSE_PROFILES_VALUE="redteam,edge"
 else
   COMPOSE_FILE_VALUE="compose.yaml"; COMPOSE_PROFILES_VALUE="redteam"
 fi
@@ -125,6 +138,19 @@ LEX_CLOUD_ALLOWED_HOSTS=${LEX_CLOUD_ALLOWED_HOSTS:-dashscope.aliyuncs.com}
 EOF
   if [ "$GPU" = 1 ]; then
     printf 'LEX_EDGE_MODEL=edge-small\nLEX_EDGE_IMAGE=%s\nLEX_EDGE_CTX_SIZE=32768\nLEX_EDGE_FLASH_ATTN=on\n' "$EDGE_IMAGE" >> .env
+  elif [ "$CPU" = 1 ]; then
+    # CPU 档：小模型 + 小分块 + 放宽等待上限（原代码写死 120 秒、每块 1.4 万字，CPU 上会超时）。数值是估计值，先用 bench_edge.py 实测再调。
+    {
+      echo "LEX_EDGE_MODEL=edge-small"
+      echo "LEX_EDGE_IMAGE=${LEX_EDGE_IMAGE:-ghcr.io/ggml-org/llama.cpp:server}"
+      echo "LEX_EDGE_CTX_SIZE=8192"
+      echo "LEX_EDGE_THREADS=$(nproc)"
+      echo "LEX_EDGE_REQUEST_TIMEOUT=900"
+      echo "LEX_EDGE_EXTRACT_CHUNK_CHARS=3000"
+      echo "LEX_EDGE_EXTRACT_CHUNK_BLOCKS=4"
+      echo "LEX_EDGE_EXTRACT_MAX_TOKENS=2048"
+      echo "LEX_EDGE_EXTRACT_MAX_FACTS=20"
+    } >> .env
   fi
   echo "已生成 .env（权限 600）。登录口令见其中 LEX_LOCAL_PASSWORD。"
 fi
@@ -133,7 +159,7 @@ fi
 setenv() { if grep -q "^$1=" .env; then sed -i "s#^$1=.*#$1=$2#" .env; else echo "$1=$2" >> .env; fi; }
 setenv COMPOSE_FILE "$COMPOSE_FILE_VALUE"
 setenv COMPOSE_PROFILES "$COMPOSE_PROFILES_VALUE"
-[ "$GPU" = 1 ] && setenv LEX_EDGE_GGUF_FILE "$GGUF_FILE"
+[ "$EDGE" = 1 ] && setenv LEX_EDGE_GGUF_FILE "$GGUF_FILE"
 
 # ---------- 3. 发布清单 + 数据目录 ----------
 log "发布清单与数据目录"
@@ -154,9 +180,9 @@ if [ "$PREPARE_ONLY" = 1 ]; then log "--prepare-only：到此为止"; exit 0; fi
 
 install_docker
 
-# ---------- 5. 权重（仅 --gpu）----------
-if [ "$GPU" = 1 ] && [ ! -f "$GGUF" ]; then
-  log "下载 $GGUF_REPO / $GGUF_FILE（Q8_0 约 10GB）"
+# ---------- 5. 权重（--gpu / --cpu）----------
+if [ "$EDGE" = 1 ] && [ ! -f "$GGUF" ]; then
+  log "下载 $GGUF_REPO / $GGUF_FILE（GPU 档 Q8_0 约 10GB，CPU 档约 1.5GB）"
   .venv/bin/python -m pip install -q huggingface_hub
   .venv/bin/python - "$REPO/models" "$GGUF_REPO" "$GGUF_FILE" <<'PY' || die "权重下载失败：可手动放到 models/$GGUF_FILE 后重跑"
 import sys
@@ -182,7 +208,7 @@ log "启动"
 docker compose up -d --pull never --wait \
   || { docker compose ps -a; docker compose logs --no-color --tail 80; die "启动失败，日志见上"; }
 
-if [ "$GPU" = 1 ]; then
+if [ "$EDGE" = 1 ]; then
   log "等待边侧模型就绪"
   for _ in $(seq 1 60); do
     if docker compose logs edge-model 2>/dev/null | grep -qiE "server is listening|HTTP server listening"; then ok=1; break; fi

@@ -28,7 +28,27 @@ def expose_runtime_identity(root, build_manifest=None):
     return identity.public()
 
 
-def chunk_extract_blocks(blocks, max_chars=EXTRACT_CHUNK_CHARS, max_blocks=EXTRACT_CHUNK_BLOCKS):
+def _env_int(name, default, minimum, maximum):
+    raw = os.getenv(name)
+    try:
+        value = int(raw) if raw not in (None, "") else default
+    except ValueError:
+        return default
+    return max(minimum, min(maximum, value))
+
+
+def extract_chunk_chars():
+    """Max characters per extraction call. Default 14000; use smaller chunks on CPU-only hosts."""
+    return _env_int("LEX_EDGE_EXTRACT_CHUNK_CHARS", EXTRACT_CHUNK_CHARS, 500, 50000)
+
+
+def extract_chunk_blocks():
+    return _env_int("LEX_EDGE_EXTRACT_CHUNK_BLOCKS", EXTRACT_CHUNK_BLOCKS, 1, 50)
+
+
+def chunk_extract_blocks(blocks, max_chars=None, max_blocks=None):
+    max_chars = extract_chunk_chars() if max_chars is None else max_chars
+    max_blocks = extract_chunk_blocks() if max_blocks is None else max_blocks
     batches, current, size = [], [], 0
     for block in blocks:
         length = len((block or {}).get("text") or "")

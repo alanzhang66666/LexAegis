@@ -278,6 +278,32 @@ def assert_docx_payload(data: bytes) -> None:
         raise HTTPException(400, "文件不是有效的 Word DOCX")
 
 
+
+def public_origin():
+    """Opt-in extra address for the workbench, e.g. ``http://115.29.16.14``.
+
+    Unset (default) keeps the loopback-only Host and Origin checks unchanged.
+    When set, exactly one extra host and one extra browser Origin are accepted.
+    """
+    raw = (os.getenv("LEX_PUBLIC_ORIGIN") or "").strip()
+    if not raw:
+        return None
+    parsed = urlparse(raw)
+    try:
+        port = parsed.port
+    except ValueError as error:
+        raise ValueError(f"LEX_PUBLIC_ORIGIN 端口无效：{raw!r}") from error
+    if (parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username
+            or parsed.password or parsed.path not in ("", "/") or parsed.params
+            or parsed.query or parsed.fragment):
+        raise ValueError(f"LEX_PUBLIC_ORIGIN 只能是 http(s)://主机[:端口]，收到 {raw!r}")
+    host = parsed.hostname.lower()
+    default_port = 80 if parsed.scheme == "http" else 443
+    netloc = f"[{host}]" if ":" in host else host
+    if port is not None and port != default_port:
+        netloc += f":{port}"
+    return {"host": host, "origin": f"{parsed.scheme}://{netloc}"}
+
 def create_app(data_dir=None, password=None, build_manifest=None):
     explicit_password = password is not None
     root = Path(data_dir or app_dir()).resolve()
@@ -311,7 +337,11 @@ def create_app(data_dir=None, password=None, build_manifest=None):
     app.state.runtime_profile = startup_profile
     app.state.runtime_identity = startup_identity
     write_runtime_identity(root / "api-runtime-identity.json", app.state.runtime_identity)
-    app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "testserver", "api"])
+    extra_address = public_origin()
+    allowed_hosts = ["127.0.0.1", "localhost", "testserver", "api"]
+    if extra_address:
+        allowed_hosts.append(extra_address["host"])
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
 
     @app.middleware("http")
     async def guard(request: Request, call_next):
@@ -325,6 +355,8 @@ def create_app(data_dir=None, password=None, build_manifest=None):
                 allowed = {f"http://127.0.0.1:{api_port}", f"http://localhost:{api_port}",
                            "http://127.0.0.1:8765", "http://localhost:8765",
                            "http://127.0.0.1:5173", "http://localhost:5173", "http://testserver"}
+                if extra_address:
+                    allowed.add(extra_address["origin"])
                 if origin and origin not in allowed:
                     current_actor.reset(actor_token)
                     return JSONResponse({"detail": "不允许跨站请求"}, 403)

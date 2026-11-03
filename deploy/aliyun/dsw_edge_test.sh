@@ -10,6 +10,9 @@
 #   PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
 #   CTX=32768                               模型上下文（与项目默认一致）
 #   RUN_CPU=1                               另外用纯 CPU 再跑一遍做对比（9B 在 CPU 上大多会超时，默认不跑）
+#   LLAMA_SERVER=/path/llama-server         使用已有的 llama-server，跳过编译
+#   REQUIRE_GPU=1                           没有 GPU 或编不出 CUDA 版时直接报错，不退回 CPU（Cloud Studio 版用）
+#   LEXAEGIS_REF=<分支>                     单独拿到脚本时克隆哪个分支（脚本在仓库里运行时用当前检出，忽略此项）
 #   CPU_THREADS=4                           CPU 测试用几个线程（模拟 4 核服务器；默认 4）
 #   MODEL_REPO / MODEL_FILE                 换别的 GGUF 模型做对比，默认 unsloth/Qwen3.5-9B-GGUF / Qwen3.5-9B-Q8_0.gguf
 #     例：MODEL_REPO=openbmb/MiniCPM5-2B-GGUF MODEL_FILE=MiniCPM5-2B-Q4_K_M.gguf bash dsw_edge_test.sh
@@ -25,32 +28,46 @@ MODEL_REPO="${MODEL_REPO:-unsloth/Qwen3.5-9B-GGUF}"
 MODEL_FILE="${MODEL_FILE:-Qwen3.5-9B-Q8_0.gguf}"
 TAG="${MODEL_FILE%.gguf}"
 GGUF="$WORK/models/$MODEL_FILE"
-SERVER="$WORK/llama.cpp/build/bin/llama-server"
+SERVER="${LLAMA_SERVER:-$WORK/llama.cpp/build/bin/llama-server}"
 PORT=8080
 log() { printf '\n==> %s\n' "$*"; }
 die() { printf '\n[失败] %s\n' "$*" >&2; exit 1; }
+# 代码位置：脚本放在仓库里运行时直接用当前检出（推荐）；单独拿到脚本时才克隆（LEXAEGIS_REF 指定分支，仓库未合并时必填）
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$HERE/../../lexaegis/cli.py" ]; then LEXDIR="$(cd "$HERE/../.." && pwd)"; else LEXDIR="$WORK/LexAegis"; fi
 cd "$WORK"
 
 # ---------- 0. GPU ----------
 GPU=1
 if nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null; then :; else
+  [ "${REQUIRE_GPU:-0}" = 1 ] && die "没检测到 GPU（nvidia-smi 不可用），而 REQUIRE_GPU=1"
   echo "[注意] 没检测到 GPU，只做 CPU 测试"; GPU=0
 fi
 
 # ---------- 1. 代码 ----------
 log "下载代码"
-[ -d LexAegis ] || git clone --depth 1 https://github.com/alanzhang66666/LexAegis.git
+[ -d "$LEXDIR" ] || git clone --depth 1 ${LEXAEGIS_REF:+-b "$LEXAEGIS_REF"} https://github.com/alanzhang66666/LexAegis.git "$LEXDIR"
 [ -d llama.cpp ] || git clone --depth 1 https://github.com/ggml-org/llama.cpp.git
 
 # ---------- 2. 编译 llama-server ----------
+if [ -n "${LLAMA_SERVER:-}" ] && [ ! -x "$SERVER" ]; then die "LLAMA_SERVER=$SERVER 不存在或不可执行"; fi
 if [ ! -x "$SERVER" ]; then
   log "编译 llama-server（约 5–15 分钟）"
   command -v cmake >/dev/null || python3 -m pip install -q cmake
   [ -d /usr/local/cuda/bin ] && export PATH="/usr/local/cuda/bin:$PATH"
   CUDA_FLAG="-DGGML_CUDA=OFF"
   if [ "$GPU" = 1 ]; then
-    if command -v nvcc >/dev/null; then CUDA_FLAG="-DGGML_CUDA=ON"
-    else echo "[注意] 镜像里没有 nvcc，只能编译 CPU 版。请换带 CUDA 开发工具的官方 GPU 镜像后重跑"; GPU=0; fi
+    if command -v nvcc >/dev/null; then
+      CUDA_FLAG="-DGGML_CUDA=ON"
+      TOOLKIT=$(nvcc --version | grep -o 'release [0-9]*\.[0-9]*' | awk '{print $2}')
+      DRIVER_CUDA=$(nvidia-smi 2>/dev/null | grep -o 'CUDA Version: [0-9]*\.[0-9]*' | awk '{print $3}')
+      if [ -n "$TOOLKIT" ] && [ -n "$DRIVER_CUDA" ] && [ "$(printf '%s\n%s\n' "$TOOLKIT" "$DRIVER_CUDA" | sort -V | tail -1)" != "$DRIVER_CUDA" ]; then
+        echo "[注意] CUDA 工具包 $TOOLKIT 比驱动支持的 $DRIVER_CUDA 新：编出的程序可能因驱动太旧而无法使用 GPU；若启动时报驱动版本不足，请换一个 CUDA ≤ $DRIVER_CUDA 的镜像"
+      fi
+    else
+      [ "${REQUIRE_GPU:-0}" = 1 ] && die "没有 nvcc，编不出 CUDA 版 llama-server。可以：换带 CUDA 开发工具的镜像；或自己准备好 llama-server 后用 LLAMA_SERVER=/路径 指定（官方不提供 Linux CUDA 预编译包，第三方包请自行核对来源）"
+      echo "[注意] 镜像里没有 nvcc，只能编译 CPU 版。请换带 CUDA 开发工具的官方 GPU 镜像后重跑"; GPU=0
+    fi
   fi
   cmake -S llama.cpp -B llama.cpp/build "$CUDA_FLAG" -DLLAMA_CURL=OFF -DCMAKE_BUILD_TYPE=Release >/dev/null
   cmake --build llama.cpp/build -j"$(nproc)" --target llama-server >/dev/null
@@ -73,8 +90,8 @@ if [ ! -x "$WORK/lexenv/bin/python" ]; then
   log "准备 Python 3.12 环境"
   python3 -m pip install -q uv
   python3 -m uv venv -q -p 3.12 --seed "$WORK/lexenv" || die "创建 Python 3.12 环境失败（uv 需要从 GitHub 下载 Python）"
-  "$WORK/lexenv/bin/pip" install -q -r LexAegis/requirements.lock
-  "$WORK/lexenv/bin/pip" install -q --no-deps -e LexAegis
+  "$WORK/lexenv/bin/pip" install -q -r "$LEXDIR/requirements.lock"
+  "$WORK/lexenv/bin/pip" install -q --no-deps -e "$LEXDIR"
 fi
 
 # ---------- 5. 测试 ----------
@@ -128,7 +145,7 @@ run_mode() {  # $1 = gpu|cpu
     sleep 2
   done
   log "测试（$mode）：8 份短材料 + 3 份长材料"
-  (cd "$WORK/LexAegis" && LEX_EDGE_URL="http://127.0.0.1:$PORT/v1" "$WORK/lexenv/bin/python" "$WORK/edge_bench.py" "$mode" "$WORK/bench-$TAG-$mode.json")
+  (cd "$LEXDIR" && LEX_EDGE_URL="http://127.0.0.1:$PORT/v1" "$WORK/lexenv/bin/python" "$WORK/edge_bench.py" "$mode" "$WORK/bench-$TAG-$mode.json")
   kill "$pid"; wait "$pid" 2>/dev/null || true
 }
 
