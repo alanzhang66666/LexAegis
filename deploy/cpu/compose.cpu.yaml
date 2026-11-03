@@ -1,0 +1,47 @@
+# CPU 叠加层：边侧模型（llama.cpp）不用 GPU，其余服务不变。
+# 用法（在仓库根目录；deploy.sh --cpu 会自动写好 COMPOSE_FILE，之后直接 docker compose ... 即可）：
+#   docker compose -f compose.yaml -f deploy/cpu/compose.cpu.yaml --profile edge up -d
+#
+# 为什么要同时调 worker：原代码里每次调用模型最多等 120 秒、每块材料最多 1.4 万字，CPU 上一整块几乎必超时。
+# 下面几项都是"默认关闭"的可配置项（LEX_EDGE_REQUEST_TIMEOUT 等），只有本叠加层或 .env 设置了才生效。
+# 默认值是估计值，不是实测值：先跑 deploy/cpu/bench_edge.py 看各档材料的耗时，再按结果调整。
+services:
+  edge-model:
+    image: ${LEX_EDGE_IMAGE:-ghcr.io/ggml-org/llama.cpp:server}
+    command:
+      - --model
+      - /models/${LEX_EDGE_GGUF_FILE:-MiniCPM5-2B-Q4_K_M.gguf}
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --alias
+      - edge-small
+      - --jinja
+      - --ctx-size
+      - "${LEX_EDGE_CTX_SIZE:-8192}"
+      - --batch-size
+      - "512"
+      - --ubatch-size
+      - "256"
+      - --parallel
+      - "1"
+      - --threads
+      - "${LEX_EDGE_THREADS:-4}"
+      - --n-gpu-layers
+      - "0"
+  api:
+    environment:
+      LEX_EDGE_MODEL: ${LEX_EDGE_MODEL:-edge-small}
+      LEX_EDGE_REQUEST_TIMEOUT: ${LEX_EDGE_REQUEST_TIMEOUT:-900}
+  worker:
+    environment:
+      LEX_EDGE_MODEL: ${LEX_EDGE_MODEL:-edge-small}
+      LEX_EDGE_REQUEST_TIMEOUT: ${LEX_EDGE_REQUEST_TIMEOUT:-900}
+      LEX_EDGE_EXTRACT_CHUNK_CHARS: ${LEX_EDGE_EXTRACT_CHUNK_CHARS:-3000}
+      LEX_EDGE_EXTRACT_CHUNK_BLOCKS: ${LEX_EDGE_EXTRACT_CHUNK_BLOCKS:-4}
+      LEX_EDGE_EXTRACT_MAX_TOKENS: ${LEX_EDGE_EXTRACT_MAX_TOKENS:-2048}
+      LEX_EDGE_EXTRACT_MAX_FACTS: ${LEX_EDGE_EXTRACT_MAX_FACTS:-20}
+      # 容器镜像里没有 RapidOCR / whisper.cpp / FFmpeg：扫描件走"看原图 + 人工转录"
+      LEX_OCR_ENABLED: "0"
+      LEX_WHISPER_ENABLED: "0"
