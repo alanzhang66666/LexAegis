@@ -1,0 +1,19 @@
+{
+  "id": "edge.qwen3.5-9b.q8_0.trial",
+  "status": "trial_unverified",
+  "scope": "PAI-DSW / 阿里云 ECS 试用部署，仅合成材料；不替代生产声明 edge.minicpm5-2b.q4_k_m.nothink",
+  "role": "fact_extraction_only",
+  "runtime": "llamacpp",
+  "source": "Qwen3.5-9B（Apache 2.0），GGUF 由 unsloth 量化",
+  "gguf": "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF",
+  "filename": "Qwen3.5-9B-Q8_0.gguf",
+  "served_model_id": "edge-small",
+  "quant": "Q8_0",
+  "vram": "16GB-budget",
+  "context": 32768,
+  "json_object": "required",
+  "thinking": "request_controlled",
+  "vision": false,
+  "second_call_site": "same_site_missing_fields",
+  "verification": "deploy/aliyun/dsw_edge_test.sh 尚未在真实 GPU 上运行；enable_thinking=false 是否被模板接受、120 秒超时内能否完成长材料抽取均待实测"
+}

@@ -42,6 +42,10 @@ lexaegis check-isolation
 
 当前交付环境若未安装 Docker，**不能把 Compose 文件当成隔离已通过的证据**。
 
+## 阿里云 PAI-DSW / ECS 试用部署
+
+见 [deploy/aliyun/README.md](../deploy/aliyun/README.md)：PAI-DSW 免费 GPU 上用 Qwen3.5-9B 试用工作台，以及 ECS 上的 Compose + GPU 一键部署。只用于合成材料；不构成隔离收据或正式发布。
+
 ## Kubernetes / KubeEdge（草拟，未验证）
 
 `deploy/k8s/` 提供 V2.2 云边拓扑的 manifests：边域 `edge-api` / `edge-worker`（KubeEdge EdgeCore 节点，`lexaegis.io/domain: edge`），云域 `lexaegis-cgw`（唯一持有云凭据、唯一可出网）。原件与身份映射只落边侧 PVC；边域 Pod 经 NetworkPolicy 只能到达 CGW。本机 kind + KubeEdge 单集群已完成下发/断连/撤包演练并留真实通道收据（`deploy/k8s/DRILL_EVIDENCE.md`，assignment-2 走真实 CloudHub→EdgeHub→MetaManager 卷同步）；**生产集群部署仍未验证**。详见 `deploy/k8s/README.md`。
