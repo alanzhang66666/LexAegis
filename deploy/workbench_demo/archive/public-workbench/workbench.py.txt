@@ -1,0 +1,88 @@
+ARCHIVED SOURCE - NOT AN EXECUTABLE ENTRYPOINT. Local literals removed.
+
+"""Run the unchanged repository application in synthetic cloud integration."""
+import json
+import os
+from pathlib import Path
+import secrets
+import subprocess
+import sys
+import time
+import httpx
+import uvicorn
+ROOT = Path('/data/workbench/integration')
+API = 'http://127.0.0.1:59765'
+ROLES = {'admin': ('admin', '<LOCALIZED_OR_PRIVATE_TEXT>'), 'case_operator': ('operator', '<LOCALIZED_OR_PRIVATE_TEXT>'), 'technical_reviewer': ('technical', '<LOCALIZED_OR_PRIVATE_TEXT>'), 'legal_reviewer': ('legal', '<LOCALIZED_OR_PRIVATE_TEXT>'), 'approver': ('approver', '<LOCALIZED_OR_PRIVATE_TEXT>')}
+
+def require(response, stage):
+    if response.status_code >= 400:
+        raise RuntimeError(stage + ': HTTP ' + str(response.status_code))
+    return response.json()
+
+def provision(accounts):
+    with httpx.Client(base_url=API, trust_env=False, timeout=30) as client:
+        require(client.post('/api/v1/login', json=accounts['admin']), 'administrator login')
+        users = require(client.get('/api/v1/users'), 'users')
+        for role, (username, label) in ROLES.items():
+            if role == 'admin':
+                continue
+            if not any((u['username'] == username for u in users)):
+                require(client.post('/api/v1/users', json={**accounts[role], 'display_name': label, 'role': role}), 'create integration role')
+        boot = require(client.get('/api/v1/bootstrap'), 'bootstrap')
+        settings = boot['settings']
+        if settings.get('cloud_model') != 'deepseek-flash' or settings.get('cloud_url') != 'https://api.deepseek.com/v1':
+            require(client.put('/api/v1/settings', json={'cloud_url': 'https://api.deepseek.com/v1', 'cloud_model': 'deepseek-flash', 'cloud_primary': {'url': 'https://api.deepseek.com/v1', 'model': 'deepseek-flash'}, 'cloud_standby': {'url': '', 'model': ''}, 'edge_url': 'http://127.0.0.1:8080/v1', 'edge_model': ''}), 'configure cloud slot')
+        marker = ROOT / 'initial-cases.json'
+        if not marker.exists():
+            cases = []
+            for scenario in ('success', 'linkage'):
+                case = require(client.post('/api/v1/demos', json={'scenario': scenario}), 'create registered case')
+                cases.append({'id': case['id'], 'scenario': scenario})
+            marker.write_text(json.dumps(cases))
+        return json.loads(marker.read_text())
+
+def main():
+    ROOT.mkdir(parents=True, exist_ok=True)
+    config = ROOT / 'config'
+    config.mkdir(mode=448, exist_ok=True)
+    file = config / 'accounts.json'
+    if file.exists():
+        accounts = json.loads(file.read_text())
+    else:
+        accounts = {role: {'username': name, 'password': secrets.token_urlsafe(20)} for role, (name, label) in ROLES.items()}
+        file.write_text(json.dumps(accounts))
+        file.chmod(384)
+    secret = Path('/run/signing/gateway-secret').read_text().strip()
+    base = {k: v for k, v in os.environ.items() if k in {'PATH', 'HOME', 'LANG', 'LC_ALL', 'PYTHONPATH'}}
+    base.update(LEX_RUN_PROFILE='integration', LEX_DEPLOYMENT_MODE='native', LEX_DATA_DIR=str(ROOT / 'app'), LEX_GATEWAY_DIR=str(ROOT / 'unused-local-gateway'), LEX_GATEWAY_SECRET=secret, LEX_API_PORT='59765', LEX_GATEWAY_PORT='8766', LEX_GATEWAY_URL='http://gateway:8766', LEX_CLOUD_ALLOWED_HOSTS='api.deepseek.com', LEX_EDGE_URL='http://127.0.0.1:8080/v1', LEX_EDGE_MODEL='', LEX_DEMO_LIVE_EDGE_REVIEW='0', LEX_EDGE_OUTBOUND_REVIEW='0', LEX_OCR_ENABLED='0', LEX_WHISPER_ENABLED='0', PYTHONDONTWRITEBYTECODE='1', PYTHONUNBUFFERED='1')
+    processes = []
+    try:
+        env = {**base, 'LEX_RUNTIME_ROLE': 'api', 'LEX_LOCAL_PASSWORD': accounts['admin']['password'], 'LEX_LOCAL_ACTOR': '<LOCALIZED_OR_PRIVATE_TEXT>'}
+        processes.append(subprocess.Popen([sys.executable, '-m', 'uvicorn', 'lexaegis.api:create_app', '--factory', '--host', '127.0.0.1', '--port', '59765', '--no-access-log'], cwd='/app', env=env, stdin=subprocess.DEVNULL))
+        deadline = time.monotonic() + 90
+        while time.monotonic() < deadline:
+            if processes[0].poll() is not None:
+                raise RuntimeError('API exited during initialization')
+            try:
+                if httpx.get(API + '/api/v1/health', trust_env=False, timeout=2).status_code == 200:
+                    break
+            except httpx.HTTPError:
+                pass
+            time.sleep(0.25)
+        else:
+            raise RuntimeError('API readiness timeout')
+        cases = provision(accounts)
+        processes.append(subprocess.Popen([sys.executable, '-m', 'lexaegis.worker'], cwd='/app', env={**base, 'LEX_RUNTIME_ROLE': 'worker'}, stdin=subprocess.DEVNULL))
+        (ROOT / 'ready.json').write_text(json.dumps({'status': 'ready', 'runtime_profile': 'integration', 'access': 'interactive', 'authentication': 'original_accounts', 'transport': 'cloud', 'data_origin': 'bundled_synthetic', 'initial_cases': cases, 'repository_source_modified': False}))
+        from public_proxy import app
+        uvicorn.run(app, host='0.0.0.0', port=59767, access_log=False)
+    finally:
+        for p in reversed(processes):
+            p.terminate()
+        for p in reversed(processes):
+            try:
+                p.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                p.kill()
+if __name__ == '__main__':
+    main()

@@ -1,0 +1,31 @@
+ARCHIVED SOURCE - NOT AN EXECUTABLE ENTRYPOINT. Local literals removed.
+
+"""Build local delivery reports from receipts; does not use the network."""
+from datetime import datetime, timezone
+import hashlib
+import json
+from pathlib import Path
+import xml.etree.ElementTree as ET
+ROOT = Path(__file__).parent
+
+def read(name):
+    return json.loads((ROOT / name).read_text(encoding='utf-8'))
+
+def main():
+    cloud = read('cloud-receipt.json')
+    api = read('public-e2e.json')
+    ui = read('browser-evidence.json')
+    flow = read('browser-flow.json')
+    runtime = read('runtime-evidence.json')
+    repository = read('repository-check.json')
+    suite = ET.parse(ROOT / 'deployment-tests.xml').getroot().find('testsuite')
+    report = {'generated_at': datetime.now(timezone.utc).isoformat(), 'url': read('public-status.json')['url'], 'synthetic_only': True, 'model_quality': 'not_evaluated_in_current_scope', 'cloud_link': 'passed' if api.get('completed') and flow.get('completed') else 'not_passed', 'runtime_checks': {'passed': sum((c['passed'] for c in runtime['checks'])), 'total': len(runtime['checks'])}, 'deployment_regression': dict(suite.attrib), 'api_checks': len(api['checks']), 'browser_transport_checks': len(ui['checks']), 'browser_flow_checks': len(flow['checks']), 'quota': runtime['quota'], 'additional_cloud_requests_used': runtime['additional_real_requests_used'], 'token_usage_total': {key: sum((r.get(key, 0) for r in cloud['receipts'])) for key in ('prompt_tokens', 'completion_tokens', 'total_tokens')}, 'cloud_receipts': cloud['receipts'], 'response_model': 'not_recorded_by_original_application', 'cost_estimate': None, 'cost_estimate_reason': 'No frozen price schedule; use actual provider bill', 'repository': repository, 'workbench_image': runtime['workbench_image'], 'gateway_image': runtime['gateway_image'], 'formal_build_identity': 'pending', 'production_isolation_acceptance': 'not_verified', 'target_cloud_host_acceptance': 'pending_host_info', 'formal_dispatch': 'blocked', 'operating_environment': 'local Docker with public temporary HTTPS tunnel', 'partner_physical_computer_acceptance': 'not_observed', 'public_dns_note': 'Public DNS and real HTTPS checked in test process; this Windows configured resolver previously failed; system DNS untouched', 'request_parameters_policy': 'Original frozen body preserved; max_tokens not added to source', 'no_project_source_changes': repository['repository_unchanged']}
+    (ROOT / '<LOCALIZED_OR_PRIVATE_TEXT>').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+    rows = ['<LOCALIZED_OR_PRIVATE_TEXT>', '', f"<LOCALIZED_OR_PRIVATE_TEXT>{report['generated_at']}", '', f"<LOCALIZED_OR_PRIVATE_TEXT>{report['url']}", '', '<LOCALIZED_OR_PRIVATE_TEXT>', '', f"<LOCALIZED_OR_PRIVATE_TEXT>{report['additional_cloud_requests_used']}<LOCALIZED_OR_PRIVATE_TEXT>{report['quota']['reserved']}<LOCALIZED_OR_PRIVATE_TEXT>{report['quota']['remaining']}<LOCALIZED_OR_PRIVATE_TEXT>", ' ', '<LOCALIZED_OR_PRIVATE_TEXT>', '| --- | --- |', f"<LOCALIZED_OR_PRIVATE_TEXT>{report['api_checks']}<LOCALIZED_OR_PRIVATE_TEXT>", f"<LOCALIZED_OR_PRIVATE_TEXT>{report['browser_transport_checks']}<LOCALIZED_OR_PRIVATE_TEXT>", f"<LOCALIZED_OR_PRIVATE_TEXT>{report['browser_flow_checks']}<LOCALIZED_OR_PRIVATE_TEXT>", f"<LOCALIZED_OR_PRIVATE_TEXT>{suite.attrib['tests']}<LOCALIZED_OR_PRIVATE_TEXT>", f"<LOCALIZED_OR_PRIVATE_TEXT>{report['runtime_checks']['passed']}/{report['runtime_checks']['total']}<LOCALIZED_OR_PRIVATE_TEXT>", '<LOCALIZED_OR_PRIVATE_TEXT>', '<LOCALIZED_OR_PRIVATE_TEXT>', '<LOCALIZED_OR_PRIVATE_TEXT>', '<LOCALIZED_OR_PRIVATE_TEXT>', '', f"<LOCALIZED_OR_PRIVATE_TEXT>{report['token_usage_total']['prompt_tokens']}<LOCALIZED_OR_PRIVATE_TEXT>{report['token_usage_total']['completion_tokens']}<LOCALIZED_OR_PRIVATE_TEXT>{report['token_usage_total']['total_tokens']}<LOCALIZED_OR_PRIVATE_TEXT>", '', '<LOCALIZED_OR_PRIVATE_TEXT>', '', '<LOCALIZED_OR_PRIVATE_TEXT>', '', '<LOCALIZED_OR_PRIVATE_TEXT>']
+    (ROOT / '<LOCALIZED_OR_PRIVATE_TEXT>').write_text('\n'.join(rows), encoding='utf-8')
+    names = ['public-e2e.json', 'browser-evidence.json', 'browser-flow.json', 'cloud-receipt.json', 'runtime-evidence.json', 'repository-baseline.json', 'repository-check.json', 'deployment-tests.xml', 'image.json', 'allowance.json', 'public-login.png', 'public-interactive.png', 'public-cloud-confirmed.png', '<LOCALIZED_OR_PRIVATE_TEXT>', '<LOCALIZED_OR_PRIVATE_TEXT>', '<LOCALIZED_OR_PRIVATE_TEXT>', 'manage.py', 'control.ps1', 'public_proxy.py', 'poll_events.js', 'quota_runtime.py', 'workbench.py', 'Dockerfile', 'public.compose.json', 'cloud.compose.json']
+    index = {'generated_at': report['generated_at'], 'evidence': [{'file': name, 'sha256': hashlib.sha256((ROOT / name).read_bytes()).hexdigest()} for name in names]}
+    (ROOT / 'evidence-index.json').write_text(json.dumps(index, ensure_ascii=False, indent=2), encoding='utf-8')
+    print(json.dumps({'cloud_link': report['cloud_link'], 'additional_used': report['additional_cloud_requests_used'], 'remaining': report['quota']['remaining'], 'repository_unchanged': report['no_project_source_changes'], 'evidence_files': len(names)}))
+if __name__ == '__main__':
+    main()

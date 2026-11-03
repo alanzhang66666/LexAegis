@@ -1,0 +1,105 @@
+ARCHIVED SOURCE - NOT AN EXECUTABLE ENTRYPOINT. Local literals removed.
+
+"""All provider calls are local stubs. No actual cloud POSTs."""
+from contextvars import copy_context
+import json
+from pathlib import Path
+import sys
+import httpx
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+sys.path.insert(0, '<PRIVATE_RUNTIME_ROOT>/deploy/cloud_gateway')
+from lexaegis.cloud import DispatchOutcome
+from lexaegis.storage import Store
+from shared_budget import SharedBudget, BudgetedProvider, CURRENT_REQUEST, RequestContext
+from cloud_chain_runtime import MetadataStream
+
+def prepare(path, reserved=12):
+    store = Store(path)
+    with store.transaction() as repo:
+        repo.put('shared_cloud_budget', {'id': 'shared-cloud-budget', 'limit': 20, 'reserved': reserved})
+    return SharedBudget(path)
+
+class FakeProvider:
+    primary_key = 'not-a-real-key'
+    standby_key = ''
+    api_key = 'not-a-real-key'
+
+    def __init__(self, budget, fail=False):
+        self.budget = budget
+        self.calls = 0
+        self.fail = fail
+
+    def dispatch(self, target, body, **kwargs):
+        self.calls += 1
+        assert self.budget.status()['reserved'] >= 13
+        if self.fail:
+            raise TimeoutError('simulated failure after allocation')
+        return DispatchOutcome('complete', result={'claims': []}, usage={'total_tokens': 5})
+
+def dispatch(provider, profile, request_id):
+    token = CURRENT_REQUEST.set((profile, request_id, 'hash-' + request_id))
+    try:
+        return provider.dispatch('https://api.deepseek.com/v1/chat/completions', {'model': 'deepseek-flash'})
+    finally:
+        CURRENT_REQUEST.reset(token)
+
+def test_shared_environments_eight_calls_and_restart_never_reset(tmp_path):
+    path = tmp_path / 'budget.sqlite'
+    budget = prepare(path)
+    raw = FakeProvider(budget)
+    provider = BudgetedProvider(raw, budget)
+    for number in range(8):
+        assert dispatch(provider, 'production' if number % 2 else 'integration', str(number)).status == 'complete'
+    assert raw.calls == 8 and budget.status() == {'limit': 20, 'reserved': 20, 'remaining': 0}
+    restarted = SharedBudget(path)
+    second = FakeProvider(restarted)
+    assert dispatch(BudgetedProvider(second, restarted), 'production', 'ninth').status == 'failed'
+    assert second.calls == 0 and restarted.status()['reserved'] == 20
+
+def test_unknown_attempt_and_duplicate_never_resend(tmp_path):
+    budget = prepare(tmp_path / 'budget.sqlite')
+    raw = FakeProvider(budget, fail=True)
+    provider = BudgetedProvider(raw, budget)
+    with pytest.raises(TimeoutError):
+        dispatch(provider, 'production', 'once')
+    assert budget.status()['reserved'] == 13
+    assert dispatch(provider, 'production', 'once').status == 'failed'
+    assert raw.calls == 1 and budget.status()['reserved'] == 13
+
+def test_missing_context_does_not_call_provider(tmp_path):
+    budget = prepare(tmp_path / 'budget.sqlite')
+    raw = FakeProvider(budget)
+    assert BudgetedProvider(raw, budget).dispatch('target', {'model': 'deepseek-flash'}).status == 'failed'
+    assert raw.calls == 0 and budget.status()['reserved'] == 12
+
+def test_original_gate_rejection_uses_no_paid_quota(tmp_path):
+    budget = prepare(tmp_path / 'budget.sqlite')
+    core = FastAPI()
+
+    @core.post('/dispatch')
+    def reject():
+        from fastapi import HTTPException
+        raise HTTPException(403, 'Formal release evidence is missing')
+    with TestClient(RequestContext(core, 'not-a-real-signing-secret', 'production', budget)) as client:
+        assert client.post('/dispatch', json={'invalid': 'envelope'}).status_code == 403
+    assert budget.status()['reserved'] == 12
+
+def test_provider_metadata_recorded_without_saving_content(tmp_path):
+    budget = prepare(tmp_path / 'budget.sqlite')
+    context = ('production', 'receipt', 'hash')
+
+    class Stream(httpx.SyncByteStream):
+
+        def __iter__(self):
+            yield b'data: {"model":"deepseek-v4.1-flash-1017","id":"response-id","choices":[{"delta":{"content":"private synthetic text"}}]}\n\n'
+            yield b'data: {"usage":{"prompt_tokens":8,"completion_tokens":4,"total_tokens":12}}\n\n'
+            yield b'data: [DONE]\n\n'
+    stream = MetadataStream(Stream(), budget, context)
+    list(stream)
+    with budget.store.read() as repo:
+        records = repo.list('shared_cloud_receipt')
+    assert records[0]['response_model'] == 'deepseek-v4.1-flash-1017'
+    assert records[0]['usage']['total_tokens'] == 12
+    assert 'private synthetic text' not in json.dumps(records)

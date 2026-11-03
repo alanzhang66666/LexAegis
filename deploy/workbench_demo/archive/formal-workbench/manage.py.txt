@@ -1,0 +1,146 @@
+ARCHIVED SOURCE - NOT AN EXECUTABLE ENTRYPOINT. Local literals removed.
+
+"""Formal local extraction deployment, independent of the integration demo."""
+import argparse
+from datetime import datetime, timezone
+import io
+import json
+import os
+from pathlib import Path
+import re
+import secrets
+import shutil
+import subprocess
+import sys
+import tarfile
+import tempfile
+import time
+HERE = Path(__file__).parent
+INTEGRATION = HERE.parent / 'public-workbench'
+COMPOSE = HERE / 'compose.json'
+APP_BASE = 'sha256:8b72f7c1eecdab9784928866dbe1b162132a5b8e4addba6391dd6c82b54480a4'
+
+def command(args, **kwargs):
+    result = subprocess.run(args, capture_output=True, timeout=kwargs.pop('timeout', 120), **kwargs)
+    if result.returncode:
+        raise RuntimeError('External deployment command failed: ' + args[0])
+    return result.stdout
+
+def compose(*args):
+    return ['docker', 'compose', '-f', str(COMPOSE), *args]
+
+def save(name, value):
+    (HERE / name).write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding='utf-8')
+
+def build():
+    expected = {'lexaegis:public-integration-workbench': APP_BASE, 'lexaegis:cloud-gateway-candidate': 'sha256:a2273e6280dab8792219e7cce34abdbe6f687bfe226b718ca5481db4675d7dd9'}
+    for tag, value in expected.items():
+        if command(['docker', 'image', 'inspect', tag, '--format', '{{.Id}}']).decode().strip() != value:
+            raise ValueError('Base image identity differs from the pinned deployment')
+    images = {}
+    for label, dockerfile, files in [('app', 'Dockerfile', ('formal_workbench.py', 'formal_gateway.py', 'public_proxy.py', 'poll_events.js')), ('connector', 'Dockerfile.connector', ('edge_connector.py', 'model_route_guard.py'))]:
+        with tempfile.TemporaryDirectory() as temp, (HERE / ('build-' + label + '.log')).open('wb') as log:
+            directory = Path(temp)
+            for name in files:
+                shutil.copy2(HERE / name, directory / name)
+            text = (HERE / dockerfile).read_text()
+            (directory / 'Dockerfile').write_text(text)
+            tag = 'lexaegis:formal-local-' + label
+            result = subprocess.run(['docker', 'build', '-t', tag, str(directory)], stdout=log, stderr=log)
+            if result.returncode:
+                raise RuntimeError('External image build failed; see local build log')
+        images[label] = command(['docker', 'image', 'inspect', tag, '--format', '{{.Id}}']).decode().strip()
+    save('images.json', images)
+    print('Formal deployment images built')
+
+def configuration():
+    images = json.loads((HERE / 'images.json').read_text())
+    default = {'image': images['app'], 'pull_policy': 'never', 'user': '10001:10001', 'read_only': True, 'cap_drop': ['ALL'], 'security_opt': ['no-new-privileges:true'], 'restart': 'unless-stopped', 'tmpfs': ['/tmp'], 'logging': {'driver': 'json-file', 'options': {'max-size': '10m', 'max-file': '3'}}}
+
+    def service(**extra):
+        return {**default, **extra}
+    health = lambda port, path: {'test': ['CMD', 'python', '-c', f"import urllib.request; urllib.request.urlopen('http://127.0.0.1:{port}{path}',timeout=3)"], 'interval': '5s', 'timeout': '4s', 'retries': 20, 'start_period': '30s'}
+    config = {'name': 'lexaegis-formal-workbench', 'services': {'formal': service(networks=['formal-private'], volumes=['formal-data:/data', 'formal-signing:/run/signing:ro'], healthcheck=health(59767, '/_public_demo_health'), depends_on={'edge-model': {'condition': 'service_healthy'}, 'formal-gateway': {'condition': 'service_started'}}), 'formal-gateway': service(command=['python', '-m', 'uvicorn', 'formal_gateway:create_app', '--factory', '--host', '0.0.0.0', '--port', '8766', '--no-access-log'], networks=['formal-private'], volumes=['formal-ledger:/data', 'formal-signing:/run/signing:ro'], environment={'LEX_RUN_PROFILE': 'production', 'LEX_DEPLOYMENT_MODE': 'native', 'LEX_GATEWAY_DIR': '/data/gateway', 'LEX_GATEWAY_ROLE': 'edge', 'LEX_CLOUD_ALLOWED_HOSTS': 'api.deepseek.com'}), 'edge-model': service(image=images['connector'], networks=['formal-private', 'model-host-uplink'], volumes=['model-route-guard:/run/route-guard:ro'], healthcheck=health(8080, '/health')), 'model-guard': service(image=images['connector'], user='0:0', cap_add=['NET_ADMIN'], command=['python', '/opt/edge_connector/model_route_guard.py'], network_mode='service:edge-model', volumes=['model-route-guard:/run/route-guard']), 'tunnel': service(image='cloudflare/cloudflared:2026.10.7@sha256:4955524aeaa379e154023d5a027c250f7b35041a2e7e950cf13f144bc9b9c5ba', user='65532:65532', command=['tunnel', '--no-autoupdate', '--protocol', 'http2', '--edge-ip-version', '4', '--url', 'http://formal:59767'], networks=['formal-private', 'tunnel-uplink'], depends_on={'formal': {'condition': 'service_healthy'}})}, 'networks': {'formal-private': {'internal': True}, 'model-host-uplink': {}, 'tunnel-uplink': {}}, 'volumes': {name: {'external': True, 'name': 'lexaegis-formal-' + name} for name in ('formal-data', 'formal-signing', 'formal-ledger', 'model-route-guard')}}
+    for info in config['volumes'].values():
+        command(['docker', 'volume', 'create', '--label', 'lexaegis.deployment=formal-local', info['name']])
+    key = HERE / 'gateway-secret'
+    if not key.exists():
+        key.write_text(secrets.token_urlsafe(48))
+    archive = io.BytesIO()
+    with tarfile.open(fileobj=archive, mode='w') as handle:
+        data = key.read_bytes()
+        member = tarfile.TarInfo('gateway-secret')
+        member.size = len(data)
+        handle.addfile(member, io.BytesIO(data))
+    code = "import io,tarfile,sys,os; a=tarfile.open(fileobj=io.BytesIO(sys.stdin.buffer.read()),mode='r:'); d=a.extractfile('gateway-secret').read(); p='/provision/gateway-secret'; open(p+'.new','wb').write(d); os.chmod(p+'.new',0o600); os.chown(p+'.new',10001,10001); os.replace(p+'.new',p); os.chmod('/provision',0o700); os.chown('/provision',10001,10001)"
+    command(['docker', 'run', '--rm', '-i', '--read-only', '--network', 'none', '--user', '0:0', '--cap-drop=ALL', '--cap-add=CHOWN', '--cap-add=DAC_OVERRIDE', '--cap-add=FOWNER', '--security-opt=no-new-privileges', '--mount', 'type=volume,src=lexaegis-formal-formal-signing,dst=/provision', '--entrypoint', 'python', images['app'], '-c', code], input=archive.getvalue())
+    save('compose.json', config)
+    command(compose('config', '--quiet'))
+    print('Independent formal configuration prepared')
+
+def export_access():
+    raw = command(compose('exec', '-T', 'formal', 'python', '-c', "from pathlib import Path; print(Path('/data/workbench/production/config/accounts.json').read_text())"))
+    accounts = json.loads(raw)
+    save('accounts.json', accounts)
+    rows = ['<LOCALIZED_OR_PRIVATE_TEXT>', '<LOCALIZED_OR_PRIVATE_TEXT>', '']
+    for role, account in accounts.items():
+        rows.append(role + '\t' + account['username'] + '\t' + account['password'])
+    (HERE / '<LOCALIZED_OR_PRIVATE_TEXT>').write_text('\n'.join(rows), encoding='utf-8')
+
+def start():
+    route = HERE.parent / 'previous-url-route.json'
+    if route.exists() and json.loads(route.read_text(encoding='utf-8')).get('enabled'):
+        command([sys.executable, str(HERE.parent / 'document-workbench/manage.py'), 'start'], timeout=230)
+        status()
+        return
+    command([sys.executable, str(INTEGRATION / 'edge_service.py'), 'start'], timeout=120)
+    command(compose('up', '-d', 'edge-model', 'model-guard', 'formal-gateway', 'formal', 'tunnel'), timeout=200)
+    export_access()
+    sys.path.insert(0, str(HERE.parent))
+    from public_access import ensure
+    ensure('formal')
+    status()
+
+def status(quiet=False):
+    sys.path.insert(0, str(HERE.parent))
+    from public_access import snapshot
+    access = snapshot('formal')
+    result = {'url': access['url'], 'public_access': access, 'profile': 'production', 'edge': 'live_local_model', 'model': 'MiniCPM5-2B Q4_K_M', 'source_modified': False, 'formal_cloud_dispatch': 'blocked_pending_original_gates', 'integration_demo_url': json.loads((INTEGRATION / 'public-status.json').read_text())['url']}
+    route = HERE.parent / 'previous-url-route.json'
+    if route.exists() and json.loads(route.read_text(encoding='utf-8')).get('enabled'):
+        result.update(public_profile='integration', public_scope='registered_synthetic_document', public_accounts_file=str(HERE.parent / '<LOCALIZED_OR_PRIVATE_TEXT>'), original_production_workspace='preserved; private backend; public URL now serves the complete demo')
+    states = {}
+    for label in ('formal', 'formal-gateway', 'edge-model', 'model-guard', 'tunnel'):
+        state = json.loads(command(['docker', 'inspect', 'lexaegis-formal-workbench-' + label + '-1']))[0]['State']
+        states[label] = {'status': state['Status'], 'health': state.get('Health', {}).get('Status')}
+    result['containers'] = states
+    result['host_model'] = json.loads(command([sys.executable, str(INTEGRATION / 'edge_service.py'), 'status']))
+    save('status.json', result)
+    if not quiet:
+        print(json.dumps(result))
+    return result
+
+def stop():
+    route = HERE.parent / 'previous-url-route.json'
+    if route.exists() and json.loads(route.read_text(encoding='utf-8')).get('enabled'):
+        command([sys.executable, str(HERE.parent / 'document-workbench/manage.py'), 'stop'])
+    command(compose('stop', 'tunnel', 'formal', 'formal-gateway', 'model-guard', 'edge-model'))
+    model = json.loads(command([sys.executable, str(INTEGRATION / 'edge_service.py'), 'status']))
+    observed = subprocess.run(['docker', 'inspect', 'lexaegis-document-demo-workbench-1'], capture_output=True)
+    document_active = observed.returncode == 0 and json.loads(observed.stdout)[0]['State']['Running']
+    if model['running'] and (not document_active):
+        command([sys.executable, str(INTEGRATION / 'edge_service.py'), 'stop'])
+    print('Formal workbench stopped; shared local model retained when the document chain is running')
+
+def verify():
+    command([sys.executable, str(HERE / 'verify_runtime.py')], timeout=60)
+    status()
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('action', choices=['build', 'configure', 'start', 'status', 'stop', 'verify'])
+    args = parser.parse_args()
+    try:
+        {'build': build, 'configure': configuration, 'start': start, 'status': status, 'stop': stop, 'verify': verify}[args.action]()
+    except Exception as error:
+        print('Formal deployment failed: ' + str(error))
+        raise SystemExit(1)

@@ -1,0 +1,29 @@
+ARCHIVED SOURCE - NOT AN EXECUTABLE ENTRYPOINT. Local literals removed.
+
+"""Write a private evidence index and concise current deployment summary."""
+from datetime import datetime, timezone
+import hashlib
+import json
+from pathlib import Path
+import xml.etree.ElementTree as ET
+ROOT = Path(__file__).parent
+
+def read(name):
+    return json.loads((ROOT / name).read_text(encoding='utf-8'))
+
+def main():
+    assessment = read('<LOCALIZED_OR_PRIVATE_TEXT>')
+    runtime = read('runtime-evidence.json')
+    ui = read('source-ui-evidence.json')
+    test = ET.parse(ROOT / 'connector-tests.xml').getroot().find('testsuite')
+    public = read('status.json')
+    quota = json.loads((ROOT.parent / 'public-workbench/runtime-evidence.json').read_text(encoding='utf-8'))['quota']
+    result = {'generated_at': datetime.now(timezone.utc).isoformat(), 'formal_workbench_url': public['url'], 'original_integration_url': public['integration_demo_url'], 'live_local_extraction': 'working', 'document_evaluation': 'complete', 'model_quality': assessment['model_quality'], 'field_semantics_rate': assessment['metrics']['field_semantics_rate'], 'core_content_recall': assessment['metrics']['core_content_recall'], 'core_usable_typed_recall': assessment['metrics']['core_usable_typed_recall'], 'deployment_checks_passed': sum((c['passed'] for c in runtime['checks'])), 'deployment_checks_total': len(runtime['checks']), 'ui_checks_passed': sum((c['passed'] for c in ui['checks'])), 'connector_regression': test.attrib, 'original_assets_identical': len(runtime['source_files_changed']) == 0, 'original_assets_compared': runtime['source_files_compared'], 'repository': runtime['repository_check'], 'cloud_calls_this_work': 0, 'cloud_quota': quota, 'formal_cloud_authorization': 'not_granted', 'isolation_acceptance': 'not_verified', 'data_root': 'independent_production_volume', 'accounts': 'internal private file, not published in report', 'model_exclusive_vram_peak': 'not_measured', 'document_sha256': assessment['source_sha256'], 'gold_sha256': assessment['gold_sha256']}
+    (ROOT / '<LOCALIZED_OR_PRIVATE_TEXT>').write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
+    names = ['<LOCALIZED_OR_PRIVATE_TEXT>', 'status.json', 'images.json', 'case-demonstration.json', 'source-ui-evidence.json', 'runtime-evidence.json', 'source-document.json', 'case-gold-frozen.json', 'case-gold-freeze.json', 'case-extracted-detail.json', '<LOCALIZED_OR_PRIVATE_TEXT>', '<LOCALIZED_OR_PRIVATE_TEXT>', '<LOCALIZED_OR_PRIVATE_TEXT>', '<LOCALIZED_OR_PRIVATE_TEXT>', 'case-resource-samples.json', 'connector-tests.xml', 'case-source-linked.png', 'case-edit-unconfirmed.png', '<LOCALIZED_OR_PRIVATE_TEXT>', 'compose.json', 'Dockerfile', 'Dockerfile.connector', 'edge_connector.py', 'model_route_guard.py', 'formal_workbench.py', 'formal_gateway.py', 'public_proxy.py', 'poll_events.js', 'manage.py', 'edge_connector.py', 'control.ps1', 'assess_document.py', 'verify_runtime.py']
+    names = list(dict.fromkeys(names))
+    index = {'generated_at': result['generated_at'], 'documents_contain_user_case_data': 'private local evidence, not public assets', 'evidence': [{'file': name, 'sha256': hashlib.sha256((ROOT / name).read_bytes()).hexdigest()} for name in names]}
+    (ROOT / 'evidence-index.json').write_text(json.dumps(index, ensure_ascii=False, indent=2), encoding='utf-8')
+    print(json.dumps({'live_extraction': 'working', 'evaluation': 'complete', 'quality': 'not_passed', 'repository_unchanged': result['repository']['repository_unchanged'], 'cloud_remaining': quota['remaining'], 'evidence_files': len(names)}))
+if __name__ == '__main__':
+    main()

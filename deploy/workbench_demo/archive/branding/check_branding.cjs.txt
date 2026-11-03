@@ -1,0 +1,58 @@
+ARCHIVED SOURCE - NOT AN EXECUTABLE ENTRYPOINT. Local literals removed.
+
+const fs=require('fs'),path=require('path');
+const {chromium,expect}=require('<PRIVATE_RUNTIME_ROOT>/branding/frontend/node_modules/@playwright/test');
+const root=__dirname,deploy=path.dirname(root);
+<LOCALIZED_TEXT_REMOVED>
+const report={checked_at:new Date().toISOString(),system_name:fullName,workspaces:[],cloud_posts:0,normal_dns:true};
+const save=()=>fs.writeFileSync(path.join(root,'browser-verification.json'),JSON.stringify(report,null,2));
+(async()=>{
+ const browser=await chromium.launch({channel:'msedge',headless:true});
+ try{
+  for(const [name,folder] of [['demo','public-workbench'],['formal','formal-workbench']]){
+   const access=JSON.parse(fs.readFileSync(path.join(deploy,name+'-public-access.json'),'utf8'));
+   if(!access.url||!access.public_reachable)throw Error(name+' public entrance unavailable');
+   const account=JSON.parse(fs.readFileSync(path.join(deploy,folder,'accounts.json'),'utf8')).case_operator;
+   const context=await browser.newContext({baseURL:access.url,viewport:{width:1440,height:1000}});
+   const page=await context.newPage();page.setDefaultTimeout(40000);
+   const result={name,url:access.url,checks:[],page_errors:[]};report.workspaces.push(result);save();
+   const check=(label,passed)=>{result.checks.push({name:label,passed});save();if(!passed)throw Error(name+': '+label);};
+   page.on('pageerror',e=>result.page_errors.push(e.message));
+   await page.goto(access.url,{waitUntil:'networkidle'});
+<LOCALIZED_TEXT_REMOVED>
+   await expect(page).toHaveTitle(fullName);
+   check('full browser title',await page.title()===fullName);
+   check('full login name',await page.locator('h1.system-name').textContent()===fullName);
+   check('logo alternate name',await page.locator('.login-footer img').getAttribute('alt')===fullName);
+   await page.screenshot({path:path.join(root,name+'-login-desktop.png'),fullPage:true});
+   await page.setViewportSize({width:390,height:844});
+   check('mobile login has no horizontal overflow',await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+   check('mobile long name fits its box',await page.locator('.system-name-detail').evaluate(e=>e.scrollWidth<=e.clientWidth));
+   await page.screenshot({path:path.join(root,name+'-login-mobile.png'),fullPage:true});
+   await page.setViewportSize({width:1440,height:1000});
+<LOCALIZED_TEXT_REMOVED>
+   await page.screenshot({path:path.join(root,name+'-login-dark.png'),fullPage:true});
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+   await page.locator('button.case-row').first().waitFor();
+   check('dashboard full name',await page.locator('.system-heading-name').textContent()===fullName);
+   check('sidebar full name tooltip',await page.locator('.sidebar .brand').getAttribute('title')===fullName);
+   result.case_count=await page.locator('button.case-row').count();
+   check('existing cases retained',result.case_count===(name==='demo'?6:1));
+<LOCALIZED_TEXT_REMOVED>
+   await page.screenshot({path:path.join(root,name+'-dashboard-desktop.png'),fullPage:true});
+   await page.setViewportSize({width:390,height:844});
+   check('mobile dashboard heading fits',await page.locator('.system-heading-name').evaluate(e=>e.scrollWidth<=e.clientWidth));
+   await page.screenshot({path:path.join(root,name+'-dashboard-mobile.png'),fullPage:true});
+   check('no JavaScript errors',result.page_errors.length===0);
+   await page.setViewportSize({width:1440,height:1000});
+   await page.locator('button.profile').click();
+<LOCALIZED_TEXT_REMOVED>
+   result.completed=true;save();await context.close();
+  }
+ }finally{await browser.close();save();}
+ report.completed=true;save();
+ console.log(JSON.stringify({completed:true,workspaces:report.workspaces.map(w=>({name:w.name,checks:w.checks.length,case_count:w.case_count})),cloud_posts:0}));
+})().catch(e=>{report.error=e.message.split('\n')[0];save();console.error(report.error);process.exitCode=1;});

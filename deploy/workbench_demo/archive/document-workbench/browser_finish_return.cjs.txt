@@ -1,0 +1,51 @@
+ARCHIVED SOURCE - NOT AN EXECUTABLE ENTRYPOINT. Local literals removed.
+
+/* Resume only the existing cloud return; this script has no send operation. */
+const fs=require('fs'),path=require('path');
+const {chromium,expect}=require('<PRIVATE_RUNTIME_ROOT>/frontend/node_modules/@playwright/test');
+const root=__dirname,read=n=>JSON.parse(fs.readFileSync(path.join(root,n),'utf8'));
+const base=read('status.json').url,account=read('accounts.json').legal_reviewer;
+const report=read('document-cloud-flow.json'),{case_id,task_id}=report;
+const save=()=>fs.writeFileSync(path.join(root,'document-cloud-flow.json'),JSON.stringify(report,null,2));
+(async()=>{
+ const browser=await chromium.launch({channel:'msedge',headless:true,args:['--no-proxy-server','--disable-quic',`--host-resolver-rules=MAP ${new URL(base).hostname} 104.16.230.132`]});
+ let page;
+ try{
+  page=await browser.newPage({viewport:{width:1500,height:1050}});page.setDefaultTimeout(45000);
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+  await page.locator('button.case-row').filter({hasText:case_id}).click();
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+  for(let i=0;i<30;i++){
+<LOCALIZED_TEXT_REMOVED>
+   const [response]=await Promise.all([
+    page.waitForResponse(r=>new URL(r.url()).pathname.startsWith(`/api/v1/tasks/${task_id}/claims/`)&&r.request().method()==='POST'),buttons.first().click()
+   ]);
+   if(!response.ok())throw Error('Claim review HTTP '+response.status());
+   await expect(buttons).toHaveCount(count-1,{timeout:45000});
+   report.checks.push({name:'claim source reviewed via original UI',passed:true});save();
+  }
+  let task;
+<LOCALIZED_TEXT_REMOVED>
+  if(!await confirmed.count()){
+   const [response]=await Promise.all([
+    page.waitForResponse(r=>new URL(r.url()).pathname===`/api/v1/tasks/${task_id}/confirm`&&r.request().method()==='POST'),
+<LOCALIZED_TEXT_REMOVED>
+   ]);
+   task=await response.json();if(!response.ok())throw Error('Confirm HTTP '+response.status());
+  }else{
+   task=await page.evaluate(async({case_id,task_id})=>(await (await fetch('/api/v1/cases/'+case_id,{credentials:'same-origin'})).json()).tasks.find(t=>t.id===task_id),{case_id,task_id});
+  }
+  if(!task.artifact.confirmed||task.artifact.provenance!=='cloud'||!task.artifact.claims.every(c=>c.reviewed&&c.anchors.length))throw Error('Return confirmation failed');
+  report.checks.push({name:'confirmed cloud artifact with valid anchors',passed:true});
+  report.completed=true;report.request_id=task.request.request_id;report.claim_count=task.artifact.claims.length;delete report.error;save();
+  fs.writeFileSync(path.join(root,'document-completed-task.json'),JSON.stringify(task,null,2));
+  await confirmed.waitFor();
+  await page.screenshot({path:path.join(root,'document-cloud-confirmed.png'),fullPage:true});
+  console.log(JSON.stringify({completed:true,claims:report.claim_count,cloud_posts_this_script:0,request_id:report.request_id}));
+ }finally{
+  if(page){await page.screenshot({path:path.join(root,'return-final.png'),fullPage:true});fs.writeFileSync(path.join(root,'return-body.txt'),await page.locator('body').innerText());}
+  await browser.close();save();
+ }
+})().catch(e=>{report.error=e.message;save();console.error(e.message);process.exitCode=1;});

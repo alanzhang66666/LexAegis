@@ -1,0 +1,8 @@
+ARCHIVED SOURCE - NOT AN EXECUTABLE ENTRYPOINT. Local literals removed.
+
+param([ValidateSet('start','stop','status','verify')][string]$Action='status')
+$ErrorActionPreference='Stop'
+$runtimePython='<PRIVATE_RUNTIME_ROOT>\.venv\Scripts\python.exe'
+if(-not (Test-Path -LiteralPath $runtimePython)){throw 'LexAegis Python runtime was not found.'}
+& $runtimePython (Join-Path $PSScriptRoot 'manage.py') $Action
+if($LASTEXITCODE -ne 0){throw "Deployment command failed: $Action"}

@@ -1,0 +1,87 @@
+ARCHIVED SOURCE - NOT AN EXECUTABLE ENTRYPOINT. Local literals removed.
+
+/* The original login, review, approval, send and confirmation buttons. */
+const fs=require('fs'),path=require('path');
+const {chromium,expect}=require('<PRIVATE_RUNTIME_ROOT>/frontend/node_modules/@playwright/test');
+const root=__dirname,read=name=>JSON.parse(fs.readFileSync(path.join(root,name),'utf8'));
+const base=read('public-status.json').url,accounts=read('accounts.json');
+const {case_id,task_id}=read('browser-evidence.json');
+const report={url:base,case_id,task_id,synthetic_only:true,checks:[],cloud_posts:0};
+const save=()=>fs.writeFileSync(path.join(root,'browser-flow.json'),JSON.stringify(report,null,2));
+const check=(name,passed)=>{report.checks.push({name,passed});save();if(!passed)throw Error(name);};
+(async()=>{
+ if(fs.existsSync(path.join(root,'browser-send-once.json')))throw Error('This real send test already ran; use manage.py verify for read-only verification');
+ const browser=await chromium.launch({channel:'msedge',headless:true,args:['--no-proxy-server','--disable-quic',`--host-resolver-rules=MAP ${new URL(base).hostname} 104.16.230.132`]});
+ let last;
+ async function open(role){
+  const context=await browser.newContext({viewport:{width:1440,height:1050}});
+  const page=await context.newPage();last=page;page.setDefaultTimeout(40000);
+  await page.goto(base,{waitUntil:'networkidle'});
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+  await page.locator('button.case-row').filter({hasText:case_id}).click();
+<LOCALIZED_TEXT_REMOVED>
+  return page;
+ }
+ async function mutation(page,suffix,action){
+  const [response]=await Promise.all([
+   page.waitForResponse(r=>new URL(r.url()).pathname===`/api/v1/tasks/${task_id}/${suffix}`&&r.request().method()==='POST'),action()
+  ]);
+  check(suffix+' through original UI',response.ok()); return response.json();
+ }
+ try {
+  const op=await open('case_operator');
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+  check('frozen request has no blockers',task.risk.blockers.length===0);
+  report.request_hash=task.request_hash;save();
+  const legal=await open('legal_reviewer');
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+  await legal.locator('.check-grid input[type=checkbox]').first().check();
+<LOCALIZED_TEXT_REMOVED>
+  const first=await sources.locator('option').first().getAttribute('value');
+  await sources.selectOption(first);
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+  const approval=await open('approver');
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+  const marker=path.join(root,'browser-send-once.json');
+  if(fs.existsSync(marker))throw Error('A browser send has already been attempted; inspect its receipt instead of retrying');
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+  fs.writeFileSync(marker,JSON.stringify({task_id,request_hash:task.request_hash,at:new Date().toISOString()}));
+  report.cloud_posts=1;save();
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+  for(let i=0;i<20;i++){
+<LOCALIZED_TEXT_REMOVED>
+   if(await review.count()===0)break;
+   const before=await review.count();
+   const [response]=await Promise.all([
+    legal.waitForResponse(r=>new URL(r.url()).pathname.startsWith(`/api/v1/tasks/${task_id}/claims/`)&&r.request().method()==='POST'),review.first().click()
+   ]);
+   check('claim review through original UI',response.ok());
+   await expect(review).toHaveCount(before-1,{timeout:45000});
+  }
+<LOCALIZED_TEXT_REMOVED>
+  check('confirmed cloud provenance',final.artifact.confirmed&&final.artifact.provenance==='cloud');
+<LOCALIZED_TEXT_REMOVED>
+  await legal.screenshot({path:path.join(root,'public-cloud-confirmed.png'),fullPage:true});
+  fs.writeFileSync(path.join(root,'browser-cloud-task.json'),JSON.stringify(final,null,2));
+  report.completed=true;save();
+  console.log(JSON.stringify({completed:true,cloud_posts:1,checks:report.checks.length,case_id,task_id}));
+ } finally {
+  if(last){await last.screenshot({path:path.join(root,'browser-flow-final.png'),fullPage:true});fs.writeFileSync(path.join(root,'browser-flow-body.txt'),await last.locator('body').innerText());}
+  await browser.close();save();
+ }
+})().catch(e=>{report.error=e.message;save();console.error(e.message);process.exitCode=1;});

@@ -1,0 +1,27 @@
+ARCHIVED SOURCE - NOT AN EXECUTABLE ENTRYPOINT. Local literals removed.
+
+"""Deployment-only, user-authorized budget extension; preserves every receipt."""
+import json
+from pathlib import Path
+from cloud_runtime import create_app as original_create_app, IntegrationBudget
+
+def create_app():
+    app = original_create_app()
+    policy = json.loads(Path('/run/quota/allowance.json').read_text())
+    if not isinstance(app, IntegrationBudget):
+        raise ValueError('Budget extension is integration-only')
+    if policy['previous_ceiling'] != 10 or not 0 <= policy['additional_requests'] <= 10:
+        raise ValueError('Invalid external deployment allowance')
+    ceiling = policy['previous_ceiling'] + policy['additional_requests']
+    if ceiling != policy['lifetime_ceiling']:
+        raise ValueError('Allowance ceiling mismatch')
+    with app.store.transaction() as repo:
+        identifier = 'deployment-allowance:' + policy['id']
+        try:
+            previous = repo.get(identifier, 'deployment_allowance')
+            if previous['lifetime_ceiling'] != ceiling:
+                raise ValueError('Allowance cannot be rewritten')
+        except KeyError:
+            repo.put('deployment_allowance', {'id': identifier, **{k: policy[k] for k in ('previous_ceiling', 'additional_requests', 'lifetime_ceiling', 'authorization', 'created_at')}})
+    app.limit = ceiling
+    return app

@@ -1,0 +1,79 @@
+ARCHIVED SOURCE - NOT AN EXECUTABLE ENTRYPOINT. Local literals removed.
+
+"""Deployment regression, using local stubs only; no paid provider requests."""
+import json
+from pathlib import Path
+import sys
+import httpx
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+sys.path.insert(0, '<PRIVATE_RUNTIME_ROOT>/deploy/cloud_gateway')
+from cloud_runtime import IntegrationBudget
+from lexaegis.storage import Store
+import quota_runtime
+import public_proxy
+
+def budget(path):
+    return IntegrationBudget(FastAPI(), Store(path), 'unit-signing-secret-only', limit=10, initial=10)
+
+def test_additional_ten_persists_and_stops_at_twenty(tmp_path):
+    path = tmp_path / 'quota.sqlite'
+    instance = budget(path)
+    instance.limit = 20
+    for index in range(10):
+        assert instance.reserve({'request_id': f'request-{index}'}) is None
+    assert instance.quota() == {'limit': 20, 'reserved': 20, 'remaining': 0}
+    assert instance.reserve({'request_id': 'request-eleven'}) == 'Integration cloud quota exhausted'
+    restarted = budget(path)
+    restarted.limit = 20
+    assert restarted.quota()['reserved'] == 20
+    assert restarted.reserve({'request_id': 'after-restart'}) == 'Integration cloud quota exhausted'
+
+def test_duplicate_and_uncertain_reservations_never_send_again(tmp_path):
+    instance = budget(tmp_path / 'quota.sqlite')
+    instance.limit = 20
+    request = {'request_id': 'uncertain'}
+    assert instance.reserve(request) is None
+    assert instance.reserve(request) == 'Uncertain reservation; reconcile before reuse'
+    assert instance.quota()['reserved'] == 11
+    with instance.store.transaction() as repo:
+        repo.put('send', {'id': 'uncertain', 'status': 'unknown'})
+    assert instance.reserve(request) is None
+    assert instance.quota()['reserved'] == 11
+
+def test_allowance_cannot_exceed_user_grant_or_rewrite(tmp_path, monkeypatch):
+    instance = budget(tmp_path / 'quota.sqlite')
+    policy = {'id': 'current-grant', 'previous_ceiling': 10, 'additional_requests': 10, 'lifetime_ceiling': 20, 'authorization': 'explicit synthetic user test grant', 'created_at': '2026-11-02'}
+    file = tmp_path / 'allowance.json'
+    file.write_text(json.dumps(policy))
+    monkeypatch.setattr(quota_runtime, 'Path', lambda _: file)
+    monkeypatch.setattr(quota_runtime, 'original_create_app', lambda: instance)
+    assert quota_runtime.create_app().limit == 20
+    file.write_text(json.dumps({**policy, 'additional_requests': 11, 'lifetime_ceiling': 21}))
+    with pytest.raises(ValueError, match='Invalid'):
+        quota_runtime.create_app()
+    file.write_text(json.dumps({**policy, 'additional_requests': 9, 'lifetime_ceiling': 19}))
+    with pytest.raises(ValueError, match='rewritten'):
+        quota_runtime.create_app()
+
+def test_proxy_keeps_sessions_private_and_forwards_original_body(monkeypatch):
+    observed = []
+    real_client = httpx.AsyncClient
+
+    async def upstream(request):
+        observed.append(request)
+        return httpx.Response(200, json={'ok': True}, headers={'set-cookie': 'lex_session=original-session-token; HttpOnly; SameSite=strict; Path=/'})
+    monkeypatch.setattr(public_proxy.httpx, 'AsyncClient', lambda **kwargs: real_client(transport=httpx.MockTransport(upstream), **kwargs))
+    with TestClient(public_proxy.app, base_url='https://internal.example') as a, TestClient(public_proxy.app, base_url='https://internal.example') as b:
+        raw = b'{"transport":"cloud", "synthetic":true}'
+        response = a.post('/api/v1/example', content=raw, headers={'Origin': 'https://internal.example', 'Cookie': 'lex_session=browser-alpha-token; unrelated=private'})
+        assert response.status_code == 200
+        assert observed[-1].content == raw
+        assert observed[-1].headers['cookie'] == 'lex_session=browser-alpha-token'
+        assert 'secure' in response.headers['set-cookie'].lower()
+        assert b.get('/api/v1/example').status_code == 200
+        assert 'cookie' not in observed[-1].headers
+        count = len(observed)
+        assert a.post('/api/v1/example', headers={'Origin': 'https://unrelated.example'}).status_code == 403
+        assert len(observed) == count

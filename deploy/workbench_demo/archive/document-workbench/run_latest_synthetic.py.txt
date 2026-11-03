@@ -1,0 +1,17 @@
+ARCHIVED SOURCE - NOT AN EXECUTABLE ENTRYPOINT. Local literals removed.
+
+"""One registered synthetic E2E using the existing gateway; no production sends."""
+import json
+from pathlib import Path
+import subprocess
+ROOT = Path(__file__).parent
+code = '<LOCALIZED_OR_PRIVATE_TEXT>'
+if (ROOT / 'latest-synthetic-e2e.json').exists():
+    raise SystemExit('Trial report exists; do not automatically send again')
+r = subprocess.run(['docker', 'exec', '-i', 'lexaegis-public-demo-demo-1', 'python', '-'], input=code.encode(), capture_output=True, timeout=240)
+if r.stdout:
+    report = json.loads(r.stdout.decode('utf-8'))
+    (ROOT / 'latest-synthetic-e2e.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+    print(json.dumps({k: report.get(k) for k in ('completed', 'provider_posts', 'status', 'requested_model', 'case_id', 'task_id', 'error', 'stopped')}))
+else:
+    raise SystemExit('Trial failed before a report; inspect the recorded task, do not resend')

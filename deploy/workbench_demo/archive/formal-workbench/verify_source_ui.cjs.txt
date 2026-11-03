@@ -1,0 +1,34 @@
+ARCHIVED SOURCE - NOT AN EXECUTABLE ENTRYPOINT. Local literals removed.
+
+const fs=require('fs'),path=require('path');
+const {chromium,expect}=require('<PRIVATE_RUNTIME_ROOT>/frontend/node_modules/@playwright/test');
+const root=__dirname,read=n=>JSON.parse(fs.readFileSync(path.join(root,n),'utf8'));
+const base=read('status.json').url,account=read('accounts.json').case_operator,{case_id}=read('case-demonstration.json');
+(async()=>{
+ const report={checks:[],cloud_posts:0};
+ const check=(name,passed)=>{report.checks.push({name,passed});if(!passed)throw Error(name);};
+ const browser=await chromium.launch({channel:'msedge',headless:true,args:['--no-proxy-server','--disable-quic',`--host-resolver-rules=MAP ${new URL(base).hostname} 104.16.230.132`]});
+ try{
+  const context=await browser.newContext({baseURL:base,viewport:{width:1440,height:1050}}),page=await context.newPage();page.setDefaultTimeout(40000);
+  await page.goto(base,{waitUntil:'networkidle'});
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+  await page.locator('button.case-row').filter({hasText:case_id}).click();
+  await page.locator('.fact-card').first().waitFor();
+  check('62 candidates rendered',await page.locator('.fact-card').count()===62);
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+  await page.screenshot({path:path.join(root,'case-source-linked.png'),fullPage:false});
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+  await page.screenshot({path:path.join(root,'case-edit-unconfirmed.png'),fullPage:false});
+  report.completed=true;
+ }finally{
+  await browser.close();fs.writeFileSync(path.join(root,'source-ui-evidence.json'),JSON.stringify(report,null,2));
+ }
+ console.log(JSON.stringify({completed:true,checks:report.checks.length,cloud_posts:0}));
+})().catch(e=>{console.error(e.message);process.exitCode=1;});

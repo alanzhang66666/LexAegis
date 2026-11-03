@@ -1,0 +1,59 @@
+ARCHIVED SOURCE - NOT AN EXECUTABLE ENTRYPOINT. Local literals removed.
+
+"""Freeze a document-specific core-fact checklist before viewing model output."""
+from datetime import datetime, timezone
+import hashlib
+import json
+from pathlib import Path
+ROOT = Path(__file__).parent
+rows = []
+
+def add(category, field, text, paragraphs, **extra):
+    rows.append({'id': f'G{len(rows) + 1:03}', 'category': category, 'field': field, 'text': text, 'source_paragraph_indices': paragraphs, **extra})
+company = '<PRIVATE_FIXTURE>'
+third = '<PRIVATE_FIXTURE>'
+workers = [('<PRIVATE_FIXTURE>', '<PRIVATE_NUMERIC_OR_DATE>'), ('<PRIVATE_FIXTURE>', '<PRIVATE_NUMERIC_OR_DATE>'), ('<PRIVATE_FIXTURE>', '<PRIVATE_NUMERIC_OR_DATE>'), ('<PRIVATE_FIXTURE>', '<PRIVATE_NUMERIC_OR_DATE>'), ('<PRIVATE_FIXTURE>', '<PRIVATE_NUMERIC_OR_DATE>'), ('<PRIVATE_FIXTURE>', '<PRIVATE_NUMERIC_OR_DATE>'), ('<PRIVATE_FIXTURE>', '<PRIVATE_NUMERIC_OR_DATE>'), ('<PRIVATE_FIXTURE>', '<PRIVATE_NUMERIC_OR_DATE>'), ('<LOCALIZED_OR_PRIVATE_TEXT>', '<PRIVATE_NUMERIC_OR_DATE>'), ('<PRIVATE_FIXTURE>', '<PRIVATE_NUMERIC_OR_DATE>'), ('<PRIVATE_FIXTURE>', '<PRIVATE_NUMERIC_OR_DATE>')]
+add('<LOCALIZED_OR_PRIVATE_TEXT>', 'entity', '<LOCALIZED_OR_PRIVATE_TEXT>' + company, [3, 19, 20, 31], subject=company)
+add('<LOCALIZED_OR_PRIVATE_TEXT>', 'entity', '<LOCALIZED_OR_PRIVATE_TEXT>' + third, [17, 22], subject=third)
+for i, (name, amount) in enumerate(workers):
+    add('<LOCALIZED_OR_PRIVATE_TEXT>', 'entity', '<LOCALIZED_OR_PRIVATE_TEXT>' + name, [6 + i, 19, 31], subject=name)
+for name, amount in workers:
+    add('<LOCALIZED_OR_PRIVATE_TEXT>', 'amount', f'{company}<LOCALIZED_OR_PRIVATE_TEXT>{name}<LOCALIZED_OR_PRIVATE_TEXT>{amount}<LOCALIZED_OR_PRIVATE_TEXT>', [25, 32], subject=name, amount=amount, payer=company)
+add('<LOCALIZED_OR_PRIVATE_TEXT>', 'amount', '<LOCALIZED_OR_PRIVATE_TEXT>', [25, 29, 32], amount='<PRIVATE_NUMERIC_OR_DATE>', payer=company)
+add('<LOCALIZED_OR_PRIVATE_TEXT>', 'date', '<LOCALIZED_OR_PRIVATE_TEXT>', [25], start='2022-11', end='2023-04')
+add('<LOCALIZED_OR_PRIVATE_TEXT>', 'date', '<LOCALIZED_OR_PRIVATE_TEXT>', [19], date='<PRIVATE_NUMERIC_OR_DATE>')
+add('<LOCALIZED_OR_PRIVATE_TEXT>', 'date', '<LOCALIZED_OR_PRIVATE_TEXT>', [26], date='<PRIVATE_NUMERIC_OR_DATE>')
+add('<LOCALIZED_OR_PRIVATE_TEXT>', 'date', '<LOCALIZED_OR_PRIVATE_TEXT>', [39], date='2024-05-20')
+add('<LOCALIZED_OR_PRIVATE_TEXT>', 'relation', '<LOCALIZED_OR_PRIVATE_TEXT>', [24])
+add('<LOCALIZED_OR_PRIVATE_TEXT>', 'relation', '<LOCALIZED_OR_PRIVATE_TEXT>', [24, 28])
+add('<LOCALIZED_OR_PRIVATE_TEXT>', 'relation', '<LOCALIZED_OR_PRIVATE_TEXT>', [20, 22, 24, 28])
+add('<LOCALIZED_OR_PRIVATE_TEXT>', 'event', '<LOCALIZED_OR_PRIVATE_TEXT>', [22, 24, 28])
+add('<LOCALIZED_OR_PRIVATE_TEXT>', 'relation', '<LOCALIZED_OR_PRIVATE_TEXT>', [22, 23, 28])
+add('<LOCALIZED_OR_PRIVATE_TEXT>', 'relation', '<LOCALIZED_OR_PRIVATE_TEXT>', [23, 28])
+add('<LOCALIZED_OR_PRIVATE_TEXT>', 'relation', '<LOCALIZED_OR_PRIVATE_TEXT>', [23])
+add('<LOCALIZED_OR_PRIVATE_TEXT>', 'event', '<LOCALIZED_OR_PRIVATE_TEXT>', [24])
+add('<LOCALIZED_OR_PRIVATE_TEXT>', 'event', '<LOCALIZED_OR_PRIVATE_TEXT>', [20, 29], stance='claim', asserting_party=company)
+add('<LOCALIZED_OR_PRIVATE_TEXT>', 'event', '<LOCALIZED_OR_PRIVATE_TEXT>', [20, 29], stance='claim', asserting_party=company)
+add('<LOCALIZED_OR_PRIVATE_TEXT>', 'event', '<LOCALIZED_OR_PRIVATE_TEXT>', [20, 29], stance='claim', asserting_party=company)
+add('<LOCALIZED_OR_PRIVATE_TEXT>', 'event', '<LOCALIZED_OR_PRIVATE_TEXT>', [21], stance='claim', asserting_party='<LOCALIZED_OR_PRIVATE_TEXT>')
+add('<LOCALIZED_OR_PRIVATE_TEXT>', 'event', '<LOCALIZED_OR_PRIVATE_TEXT>', [22], stance='claim', asserting_party=third)
+add('<LOCALIZED_OR_PRIVATE_TEXT>', 'evidence', '<LOCALIZED_OR_PRIVATE_TEXT>', [25, 28])
+add('<LOCALIZED_OR_PRIVATE_TEXT>', 'evidence', '<LOCALIZED_OR_PRIVATE_TEXT>', [25])
+add('<LOCALIZED_OR_PRIVATE_TEXT>', 'evidence', '<LOCALIZED_OR_PRIVATE_TEXT>', [25, 28])
+add('<LOCALIZED_OR_PRIVATE_TEXT>', 'relation', '<LOCALIZED_OR_PRIVATE_TEXT>', [29, 31], stance='court_found')
+add('<LOCALIZED_OR_PRIVATE_TEXT>', 'event', '<LOCALIZED_OR_PRIVATE_TEXT>', [32], days=10)
+add('<LOCALIZED_OR_PRIVATE_TEXT>', 'event', '<LOCALIZED_OR_PRIVATE_TEXT>', [33], stance='court_found')
+add('<LOCALIZED_OR_PRIVATE_TEXT>', 'evidence', '<LOCALIZED_OR_PRIVATE_TEXT>', [2])
+add('<LOCALIZED_OR_PRIVATE_TEXT>', 'evidence', '<LOCALIZED_OR_PRIVATE_TEXT>', [26])
+add('<LOCALIZED_OR_PRIVATE_TEXT>', 'amount', '<LOCALIZED_OR_PRIVATE_TEXT>', [35], amount=10)
+add('<LOCALIZED_OR_PRIVATE_TEXT>', 'amount', '<LOCALIZED_OR_PRIVATE_TEXT>', [35], amount=5, payer=company)
+add('<LOCALIZED_OR_PRIVATE_TEXT>', 'event', '<LOCALIZED_OR_PRIVATE_TEXT>', [34])
+add('<LOCALIZED_OR_PRIVATE_TEXT>', 'date', '<LOCALIZED_OR_PRIVATE_TEXT>', [36], days=15)
+report = {'created_at': datetime.now(timezone.utc).isoformat(), 'source_sha256': json.loads((ROOT / 'source-document.json').read_text(encoding='utf-8'))['source_sha256'], 'annotation': 'Agent-authored document-specific core-fact checklist, frozen before extraction output; not independent lawyer gold standard', 'scope': '<LOCALIZED_OR_PRIVATE_TEXT>', 'match_policy': '<LOCALIZED_OR_PRIVATE_TEXT>', 'full_document_precision_recall': False, 'facts': rows}
+raw = json.dumps(report, ensure_ascii=False, indent=2).encode()
+file = ROOT / 'case-gold-frozen.json'
+if file.exists():
+    raise SystemExit('Gold already frozen; do not overwrite after model output')
+file.write_bytes(raw)
+(ROOT / 'case-gold-freeze.json').write_text(json.dumps({'sha256': hashlib.sha256(raw).hexdigest(), 'count': len(rows), 'created_at': report['created_at']}), encoding='utf-8')
+print(json.dumps({'frozen_core_facts': len(rows), 'sha256': hashlib.sha256(raw).hexdigest()}))

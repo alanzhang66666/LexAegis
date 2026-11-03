@@ -1,0 +1,176 @@
+ARCHIVED SOURCE - NOT AN EXECUTABLE ENTRYPOINT. Local literals removed.
+
+"""Deploy the authorized synthetic document copy. Preserve both existing workspaces."""
+import argparse
+from datetime import datetime, timezone
+import io
+import json
+import os
+from pathlib import Path
+import re
+import secrets
+import shutil
+import subprocess
+import tarfile
+import tempfile
+import time
+ROOT = Path(__file__).parent
+OLD = ROOT.parent / 'public-workbench'
+FORMAL = ROOT.parent / 'formal-workbench'
+COMPOSE = ROOT / 'compose.json'
+BASE = 'sha256:a2273e6280dab8792219e7cce34abdbe6f687bfe226b718ca5481db4675d7dd9'
+APP_TAG = 'lexaegis:registered-document-demo'
+
+def cmd(args, **kwargs):
+    r = subprocess.run(args, capture_output=True, timeout=kwargs.pop('timeout', 120), **kwargs)
+    if r.returncode:
+        raise RuntimeError('Deployment command failed: ' + args[0])
+    return r.stdout
+
+def compose(*args):
+    return ['docker', 'compose', '-f', str(COMPOSE), *args]
+
+def save(name, value):
+    (ROOT / name).write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding='utf-8')
+
+def volume(name):
+    existing = subprocess.run(['docker', 'volume', 'inspect', name], capture_output=True)
+    if existing.returncode == 0:
+        if (json.loads(existing.stdout)[0].get('Labels') or {}).get('lexaegis.deployment') != 'registered-document-20261103':
+            raise ValueError('Volume ownership mismatch')
+    else:
+        cmd(['docker', 'volume', 'create', '--label', 'lexaegis.deployment=registered-document-20261103', name])
+
+def provision(name, files, image=BASE):
+    volume(name)
+    payload = io.BytesIO()
+    with tarfile.open(fileobj=payload, mode='w') as archive:
+        for filename, content in files.items():
+            member = tarfile.TarInfo(filename)
+            member.size = len(content)
+            member.mode = 384
+            archive.addfile(member, io.BytesIO(content))
+    code = "import io,tarfile,sys,os,pathlib; a=tarfile.open(fileobj=io.BytesIO(sys.stdin.buffer.read()),mode='r:'); root=pathlib.Path('/provision'); os.chown(root,10001,10001); os.chmod(root,0o700); [( (root/m.name).write_bytes(a.extractfile(m).read()), os.chmod(root/m.name,0o600), os.chown(root/m.name,10001,10001)) for m in a.getmembers() if m.isfile() and '/' not in m.name and m.name not in {'.','..'}]"
+    cmd(['docker', 'run', '--rm', '-i', '--network', 'none', '--read-only', '--user', '0:0', '--cap-drop=ALL', '--cap-add=CHOWN', '--cap-add=DAC_OVERRIDE', '--cap-add=FOWNER', '--security-opt=no-new-privileges', '--mount', 'type=volume,src=' + name + ',dst=/provision', '--entrypoint', 'python', image, '-c', code], input=payload.getvalue())
+
+def signed_status():
+    code = "from pathlib import Path; import urllib.request; from lexaegis.util import sign; s=Path('/run/private/gateway-secret').read_text().strip(); r=urllib.request.Request('http://127.0.0.1:8766/deployment/status',headers={'X-Gateway-Signature':sign({'op':'health'},s)}); print(urllib.request.urlopen(r,timeout=5).read().decode())"
+    return json.loads(cmd(['docker', 'exec', 'lexaegis-cloud-integration-gateway-1', 'python', '-c', code]))
+
+def build():
+    candidate = ROOT / 'candidate'
+    if cmd(['docker', 'image', 'inspect', 'lexaegis:cloud-gateway-candidate', '--format', '{{.Id}}']).decode().strip() != BASE:
+        raise ValueError('Pinned local base image changed')
+    dockerfile = 'FROM lexaegis:cloud-gateway-candidate\nUSER 0:0\nCOPY candidate/lexaegis /app/lexaegis\nCOPY candidate/packs /app/packs\nCOPY candidate/frontend/dist /app/frontend/dist\nCOPY deployment /opt/deployment\nRUN mkdir -p /data/workbench && chown -R 10001:10001 /data\nENV PYTHONPATH=/opt/deployment:/opt/cloud_gateway:/app PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1\nUSER 10001:10001\nCMD ["python","/opt/deployment/document_workbench.py"]\n'
+    with tempfile.TemporaryDirectory() as temp, (ROOT / 'build.log').open('wb') as log:
+        context = Path(temp)
+        for name in ('lexaegis', 'packs', 'frontend/dist'):
+            shutil.copytree(candidate / name, context / 'candidate' / name, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+        deployment = context / 'deployment'
+        deployment.mkdir()
+        for name in ('document_workbench.py', 'ds_gateway.py', 'shared_budget.py', 'registered-manifest.json'):
+            shutil.copy2(ROOT / name, deployment / name)
+        for name in ('public_proxy.py', 'poll_events.js'):
+            shutil.copy2(OLD / name, deployment / name)
+        (context / 'Dockerfile').write_text(dockerfile)
+        result = subprocess.run(['docker', 'build', '-t', APP_TAG, str(context)], stdout=log, stderr=log)
+        if result.returncode:
+            raise RuntimeError('Build failed; inspect private build.log')
+    image = cmd(['docker', 'image', 'inspect', APP_TAG, '--format', '{{.Id}}']).decode().strip()
+    save('image.json', {'image_config_id': image, 'original_repository_modified': False})
+    print('Registered document image built')
+
+def configure():
+    image = json.loads((ROOT / 'image.json').read_text())['image_config_id']
+    connector = json.loads((FORMAL / 'images.json').read_text())['connector']
+    if not (ROOT / 'global-policy.json').exists():
+        old = signed_status()
+        used = old['quota']['reserved']
+        if old['quota']['limit'] != 20 or used >= 20:
+            raise ValueError('No remaining user-authorized trial budget')
+        save('global-policy.json', {'initial_reserved': used, 'lifetime_limit': 20, 'authorization': 'Existing user grant: previous ten plus at most ten additional; shared by all synthetic gateways', 'created_at': datetime.now(timezone.utc).isoformat()})
+    policy = (ROOT / 'global-policy.json').read_bytes()
+    prefix = 'lexaegis-document-demo-'
+    provision(prefix + 'shared-budget', {})
+    provision(prefix + 'gateway-code', {'ds_gateway.py': (ROOT / 'ds_gateway.py').read_bytes(), 'shared_budget.py': (ROOT / 'shared_budget.py').read_bytes(), 'global-policy.json': policy})
+    secret = ROOT / 'gateway-secret'
+    if not secret.exists():
+        secret.write_text(secrets.token_urlsafe(48))
+    signing = secret.read_bytes()
+    provision(prefix + 'signing', {'gateway-secret': signing})
+    key_file = ROOT.parent / 'integration/gateway.env'
+    provision(prefix + 'provider-private', {'gateway-secret': signing, 'gateway.env': key_file.read_bytes()})
+    for suffix in ('app-data', 'gateway-data', 'route-guard'):
+        provision(prefix + suffix, {})
+    cmd(['docker', 'run', '--rm', '--network', 'none', '--read-only', '--user', '0:0', '--cap-drop=ALL', '--cap-add=CHOWN', '--cap-add=FOWNER', '--mount', 'type=volume,src=' + prefix + 'route-guard,dst=/provision', '--entrypoint', 'python', BASE, '-c', "import os; os.chown('/provision',0,0); os.chmod('/provision',0o755)"])
+    manifest_hash = (ROOT / 'registered-manifest.sha256').read_text().strip()
+    registration = {'LEX_REGISTERED_DEMO_MANIFEST': '/opt/deployment/registered-manifest.json', 'LEX_REGISTERED_DEMO_MANIFEST_SHA256': manifest_hash}
+    standard = {'image': image, 'pull_policy': 'never', 'user': '10001:10001', 'read_only': True, 'cap_drop': ['ALL'], 'security_opt': ['no-new-privileges:true'], 'tmpfs': ['/tmp'], 'restart': 'unless-stopped', 'logging': {'driver': 'json-file', 'options': {'max-size': '10m', 'max-file': '3'}}}
+
+    def service(**kwargs):
+        return {**standard, **kwargs}
+    health = lambda port, route: {'test': ['CMD', 'python', '-c', f"import urllib.request; urllib.request.urlopen('http://127.0.0.1:{port}{route}',timeout=3)"], 'interval': '5s', 'timeout': '4s', 'retries': 24, 'start_period': '30s'}
+    config = {'name': 'lexaegis-document-demo', 'services': {'workbench': service(networks=['document-private'], volumes=['app-data:/data', 'signing:/run/signing:ro'], environment=registration, healthcheck=health(59767, '/_public_demo_health'), depends_on={'edge-model': {'condition': 'service_healthy'}, 'doc-gateway': {'condition': 'service_healthy'}}), 'doc-gateway': service(command=['python', '-m', 'uvicorn', 'ds_gateway:create_app', '--factory', '--host', '0.0.0.0', '--port', '8766', '--no-access-log'], networks=['document-private', 'cloud-private'], volumes=['gateway-data:/data', 'provider-private:/run/private:ro', 'shared-budget:/quota', 'gateway-code:/opt/ds_gateway:ro'], environment={**registration, 'LEX_RUN_PROFILE': 'integration', 'LEX_GATEWAY_ROLE': 'cloud', 'LEX_GATEWAY_DIR': '/data/gateway', 'LEX_RUNTIME_ROLE': 'gateway', 'LEX_CLOUD_ALLOWED_HOSTS': 'api.deepseek.com', 'LEX_INITIAL_CONSUMED': '0'}, healthcheck={'test': ['CMD', 'python', '-c', "import socket; socket.create_connection(('127.0.0.1',8766),3).close()"], 'interval': '5s', 'retries': 20, 'start_period': '20s'}), 'edge-model': service(image=connector, networks=['document-private', 'model-host-uplink'], volumes=['route-guard:/run/route-guard:ro'], healthcheck=health(8080, '/health')), 'model-guard': service(image=connector, user='0:0', cap_add=['NET_ADMIN'], network_mode='service:edge-model', command=['python', '/opt/edge_connector/model_route_guard.py'], volumes=['route-guard:/run/route-guard']), 'tunnel': service(image='cloudflare/cloudflared:2026.10.7@sha256:4955524aeaa379e154023d5a027c250f7b35041a2e7e950cf13f144bc9b9c5ba', user='65532:65532', networks=['document-private', 'tunnel-uplink'], command=['tunnel', '--no-autoupdate', '--protocol', 'http2', '--edge-ip-version', '4', '--url', 'http://workbench:59767'], depends_on={'workbench': {'condition': 'service_healthy'}})}, 'networks': {'document-private': {'internal': True}, 'model-host-uplink': {}, 'tunnel-uplink': {}, 'cloud-private': {'external': True, 'name': 'lexaegis-cloud-integration_gateway-private'}}, 'volumes': {suffix: {'external': True, 'name': prefix + suffix} for suffix in ('app-data', 'gateway-data', 'signing', 'provider-private', 'shared-budget', 'gateway-code', 'route-guard')}}
+    save('compose.json', config)
+    oldfile = OLD / 'cloud.compose.json'
+    if not (ROOT / 'existing-cloud-compose.before.json').exists():
+        shutil.copy2(oldfile, ROOT / 'existing-cloud-compose.before.json')
+    old = json.loads(oldfile.read_text())
+    gateway = old['services']['gateway']
+    gateway['command'] = ['python', '-m', 'uvicorn', 'ds_gateway:create_app', '--factory', '--host', '0.0.0.0', '--port', '8766', '--no-access-log']
+    gateway['environment']['PYTHONPATH'] = '/opt/ds_gateway:/opt/cloud_gateway:/app'
+    additions = [{'type': 'volume', 'source': 'shared-budget', 'target': '/quota'}, {'type': 'volume', 'source': 'gateway-code', 'target': '/opt/ds_gateway', 'read_only': True}]
+    gateway['volumes'] = [v for v in gateway['volumes'] if v.get('target') not in {'/quota', '/opt/ds_gateway'}] + additions
+    old['volumes']['shared-budget'] = {'external': True, 'name': prefix + 'shared-budget'}
+    old['volumes']['gateway-code'] = {'external': True, 'name': prefix + 'gateway-code'}
+    oldfile.write_text(json.dumps(old, ensure_ascii=False, indent=2), encoding='utf-8')
+    cmd(['docker', 'compose', '-f', str(oldfile), 'config', '--quiet'])
+    cmd(compose('config', '--quiet'))
+    print('Independent deployment configured; existing ledger retained')
+
+def start():
+    cmd(['docker', 'compose', '-f', str(OLD / 'cloud.compose.json'), 'up', '-d', '--no-deps', 'gateway'], timeout=120)
+    for _ in range(45):
+        try:
+            if signed_status()['quota']['limit'] == 20:
+                break
+        except RuntimeError:
+            pass
+        time.sleep(0.5)
+    else:
+        raise RuntimeError('Existing gateway did not become ready')
+    cmd(compose('up', '-d', 'edge-model', 'model-guard', 'doc-gateway', 'workbench', 'tunnel'), timeout=220)
+    for _ in range(90):
+        try:
+            data = json.loads(cmd(['docker', 'exec', 'lexaegis-document-demo-workbench-1', 'python', '-c', "from pathlib import Path; print(Path('/data/workbench/integration/config/accounts.json').read_text())"]))
+            save('accounts.json', data)
+            labels = {'admin': '<LOCALIZED_OR_PRIVATE_TEXT>', 'case_operator': '<LOCALIZED_OR_PRIVATE_TEXT>', 'technical_reviewer': '<LOCALIZED_OR_PRIVATE_TEXT>', 'legal_reviewer': '<LOCALIZED_OR_PRIVATE_TEXT>', 'approver': '<LOCALIZED_OR_PRIVATE_TEXT>'}
+            (ROOT / '<LOCALIZED_OR_PRIVATE_TEXT>').write_text('<LOCALIZED_OR_PRIVATE_TEXT>' + '\n'.join((labels[k] + '\t' + v['username'] + '\t' + v['password'] for k, v in data.items())), encoding='utf-8')
+            break
+        except (RuntimeError, ValueError):
+            time.sleep(0.5)
+    status()
+
+def status():
+    logs = cmd(compose('logs', '--no-color', '--tail', '160', 'tunnel')).decode(errors='replace')
+    urls = re.findall('https://[a-z0-9-]+\\.trycloudflare\\.com', logs)
+    states = {}
+    for label in ('workbench', 'doc-gateway', 'edge-model', 'model-guard', 'tunnel'):
+        info = json.loads(cmd(['docker', 'inspect', 'lexaegis-document-demo-' + label + '-1']))[0]
+        states[label] = {'status': info['State']['Status'], 'health': info['State'].get('Health', {}).get('Status'), 'image': info['Image']}
+    result = {'url': urls[-1] if urls else None, 'profile': 'integration', 'scope': 'registered_synthetic_document', 'quota': signed_status()['quota'], 'original_repository_modified': False, 'production_dispatch': 'blocked', 'containers': states}
+    save('status.json', result)
+    print(json.dumps(result))
+
+def stop():
+    cmd(compose('stop', 'tunnel', 'workbench', 'doc-gateway', 'model-guard', 'edge-model'))
+    print('Document demo stopped; existing workspaces, host model and all data retained')
+if __name__ == '__main__':
+    p = argparse.ArgumentParser()
+    p.add_argument('action', choices=['build', 'configure', 'start', 'status', 'stop'])
+    a = p.parse_args()
+    try:
+        {'build': build, 'configure': configure, 'start': start, 'status': status, 'stop': stop}[a.action]()
+    except Exception as e:
+        print('Deployment stopped: ' + str(e))
+        raise SystemExit(1)

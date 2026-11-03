@@ -1,0 +1,103 @@
+ARCHIVED SOURCE - NOT AN EXECUTABLE ENTRYPOINT. Local literals removed.
+
+"""Deploy the approved system name as static frontend layers only."""
+import argparse
+from datetime import datetime, timezone
+import hashlib
+import json
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+import time
+ROOT = Path(__file__).parent
+DEPLOY = ROOT.parent
+TARGETS = {'demo': {'container': 'lexaegis-public-demo-demo-1', 'compose': DEPLOY / 'public-workbench/public.compose.json', 'service': 'demo', 'database': '/data/workbench/integration/app/app.sqlite'}, 'formal': {'container': 'lexaegis-formal-workbench-formal-1', 'compose': DEPLOY / 'formal-workbench/compose.json', 'service': 'formal', 'database': '/data/workbench/production/app/app.sqlite'}}
+FULL_NAME = '<LOCALIZED_OR_PRIVATE_TEXT>'
+
+def command(args, timeout=120, **kwargs):
+    result = subprocess.run([str(a) for a in args], capture_output=True, timeout=timeout, **kwargs)
+    if result.returncode:
+        raise RuntimeError('Branding command failed: ' + str(args[0]))
+    return result.stdout
+
+def save(name, value):
+    (ROOT / name).write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding='utf-8')
+
+def read(name):
+    return json.loads((ROOT / name).read_text(encoding='utf-8'))
+
+def state(name):
+    target = TARGETS[name]
+    script = "\nimport hashlib,json,sqlite3\nconnection=sqlite3.connect(DB)\nrows=connection.execute('select id,kind,body from records').fetchall()\ncase_ids=sorted(i for i,k,b in rows if k=='case')\nfact_ids=sorted(i for i,k,b in rows if k=='fact')\nactive=[]\nfor identifier,kind,body in rows:\n record=json.loads(body)\n if kind=='job' and record.get('status') in ('pending','running'):active.append(identifier)\n if kind=='task' and record.get('status') in ('queued','sending'):active.append(identifier)\nprint(json.dumps({'case_ids':case_ids,'fact_count':len(fact_ids),'fact_ids_sha256':hashlib.sha256(json.dumps(fact_ids).encode()).hexdigest(),'active':active}))\n".replace('DB', repr(target['database']))
+    return json.loads(command(['docker', 'exec', '-i', target['container'], 'python', '-'], input=script.encode()))
+
+def build():
+    dist = ROOT / 'frontend/dist'
+    html = (dist / 'index.html').read_text(encoding='utf-8')
+    if FULL_NAME not in html:
+        raise RuntimeError('Built frontend does not contain the approved full name')
+    manifest = {path.relative_to(dist).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest() for path in dist.rglob('*') if path.is_file()}
+    save('frontend-dist-manifest.json', {'system_name': FULL_NAME, 'files': manifest})
+    before = {}
+    images = {}
+    for name, target in TARGETS.items():
+        config = json.loads(target['compose'].read_text(encoding='utf-8'))
+        container = json.loads(command(['docker', 'inspect', target['container']]))[0]
+        base = container['Image']
+        before[name] = {'image': base, 'compose_image': config['services'][target['service']]['image'], 'data': state(name), 'tunnel': json.loads(command(['docker', 'inspect', 'lexaegis-public-demo-tunnel-1' if name == 'demo' else 'lexaegis-formal-workbench-tunnel-1']))[0]['State']['StartedAt']}
+        if before[name]['data']['active']:
+            raise RuntimeError(name + ' has active jobs; wait for them to finish')
+        base_tag = 'lexaegis:branding-base-' + name + '-' + base.split(':')[1][:12]
+        command(['docker', 'tag', base, base_tag])
+        tag = 'lexaegis:system-name-' + name
+        with tempfile.TemporaryDirectory() as temp, (ROOT / ('build-' + name + '.log')).open('wb') as log:
+            directory = Path(temp)
+            shutil.copytree(dist, directory / 'dist')
+            dockerfile = '\n'.join(['FROM ' + base_tag, 'USER 0:0', 'RUN python -c "from pathlib import Path; import shutil; p=Path(\'/app/frontend/dist\'); assert p.is_dir() and not p.is_symlink() and p.parent.resolve()==Path(\'/app/frontend\'); shutil.rmtree(p)"', 'COPY dist /app/frontend/dist', 'USER 10001:10001', ''])
+            (directory / 'Dockerfile').write_text(dockerfile)
+            result = subprocess.run(['docker', 'build', '--pull=false', '-t', tag, str(directory)], stdout=log, stderr=log)
+            if result.returncode:
+                raise RuntimeError('Frontend image build failed: ' + name)
+        images[name] = command(['docker', 'image', 'inspect', tag, '--format', '{{.Id}}']).decode().strip()
+    save('deployment-before.json', before)
+    save('images.json', images)
+    print('Both static frontend images built', flush=True)
+
+def apply():
+    images = read('images.json')
+    before = read('deployment-before.json')
+    result = {}
+    for name, target in TARGETS.items():
+        previous = state(name)
+        if previous['active']:
+            raise RuntimeError(name + ' has active jobs; wait for them to finish')
+        config = json.loads(target['compose'].read_text(encoding='utf-8'))
+        config['services'][target['service']]['image'] = images[name]
+        target['compose'].write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding='utf-8')
+        command(['docker', 'compose', '-f', target['compose'], 'up', '-d', '--no-deps', target['service']])
+        for _ in range(90):
+            try:
+                code = "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:59767/',timeout=3).read().decode())"
+                response = command(['docker', 'exec', target['container'], 'python', '-c', code], timeout=6).decode()
+                if FULL_NAME in response:
+                    break
+            except (RuntimeError, subprocess.SubprocessError):
+                pass
+            time.sleep(0.5)
+        else:
+            config['services'][target['service']]['image'] = before[name]['image']
+            target['compose'].write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding='utf-8')
+            command(['docker', 'compose', '-f', target['compose'], 'up', '-d', '--no-deps', target['service']])
+            raise RuntimeError(name + ' UI readiness failed; prior image restored')
+        observed = state(name)
+        if any((observed[key] != previous[key] for key in ('case_ids', 'fact_count', 'fact_ids_sha256'))):
+            raise RuntimeError(name + ' case or fact inventory differs after frontend deployment')
+        result[name] = {'image': images[name], 'case_count': len(observed['case_ids']), 'fact_count': observed['fact_count'], 'data_inventory_unchanged': True}
+        print(name + ' frontend deployed; data retained', flush=True)
+    save('deployment-result.json', {'deployed_at': datetime.now(timezone.utc).isoformat(), 'system_name': FULL_NAME, 'targets': result, 'backend_source_changed': False, 'repository_source_changed': False, 'formal_build_identity': 'pending', 'cloud_posts': 0})
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('action', choices=['build', 'apply'])
+    args = parser.parse_args()
+    {'build': build, 'apply': apply}[args.action]()

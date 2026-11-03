@@ -1,0 +1,45 @@
+ARCHIVED SOURCE - NOT AN EXECUTABLE ENTRYPOINT. Local literals removed.
+
+from datetime import datetime, timezone
+import hashlib
+import json
+from pathlib import Path
+import shutil
+import xml.etree.ElementTree as ET
+import httpx
+ROOT = Path(__file__).parent
+DEPLOY = ROOT.parent
+
+def read(name):
+    return json.loads((ROOT / name).read_text(encoding='utf-8'))
+
+def main():
+    status = read('status.json')
+    browser = read('browser-revalidated.json')
+    runtime = read('runtime-evidence.json')
+    old = read('previous-url-before/tunnel-identity.json')
+    continuity = read('tunnel-origin-update-verification.json')
+    try:
+        with httpx.Client(timeout=8, trust_env=False) as client:
+            old_status = client.get(old['requested_url']).status_code
+    except httpx.HTTPError:
+        old_status = None
+    suite = ET.parse(ROOT / 'previous-url-tests.xml').getroot().find('testsuite')
+    tests = {key: int(suite.get(key, '0')) for key in ('tests', 'errors', 'failures', 'skipped')}
+    report = {'checked_at': datetime.now(timezone.utc).isoformat(), 'requested_url': old['requested_url'], 'requested_url_restored': False, 'old_url_http_status': old_status, 'current_url': status['url'], 'scope': 'registered_synthetic_document_integration', 'incident': {'cause': 'Compose up selected the origin and its quick-tunnel dependent together, restarting the existing tunnel', 'before_session': old, 'after_session': continuity['before']['lexaegis-formal-workbench-tunnel-1'], 'responsibility': 'agent deployment operation', 'restoration': 'No retained quick-tunnel credential or supported hostname reclaim path in current configuration', 'reference': 'https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/'}, 'fix': 'Separate origin updates from tunnel start; never select a running quick tunnel together with an updated origin', 'checks': {'public_browser_passed': browser.get('completed', False), 'confirmed_real_cloud_claims': browser['result']['claims'], 'frozen_request_hash': browser['result']['request_hash'], 'proxy_security_tests': tests, 'repeat_start_preserves_sessions': read('tunnel-start-idempotence.json')['checks']['regular_start_preserved_tunnel_sessions'], 'origin_recreation_preserves_sessions': continuity['passed'] and continuity['sessions_preserved'], 'runtime_passed': sum((c['passed'] for c in runtime['checks'])), 'original_repository_unchanged': status['repository']['unchanged'], 'original_formal_unconfirmed_facts': runtime['production_data']['unconfirmed']}, 'new_cloud_generation_posts': 0, 'quota': status['quota'], 'original_formal_data': 'retained in original production volume; public ingress now serves registered document demo', 'formal_dispatch': 'blocked', 'stable_domain': 'not configured; requires user-managed domain/named tunnel'}
+    (ROOT / '<LOCALIZED_OR_PRIVATE_TEXT>').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+    route = json.loads((DEPLOY / 'previous-url-route.json').read_text(encoding='utf-8'))
+    route.update(requested_url_restored=False, current_url=status['url'], last_verified_at=report['checked_at'])
+    (DEPLOY / 'previous-url-route.json').write_text(json.dumps(route, ensure_ascii=False, indent=2), encoding='utf-8')
+    (ROOT / '<LOCALIZED_OR_PRIVATE_TEXT>').write_text(f"<LOCALIZED_OR_PRIVATE_TEXT>{report['checked_at']}<LOCALIZED_OR_PRIVATE_TEXT>{old['requested_url']}<LOCALIZED_OR_PRIVATE_TEXT>{old_status}<LOCALIZED_OR_PRIVATE_TEXT>{status['url']}<LOCALIZED_OR_PRIVATE_TEXT>{status['repository']['files_checked']}<LOCALIZED_OR_PRIVATE_TEXT>{status['quota']['reserved']}/{status['quota']['limit']}<LOCALIZED_OR_PRIVATE_TEXT>{status['quota']['remaining']}<LOCALIZED_OR_PRIVATE_TEXT>", encoding='utf-8')
+    names = ['<LOCALIZED_OR_PRIVATE_TEXT>', '<LOCALIZED_OR_PRIVATE_TEXT>', 'previous-url-tests.xml', 'tunnel-start-idempotence.json', 'tunnel-origin-update-verification.json', 'browser-revalidated.json', 'runtime-evidence.json', 'cloud-receipt.json', 'status.json', 'current-full-chain-confirmed.png', 'manage.py', 'test_previous_url_proxy.py', 'verify_tunnel_origin_updates.py']
+    snapshot = ROOT / 'evidence' / ('public-route-' + datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ'))
+    snapshot.mkdir(parents=True, exist_ok=False)
+    for name in names:
+        shutil.copy2(ROOT / name, snapshot / name)
+    index = {'base_directory': str(ROOT), 'snapshot_directory': str(snapshot.relative_to(ROOT)), 'files': [{'path': str((snapshot / name).relative_to(ROOT)), 'sha256': hashlib.sha256((snapshot / name).read_bytes()).hexdigest()} for name in names]}
+    for file in (ROOT / '<LOCALIZED_OR_PRIVATE_TEXT>', snapshot / '<LOCALIZED_OR_PRIVATE_TEXT>'):
+        file.write_text(json.dumps(index, ensure_ascii=False, indent=2), encoding='utf-8')
+    print(json.dumps({'current_url': status['url'], 'requested_url_restored': False, 'browser_verified': browser.get('completed', False), 'tunnel_continuity_verified': report['checks']['origin_recreation_preserves_sessions'], 'quota': status['quota']}))
+if __name__ == '__main__':
+    main()

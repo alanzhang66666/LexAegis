@@ -1,0 +1,26 @@
+ARCHIVED SOURCE - NOT AN EXECUTABLE ENTRYPOINT. Local literals removed.
+
+"""Read OOXML text, preserving paragraph/table order; never execute document text."""
+import hashlib
+import json
+from pathlib import Path
+import zipfile
+from xml.etree import ElementTree as ET
+ROOT = Path(__file__).parent
+source = Path('<PRIVATE_RUNTIME_ROOT>/xwechat_files/wxid_oxieoa8852cs22_d6d2/msg/file/2026-11/<PRIVATE_FIXTURE>')
+W = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+with zipfile.ZipFile(source) as archive:
+    document = ET.fromstring(archive.read('word/document.xml'))
+    media = [n for n in archive.namelist() if n.startswith('word/media/')]
+rows = []
+for index, item in enumerate(document.find('w:body', W)):
+    text = '\n'.join((''.join(p.itertext()) for p in []))
+    paras = [''.join((t.text or '' for t in p.findall('.//w:t', W))) for p in item.findall('.//w:p', W)] if item.tag.endswith('}tbl') else [''.join((t.text or '' for t in item.findall('.//w:t', W)))]
+    if not any(paras):
+        continue
+    rows.append({'index': index, 'kind': 'table' if item.tag.endswith('}tbl') else 'paragraph', 'paragraphs': paras})
+report = {'source_name': source.name, 'source_sha256': hashlib.sha256(source.read_bytes()).hexdigest(), 'blocks': rows, 'media_count': len(media)}
+(ROOT / 'source-document.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+for row in rows:
+    print(f"[{row['index']}:{row['kind']}]")
+    print('\n'.join(row['paragraphs']))

@@ -1,0 +1,93 @@
+ARCHIVED SOURCE - NOT AN EXECUTABLE ENTRYPOINT. Local literals removed.
+
+"""Copy inputs and patch an authorized deployment copy; never edit the repository."""
+import difflib
+import hashlib
+import json
+from pathlib import Path
+import shutil
+import zipfile
+import xml.etree.ElementTree as ET
+ROOT = Path(__file__).parent
+REPO = Path('<PRIVATE_RUNTIME_ROOT>')
+COPY = ROOT / 'candidate'
+
+def replace(name, old, new, count=1):
+    file = COPY / name
+    text = file.read_text(encoding='utf-8')
+    if text.count(old) != count:
+        raise RuntimeError(f'Unexpected source anchor: {name}: {text.count(old)} vs {count}')
+    file.write_text(text.replace(old, new), encoding='utf-8')
+
+def main():
+    if COPY.exists():
+        raise RuntimeError('Candidate already exists; do not overwrite reviewed work')
+    COPY.mkdir()
+    for name in ('lexaegis', 'packs', 'frontend/src'):
+        shutil.copytree(REPO / name, COPY / name, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+    for name in ('requirements.lock', 'frontend/package.json', 'frontend/pnpm-lock.yaml', 'frontend/tsconfig.json', 'frontend/vite.config.ts', 'frontend/index.html'):
+        (COPY / name).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(REPO / name, COPY / name)
+    source = Path('<PRIVATE_RUNTIME_ROOT>/xwechat_files/wxid_oxieoa8852cs22_d6d2/msg/file/2026-11/<PRIVATE_FIXTURE>')
+    source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
+    if source_hash != '<PRIVATE_FIXTURE>':
+        raise ValueError('Source document changed')
+    entities = ['<PRIVATE_FIXTURE>', '<PRIVATE_FIXTURE>', '<PRIVATE_FIXTURE>', '<PRIVATE_FIXTURE>', '<PRIVATE_FIXTURE>', '<PRIVATE_FIXTURE>', '<PRIVATE_FIXTURE>', '<PRIVATE_FIXTURE>', '<PRIVATE_FIXTURE>', '<PRIVATE_FIXTURE>', '<LOCALIZED_OR_PRIVATE_TEXT>', '<PRIVATE_FIXTURE>', '<PRIVATE_FIXTURE>', '<PRIVATE_FIXTURE>', '<PRIVATE_FIXTURE>', '<PRIVATE_FIXTURE>']
+    canonical = [['entity', name] for name in entities]
+    canonical += [['date', text] for text in ('<PRIVATE_FIXTURE>', '<PRIVATE_FIXTURE>', '<PRIVATE_FIXTURE>', '<PRIVATE_FIXTURE>', '<PRIVATE_FIXTURE>')]
+    canonical += [['amount', text + '<LOCALIZED_OR_PRIVATE_TEXT>'] for text in ('<PRIVATE_NUMERIC_OR_DATE>', '<PRIVATE_NUMERIC_OR_DATE>', '<PRIVATE_NUMERIC_OR_DATE>', '<PRIVATE_NUMERIC_OR_DATE>', '<PRIVATE_NUMERIC_OR_DATE>', '<PRIVATE_NUMERIC_OR_DATE>', '<PRIVATE_NUMERIC_OR_DATE>', '<PRIVATE_NUMERIC_OR_DATE>', '<PRIVATE_NUMERIC_OR_DATE>')]
+    canonical += [['relation', '<PRIVATE_FIXTURE>']]
+    canonical += [['event', text] for text in ('<PRIVATE_FIXTURE>', '<PRIVATE_FIXTURE>', '<PRIVATE_FIXTURE>', '<PRIVATE_FIXTURE>', '<LOCALIZED_OR_PRIVATE_TEXT>')]
+    canonical += [['evidence', text] for text in ('<PRIVATE_FIXTURE>', '<PRIVATE_FIXTURE>', '<PRIVATE_FIXTURE>')]
+    with zipfile.ZipFile(source) as z:
+        tree = ET.fromstring(z.read('word/document.xml'))
+        ns = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+        paragraphs = [''.join((t.text or '' for t in p.findall('.//w:t', ns))) for p in tree.findall('.//w:p', ns)]
+    if any((not any((value in p for p in paragraphs)) for field, value in canonical)):
+        raise ValueError('Canonical fact is not supported by the registered source')
+    seed = {'scenario': 'registered_document', 'name': '<LOCALIZED_OR_PRIVATE_TEXT>', 'document_name': source.name, 'document_sha256': source_hash, 'declaration': 'user_confirmed_synthetic_demo_only', 'live_extract': True, 'note': '<LOCALIZED_OR_PRIVATE_TEXT>', 'facts': canonical}
+    raw = json.dumps(seed, ensure_ascii=False, sort_keys=True, indent=2).encode('utf-8')
+    (ROOT / 'registered-manifest.json').write_bytes(raw)
+    (ROOT / 'registered-manifest.sha256').write_text(hashlib.sha256(raw).hexdigest())
+    shutil.copy2(ROOT / 'registered_demo.py', COPY / 'lexaegis/registered_demo.py')
+    replace('lexaegis/api.py', 'from . import __version__, service, release_service, retention', 'from . import registered_demo\nfrom . import __version__, service, release_service, retention')
+    replace('lexaegis/api.py', 'scenario: Literal["success", "human_veto", "linkage", "stop"]', 'scenario: Literal["success", "human_veto", "linkage", "stop", "registered_document"]')
+    replace('lexaegis/api.py', '"settings": public_settings(repo.get("settings"))}', '"settings": public_settings(repo.get("settings")), "registered_document_demo": registered_demo.public_spec()}')
+    replace('lexaegis/api.py', 'if case["mode"] == "demo" or repo.get(fact_id, "fact")["case_id"] != case_id:', 'if (case["mode"] == "demo" and not registered_demo.is_registered(case)) or repo.get(fact_id, "fact")["case_id"] != case_id:')
+    replace('lexaegis/api.py', '<LOCALIZED_OR_PRIVATE_TEXT>', '<LOCALIZED_OR_PRIVATE_TEXT>')
+    replace('lexaegis/api.py', '<LOCALIZED_OR_PRIVATE_TEXT>', '<LOCALIZED_OR_PRIVATE_TEXT>')
+    replace('lexaegis/api.py', '<LOCALIZED_OR_PRIVATE_TEXT>', '<LOCALIZED_OR_PRIVATE_TEXT>')
+    replace('lexaegis/api.py', 'service.assert_editable(repo, case_id)\n                doc = {"id": ident,', 'service.assert_editable(repo, case_id)\n                if registered_demo.is_registered(case):\n                    registered_demo.check_upload(case, data, repo.list("document", case_id))\n                doc = {"id": ident,')
+    replace('lexaegis/service.py', 'from .demo import SCENARIOS', 'from .demo import SCENARIOS\nfrom . import registered_demo')
+    replace('lexaegis/service.py', 'if scenario:\n        seed = SCENARIOS[scenario]', 'if scenario == registered_demo.SCENARIO:\n        case["registered_document_sha256"] = SCENARIOS[scenario]["document_sha256"]\n        case["registered_document_demo"] = True\n        repo.put("case", case)\n    if scenario and scenario != registered_demo.SCENARIO:\n        seed = SCENARIOS[scenario]')
+    replace('lexaegis/service.py', '<LOCALIZED_OR_PRIVATE_TEXT>', '<LOCALIZED_OR_PRIVATE_TEXT>')
+    replace('lexaegis/service.py', 'fact = {"id": fact_id or uid("fact"), "case_id": case_id, **data, "origin": origin, "stale": False}', 'if registered_demo.is_registered(case) and data.get("confirmed"):\n        registered_demo.check_confirmed_fact(case, data, anchors)\n    if fact_id and registered_demo.is_registered(case):\n        origin = existing.get("origin", origin)\n    fact = {"id": fact_id or uid("fact"), "case_id": case_id, **data, "origin": origin, "stale": False}')
+    replace('lexaegis/synthetic_scope.py', 'mappings = {value:', 'registered = seed.get("scenario") == "registered_document" and seed.get("live_extract") is True\n    def compared(text):\n        return re.sub(r"\\[\\[LEX:P[0-9]{4}\\]\\]", "[[ENTITY]]", text) if registered else text\n    mappings = {value:')
+    replace('lexaegis/synthetic_scope.py', 'allowed = {(field, transform(value, method, mappings))', 'allowed = {(field, compared(transform(value, method, mappings)))')
+    replace('lexaegis/synthetic_scope.py', 'for method in ("keep", "pseudonymize", "generalize", "moderate_generalize")}', 'for method in (("pseudonymize", "generalize", "moderate_generalize") if registered else ("keep", "pseudonymize", "generalize", "moderate_generalize"))}')
+    replace('lexaegis/synthetic_scope.py', 'if (fact.get("field"), fact.get("text")) not in allowed:', '<LOCALIZED_OR_PRIVATE_TEXT>')
+    replace('frontend/src/workspaces/FactWorkspace.tsx', 'currentCase.mode === "formal"', '(currentCase.mode === "formal" || currentCase.registered_document_demo)', count=2)
+    replace('frontend/src/workspaces/FactWorkspace.tsx', '<LOCALIZED_OR_PRIVATE_TEXT>', '<LOCALIZED_OR_PRIVATE_TEXT>')
+    replace('frontend/src/App.tsx', 'onSummary={() => startTask(currentCase.mode === "demo" ? "mock" : "local")}', 'onSummary={() => startTask(currentCase.registered_document_demo ? "cloud" : currentCase.mode === "demo" ? "mock" : "local")}')
+    replace('frontend/src/App.tsx', 'currentCase.mode === "demo" ? "mock" : "local",', 'currentCase.registered_document_demo ? "cloud" : currentCase.mode === "demo" ? "mock" : "local",')
+    replace('frontend/src/App.tsx', '<LOCALIZED_OR_PRIVATE_TEXT>', '<LOCALIZED_OR_PRIVATE_TEXT>')
+    replace('frontend/src/workspaces/SourceViewer.tsx', '<LOCALIZED_OR_PRIVATE_TEXT>', '<LOCALIZED_OR_PRIVATE_TEXT>')
+    replace('frontend/src/workspaces/SourceViewer.tsx', '<LOCALIZED_OR_PRIVATE_TEXT>', '<LOCALIZED_OR_PRIVATE_TEXT>')
+    patches = []
+    hashes = {}
+    for file in COPY.rglob('*'):
+        if not file.is_file():
+            continue
+        name = file.relative_to(COPY).as_posix()
+        original = REPO / name
+        if original.is_file():
+            before = original.read_text(encoding='utf-8')
+            after = file.read_text(encoding='utf-8')
+            if before != after:
+                patches.extend(difflib.unified_diff(before.splitlines(True), after.splitlines(True), fromfile='original/' + name, tofile='candidate/' + name))
+                hashes[name] = {'original': hashlib.sha256(original.read_bytes()).hexdigest(), 'candidate': hashlib.sha256(file.read_bytes()).hexdigest()}
+    (ROOT / 'deployment-copy.patch').write_text(''.join(patches), encoding='utf-8')
+    (ROOT / 'candidate-changes.json').write_text(json.dumps(hashes, indent=2), encoding='utf-8')
+    print(json.dumps({'candidate': str(COPY), 'modified_deployment_files': len(hashes), 'manifest_facts': len(canonical), 'repository_modified': False}))
+if __name__ == '__main__':
+    main()

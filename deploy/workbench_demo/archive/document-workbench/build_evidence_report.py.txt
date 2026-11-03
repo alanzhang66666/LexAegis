@@ -1,0 +1,56 @@
+ARCHIVED SOURCE - NOT AN EXECUTABLE ENTRYPOINT. Local literals removed.
+
+"""Assemble a report from receipts and read-only verification, without dispatch."""
+from datetime import datetime, timezone
+import hashlib
+import json
+from pathlib import Path
+import shutil
+import xml.etree.ElementTree as ET
+ROOT = Path(__file__).parent
+
+def read(name):
+    return json.loads((ROOT / name).read_text(encoding='utf-8'))
+
+def tests(name):
+    suite = ET.parse(ROOT / name).getroot().find('testsuite')
+    result = {key: int(suite.get(key, '0')) for key in ('tests', 'failures', 'errors', 'skipped')}
+    result['passed'] = result['tests'] - result['failures'] - result['errors'] - result['skipped']
+    result['skipped_cases'] = [{'name': c.get('classname') + '::' + c.get('name'), 'reason': c.find('skipped').get('message')} for c in suite.findall('testcase') if c.find('skipped') is not None]
+    return result
+
+def main():
+    status = read('status.json')
+    browser = read('browser-revalidated.json')
+    runtime = read('runtime-evidence.json')
+    flow = read('document-cloud-flow.json')
+    cloud = read('cloud-receipt.json')
+    curation = read('document-curation.json')
+    backend = tests('candidate-backend-final.xml')
+    boundary = tests('boundary-tests.xml')
+    receipt = cloud['receipt']
+    report = {'checked_at': datetime.now(timezone.utc).isoformat(), 'url': status['url'], 'scope': 'registered_synthetic_document_integration', 'chain': {'existing_completed_flow': flow['completed'], 'browser_revalidated': browser.get('completed', False), 'browser_checks_passed': sum((c['passed'] for c in browser['checks'])), 'case_id': flow['case_id'], 'task_id': flow['task_id'], 'request_id': receipt['id'], 'request_hash': receipt['request_hash'], 'receipt_status': receipt['status'], 'local_extraction_jobs': browser['result']['local_extraction_jobs'], 'manually_selected_facts': len(curation['selected']), 'confirmed_cloud_claims': browser['result']['claims'], 'all_claims_source_reviewed': browser['result']['all_anchors'], 'new_generation_posts_during_revalidation': 0}, 'model': read('latest-model-verified.json'), 'usage': {k: receipt[k] for k in ('prompt_tokens', 'completion_tokens', 'total_tokens', 'duration_ms')}, 'cost_estimate': {'currency': 'USD', 'min': 0.0001164, 'max': 0.0003504, 'basis': '400 input and 192 output tokens; current official Flash cache/peak price range', 'cache_usage_not_captured': True, 'not_actual_billing': True, 'source': 'https://api-docs.deepseek.com/quick_start/pricing/'}, 'quota': status['quota'], 'runtime_checks': {'passed': sum((c['passed'] for c in runtime['checks'])), 'total': len(runtime['checks'])}, 'backend_tests': backend, 'boundary_tests': boundary, 'repository': status['repository'], 'images': {'workbench': status['containers']['workbench']['image'], 'gateway': status['containers']['doc-gateway']['image']}, 'limits': {'edge_quality': 'not_reassessed; manually curated facts only', 'gateway_host': 'local Docker; no remote cloud host deployment', 'formal_dispatch': 'blocked; real legal authorization not granted', 'production_isolation_acceptance': 'not_verified', 'release_build_identity': 'pending/unconfigured', 'provider_response_model': 'not captured in this historical receipt; do not infer it from model docs', 'stop_test': 'not performed against the active shared workspaces'}}
+    if (ROOT / '<LOCALIZED_OR_PRIVATE_TEXT>').exists():
+        report['public_url_migration'] = read('<LOCALIZED_OR_PRIVATE_TEXT>')
+    (ROOT / '<LOCALIZED_OR_PRIVATE_TEXT>').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+    paths = ['status.json', 'browser-revalidated.json', 'runtime-evidence.json', 'cloud-receipt.json', 'cached-dispatch-check.json', 'document-cloud-flow.json', 'document-curation.json', 'document-completed-task.json', 'document-extracted.json', 'registered-manifest.json', 'registered-manifest.sha256', 'latest-model-verified.json', 'candidate-backend-final.xml', 'boundary-tests.xml', 'current-full-chain-confirmed.png', 'compose.json', 'manage.py', 'revalidate_browser.cjs', 'run_backend.py', '<LOCALIZED_OR_PRIVATE_TEXT>']
+    for name in ('<LOCALIZED_OR_PRIVATE_TEXT>', '<LOCALIZED_OR_PRIVATE_TEXT>', 'previous-url-tests.xml', 'tunnel-start-idempotence.json', 'tunnel-origin-update-verification.json'):
+        if (ROOT / name).exists():
+            paths.append(name)
+    migration_note = ''
+    if 'public_url_migration' in report:
+        migration_note = '<LOCALIZED_OR_PRIVATE_TEXT>'
+    markdown = f"<LOCALIZED_OR_PRIVATE_TEXT>{report['checked_at']}<LOCALIZED_OR_PRIVATE_TEXT>{status['url']}<LOCALIZED_OR_PRIVATE_TEXT>{migration_note}<LOCALIZED_OR_PRIVATE_TEXT>{status['quota']['reserved']}/{status['quota']['limit']}<LOCALIZED_OR_PRIVATE_TEXT>{status['quota']['remaining']}<LOCALIZED_OR_PRIVATE_TEXT>{flow['case_id']} / {flow['task_id']}<LOCALIZED_OR_PRIVATE_TEXT>{receipt['id']}<LOCALIZED_OR_PRIVATE_TEXT>{receipt['request_hash']}<LOCALIZED_OR_PRIVATE_TEXT>{receipt['status']}；{receipt['transmission_state']}<LOCALIZED_OR_PRIVATE_TEXT>{browser['result']['local_extraction_jobs']}<LOCALIZED_OR_PRIVATE_TEXT>{len(curation['selected'])}<LOCALIZED_OR_PRIVATE_TEXT>{browser['result']['claims']}<LOCALIZED_OR_PRIVATE_TEXT>{receipt['prompt_tokens']}<LOCALIZED_OR_PRIVATE_TEXT>{receipt['completion_tokens']}<LOCALIZED_OR_PRIVATE_TEXT>{receipt['total_tokens']}<LOCALIZED_OR_PRIVATE_TEXT>{receipt['duration_ms']}<LOCALIZED_OR_PRIVATE_TEXT>{sum((c['passed'] for c in browser['checks']))}/{len(browser['checks'])}<LOCALIZED_OR_PRIVATE_TEXT>{sum((c['passed'] for c in runtime['checks']))}/{len(runtime['checks'])}<LOCALIZED_OR_PRIVATE_TEXT>{backend['passed']}<LOCALIZED_OR_PRIVATE_TEXT>{backend['skipped']}<LOCALIZED_OR_PRIVATE_TEXT>{backend['failures']}<LOCALIZED_OR_PRIVATE_TEXT>{backend['errors']}<LOCALIZED_OR_PRIVATE_TEXT>{boundary['passed']}<LOCALIZED_OR_PRIVATE_TEXT>{boundary['failures']}<LOCALIZED_OR_PRIVATE_TEXT>{status['repository']['files_checked']}<LOCALIZED_OR_PRIVATE_TEXT>"
+    (ROOT / '<LOCALIZED_OR_PRIVATE_TEXT>').write_text(markdown, encoding='utf-8')
+    snapshot = ROOT / 'evidence' / datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
+    snapshot.mkdir(parents=True, exist_ok=False)
+    paths.extend(['<LOCALIZED_OR_PRIVATE_TEXT>', 'build_evidence_report.py'])
+    for name in paths:
+        shutil.copy2(ROOT / name, snapshot / name)
+    index = {'created_at': report['checked_at'], 'base_directory': str(ROOT), 'snapshot_directory': str(snapshot.relative_to(ROOT)), 'files': [{'path': str((snapshot / name).relative_to(ROOT)), 'sha256': hashlib.sha256((snapshot / name).read_bytes()).hexdigest(), 'bytes': (snapshot / name).stat().st_size} for name in paths], 'credentials_included': False}
+    raw_index = json.dumps(index, ensure_ascii=False, indent=2)
+    (ROOT / '<LOCALIZED_OR_PRIVATE_TEXT>').write_text(raw_index, encoding='utf-8')
+    (snapshot / '<LOCALIZED_OR_PRIVATE_TEXT>').write_text(raw_index, encoding='utf-8')
+    print(json.dumps({'backend': {k: v for k, v in backend.items() if k != 'skipped_cases'}, 'boundary_passed': boundary['passed'], 'runtime_checks_passed': report['runtime_checks']['passed'], 'browser_checks_passed': report['chain']['browser_checks_passed'], 'quota': report['quota'], 'repository_unchanged': status['repository']['unchanged'], 'new_generation_posts': 0}))
+if __name__ == '__main__':
+    main()

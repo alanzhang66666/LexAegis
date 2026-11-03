@@ -1,0 +1,76 @@
+ARCHIVED SOURCE - NOT AN EXECUTABLE ENTRYPOINT. Local literals removed.
+
+"""Prepare a fixed internal proxy while preserving the live public tunnel."""
+from datetime import datetime, timezone
+import json
+from pathlib import Path
+import shutil
+import subprocess
+ROOT = Path(__file__).parent
+DEPLOY = ROOT.parent
+FORMAL = DEPLOY / 'formal-workbench'
+NETWORK = 'lexaegis-document-demo-public-origin'
+BASE = 'sha256:0f1d119e986ebcc2e6b4c6533930bac48130c18f1acff68d5987e27852604e77'
+
+def run(args, **kw):
+    result = subprocess.run([str(x) for x in args], capture_output=True, timeout=240, **kw)
+    if result.returncode:
+        raise RuntimeError('Deployment operation failed: ' + str(args[:2]))
+    return result.stdout
+
+def save(path, data):
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+
+def main():
+    backup = ROOT / 'previous-url-before'
+    if not backup.exists():
+        backup.mkdir()
+        for directory, names in [(FORMAL, ('compose.json', 'manage.py', 'public_proxy.py')), (ROOT, ('compose.json', 'manage.py')), (DEPLOY, ('public_access.py', 'manage.py'))]:
+            target = backup / directory.name
+            target.mkdir(exist_ok=True)
+            for name in names:
+                shutil.copy2(directory / name, target / name)
+        info = json.loads(run(['docker', 'inspect', 'lexaegis-formal-workbench-tunnel-1']))[0]
+        run(['docker', 'cp', 'lexaegis-formal-workbench-formal-1:/opt/formal/public_proxy.py', backup / 'formal-workbench/public_proxy.py'])
+        save(backup / 'tunnel-identity.json', {'id': info['Id'], 'started_at': info['State']['StartedAt'], 'requested_url': 'https://demo.example.test'})
+    build = ROOT / 'previous-url-proxy-build'
+    build.mkdir(exist_ok=True)
+    shutil.copy2(FORMAL / 'public_proxy.py', build / 'public_proxy.py')
+    tag = 'lexaegis:previous-url-proxy-base'
+    if run(['docker', 'image', 'inspect', BASE, '--format', '{{.Id}}']).decode().strip() != BASE:
+        raise RuntimeError('Pinned local base identity differs')
+    run(['docker', 'tag', BASE, tag])
+    (build / 'Dockerfile').write_text('FROM ' + tag + '\nCOPY public_proxy.py /opt/formal/public_proxy.py\n', encoding='utf-8')
+    with (ROOT / 'previous-url-proxy-build.log').open('wb') as log:
+        result = subprocess.run(['docker', 'build', '--pull=false', '-t', 'lexaegis:previous-url-full-chain', str(build)], stdout=log, stderr=log)
+        if result.returncode:
+            raise RuntimeError('Public proxy image build failed; see previous-url-proxy-build.log')
+    image = run(['docker', 'image', 'inspect', 'lexaegis:previous-url-full-chain', '--format', '{{.Id}}']).decode().strip()
+    exists = subprocess.run(['docker', 'network', 'inspect', NETWORK], capture_output=True)
+    if exists.returncode:
+        run(['docker', 'network', 'create', '--internal', '--label', 'lexaegis.scope=public-origin-only', NETWORK])
+    actual = json.loads(run(['docker', 'network', 'inspect', NETWORK]))[0]
+    if not actual['Internal']:
+        raise RuntimeError('Public origin network must be internal')
+    formal = json.loads((FORMAL / 'compose.json').read_text(encoding='utf-8'))
+    formal['networks']['chain-public-origin'] = {'external': True, 'name': NETWORK}
+    app = formal['services']['formal']
+    app['image'] = image
+    app['environment'] = {**app.get('environment', {}), 'LEX_PUBLIC_CHAIN_ORIGIN': 'http://chain-origin:59767'}
+    if isinstance(app['networks'], list):
+        app['networks'] = {name: None for name in app['networks']}
+    app['networks']['chain-public-origin'] = None
+    save(FORMAL / 'compose.json', formal)
+    document = json.loads((ROOT / 'compose.json').read_text(encoding='utf-8'))
+    document['networks']['chain-public-origin'] = {'external': True, 'name': NETWORK}
+    app = document['services']['workbench']
+    if isinstance(app['networks'], list):
+        app['networks'] = {name: None for name in app['networks']}
+    app['networks']['chain-public-origin'] = {'aliases': ['chain-origin']}
+    save(ROOT / 'compose.json', document)
+    for compose in (FORMAL / 'compose.json', ROOT / 'compose.json'):
+        run(['docker', 'compose', '-f', compose, 'config', '--quiet'])
+    save(DEPLOY / 'previous-url-route.json', {'enabled': True, 'requested_url': 'https://demo.example.test', 'public_scope': 'registered_synthetic_document', 'proxy_origin': 'http://chain-origin:59767', 'tunnel_container': 'lexaegis-formal-workbench-tunnel-1', 'proxy_image': image, 'created_at': datetime.now(timezone.utc).isoformat(), 'original_repository_modified': False})
+    print(json.dumps({'prepared': True, 'proxy_image': image, 'tunnel_restarted': False}))
+if __name__ == '__main__':
+    main()

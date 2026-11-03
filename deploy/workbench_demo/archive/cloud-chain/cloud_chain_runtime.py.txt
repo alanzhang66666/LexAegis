@@ -1,0 +1,102 @@
+ARCHIVED SOURCE - NOT AN EXECUTABLE ENTRYPOINT. Local literals removed.
+
+"""Original gateway/provider with deployment-only shared quota and metadata capture."""
+from contextlib import asynccontextmanager
+from io import StringIO
+import hmac
+import json
+import os
+from pathlib import Path
+from dotenv import dotenv_values
+from fastapi import Header, HTTPException
+import httpx
+from cloud_runtime import private_value
+from lexaegis.cloud import DualSlotProvider
+from lexaegis.gateway import create_gateway
+from lexaegis.util import sign
+from shared_budget import BudgetedProvider, CURRENT_REQUEST, RequestContext, SharedBudget
+
+class MetadataStream(httpx.SyncByteStream):
+
+    def __init__(self, stream, budget, context):
+        self.stream, self.budget, self.context = (stream, budget, context)
+
+    def __iter__(self):
+        buffer = b''
+        metadata = {}
+        for chunk in self.stream:
+            buffer += chunk
+            while b'\n' in buffer:
+                line, buffer = buffer.split(b'\n', 1)
+                if line.startswith(b'data:'):
+                    line = line[5:].strip()
+                try:
+                    value = json.loads(line)
+                except (ValueError, UnicodeError):
+                    continue
+                if isinstance(value, dict):
+                    if isinstance(value.get('model'), str):
+                        metadata['response_model'] = value['model'][:150]
+                    if isinstance(value.get('id'), str):
+                        metadata['provider_response_id'] = value['id'][:150]
+                    if isinstance(value.get('usage'), dict):
+                        metadata['usage'] = {key: item for key, item in value['usage'].items() if isinstance(item, (int, float, bool))}
+            if len(buffer) > 65536:
+                buffer = b''
+            if self.context and metadata:
+                self.budget.record(self.context, metadata)
+            yield chunk
+
+    def close(self):
+        self.stream.close()
+
+class MetadataTransport(httpx.BaseTransport):
+
+    def __init__(self, budget):
+        self.budget = budget
+        self.transport = httpx.HTTPTransport(proxy='http://provider-egress:3128', retries=0)
+
+    def handle_request(self, request):
+        response = self.transport.handle_request(request)
+        if request.method == 'POST':
+            response.stream = MetadataStream(response.stream, self.budget, CURRENT_REQUEST.get())
+        return response
+
+    def close(self):
+        self.transport.close()
+
+def create_app():
+    private = Path('/run/private')
+    secret = private_value(private / 'gateway-secret')
+    values = dotenv_values(stream=StringIO(private_value(private / 'gateway.env')), interpolate=False)
+    if set(values) - {'LEX_CLOUD_PRIMARY_KEY', 'LEX_KEY_USE_CONFIRMED', 'LEX_KEY_ROTATION_CONFIRMED'}:
+        raise ValueError('Unexpected private gateway settings')
+    if values.get('LEX_KEY_USE_CONFIRMED') != '1' and values.get('LEX_KEY_ROTATION_CONFIRMED') != '1':
+        raise ValueError('Credential use is not confirmed')
+    key = (values.get('LEX_CLOUD_PRIMARY_KEY') or '').strip()
+    if len(key) < 20 or len(secret) < 24:
+        raise ValueError('Gateway credentials are missing')
+    profile = os.environ['LEX_RUN_PROFILE']
+    if profile not in ('integration', 'production'):
+        raise ValueError('Unsupported cloud gateway profile')
+    budget = SharedBudget('/run/shared-quota/budget.sqlite')
+    client = httpx.Client(transport=MetadataTransport(budget), trust_env=False, follow_redirects=False, timeout=90)
+    provider = BudgetedProvider(DualSlotProvider(primary_key=key, standby_key='', client=client), budget)
+    app = create_gateway(secret=secret, provider=provider)
+    original_lifespan = app.router.lifespan_context
+
+    @asynccontextmanager
+    async def lifespan(application):
+        async with original_lifespan(application) as state:
+            try:
+                yield state
+            finally:
+                client.close()
+    app.router.lifespan_context = lifespan
+
+    @app.get('/deployment/status')
+    def deployment_status(x_gateway_signature: str=Header(default='')):
+        if not hmac.compare_digest(sign({'op': 'health'}, secret), x_gateway_signature):
+            raise HTTPException(403, 'Invalid gateway signature')
+        return {'runtime_profile': profile, 'gateway_role': 'cloud', 'quota': budget.status(), 'quota_scope': 'shared_across_gateways', 'formal_dispatch': 'blocked_pending_original_gates', 'source_application': 'unmodified', 'isolation_acceptance': 'not_verified'}
+    return RequestContext(app, secret, profile, budget)

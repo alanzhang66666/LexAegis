@@ -1,0 +1,81 @@
+ARCHIVED SOURCE - NOT AN EXECUTABLE ENTRYPOINT. Local literals removed.
+
+const fs=require('fs'),path=require('path');
+const {chromium}=require('<PRIVATE_RUNTIME_ROOT>/frontend/node_modules/@playwright/test');
+const root=__dirname,read=n=>JSON.parse(fs.readFileSync(path.join(root,n),'utf8'));
+const base=read('status.json').url,account=read('accounts.json').case_operator,{case_id}=read('document-case.json');
+const file=path.join(root,'document-curation.json'),report=fs.existsSync(file)?read('document-curation.json'):{case_id,synthetic_only:true,cloud_posts:0,
+<LOCALIZED_TEXT_REMOVED>
+const save=()=>fs.writeFileSync(file,JSON.stringify(report,null,2));
+(async()=>{
+ const browser=await chromium.launch({channel:'msedge',headless:true,args:['--no-proxy-server','--disable-quic',`--host-resolver-rules=MAP ${new URL(base).hostname} 104.16.230.132`]});
+ let page;
+ try{
+  page=await browser.newPage({viewport:{width:1500,height:1050}});page.setDefaultTimeout(45000);
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+  await page.locator('button.case-row').filter({hasText:case_id}).click();
+  const api=(method,url,body)=>page.evaluate(async({method,url,body})=>{
+   const r=await fetch(url,{method,credentials:'same-origin',headers:body?{'Content-Type':'application/json'}:{},body:body?JSON.stringify(body):undefined});
+   const value=await r.json();if(!r.ok)throw Error('HTTP '+r.status+': '+JSON.stringify(value));return value;
+  },{method,url,body});
+  let detail=await api('GET','/api/v1/cases/'+case_id);
+  if(!report.selected){
+   const targets=[['entity','<PRIVATE_FIXTURE>'],['entity','<PRIVATE_FIXTURE>'],['entity','<PRIVATE_FIXTURE>'],
+    ['amount','<PRIVATE_FIXTURE>'],['date','<PRIVATE_FIXTURE>'],['date','<PRIVATE_FIXTURE>'],['event','<PRIVATE_FIXTURE>']];
+   const anchors=Object.fromEntries(detail.documents.flatMap(d=>d.ir.blocks).map(b=>[b.id,b.text]));
+   report.selected=targets.map(([field,value])=>{
+    const fact=detail.facts.find(f=>f.field===field&&f.value===value&&f.source_ids.some(i=>anchors[i].includes(value)));
+    if(!fact)throw Error('Missing directly supported real-model candidate: '+field+' '+value);
+    return {id:fact.id,field,value,source_ids:fact.source_ids,origin:fact.origin};
+   });
+   report.initial_candidate_count=detail.facts.length;report.removed_ids=[];save();
+  }
+  const chosen=new Set(report.selected.map(f=>f.id));
+  for(const fact of detail.facts.filter(f=>!chosen.has(f.id))){
+   await api('DELETE',`/api/v1/cases/${case_id}/facts/${fact.id}`);report.removed_ids.push(fact.id);save();
+  }
+  await page.reload({waitUntil:'networkidle'});await page.locator('button.case-row').filter({hasText:case_id}).click();
+  detail=await api('GET','/api/v1/cases/'+case_id);
+  for(const selected of report.selected){
+   const current=detail.facts.find(f=>f.id===selected.id);if(current.confirmed)continue;
+   const card=page.locator('article.fact-card').filter({has:page.getByText(selected.value,{exact:true})});
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+   const [response]=await Promise.all([
+    page.waitForResponse(r=>new URL(r.url()).pathname===`/api/v1/cases/${case_id}/facts/${selected.id}`&&r.request().method()==='PUT'),
+<LOCALIZED_TEXT_REMOVED>
+   ]);
+   if(!response.ok())throw Error('Candidate confirmation failed '+response.status());
+<LOCALIZED_TEXT_REMOVED>
+  }
+  report.confirmed_via_original_ui=true;save();
+  await page.screenshot({path:path.join(root,'document-candidates-confirmed.png'),fullPage:true});
+  if(!report.task_id){
+   const [response]=await Promise.all([
+    page.waitForResponse(r=>new URL(r.url()).pathname===`/api/v1/cases/${case_id}/tasks`&&r.request().method()==='POST'),
+<LOCALIZED_TEXT_REMOVED>
+   ]);
+   if(!response.ok())throw Error('Cloud draft creation '+response.status());
+   report.task_id=(await response.json()).id;save();
+  }
+  if(!report.evaluated){
+   const [response]=await Promise.all([
+    page.waitForResponse(r=>new URL(r.url()).pathname===`/api/v1/tasks/${report.task_id}/evaluate`&&r.request().method()==='POST',{timeout:150000}),
+<LOCALIZED_TEXT_REMOVED>
+   ]);
+   const task=await response.json();
+   fs.writeFileSync(path.join(root,'document-evaluated-task.json'),JSON.stringify(task,null,2));
+   if(!response.ok())throw Error('Evaluate response '+response.status());
+   report.request_hash=task.request_hash;report.risk_blockers=task.risk.blockers;report.edge_review=task.edge_review;
+   report.evaluated=true;save();
+   if(task.risk.blockers.length)throw Error('Original review blocked: '+task.risk.blockers.join(';'));
+  }
+  report.ready_for_synthetic_review=true;save();
+  await page.screenshot({path:path.join(root,'document-risk-review.png'),fullPage:true});
+  console.log(JSON.stringify({selected:report.selected.length,removed:report.removed_ids.length,task_id:report.task_id,edge_review:report.edge_review,blockers:report.risk_blockers,cloud_posts:0}));
+ }finally{
+  if(page){await page.screenshot({path:path.join(root,'curation-final.png'),fullPage:true});fs.writeFileSync(path.join(root,'curation-body.txt'),await page.locator('body').innerText());}
+  await browser.close();save();
+ }
+})().catch(e=>{report.error=e.message;save();console.error(e.message);process.exitCode=1;});

@@ -1,0 +1,117 @@
+ARCHIVED SOURCE - NOT AN EXECUTABLE ENTRYPOINT. Local literals removed.
+
+"""One synthetic cloud E2E through the public HTTPS origin; never retry send."""
+import json
+from contextlib import contextmanager
+from pathlib import Path
+import socket
+import time
+from urllib.parse import urlsplit
+import httpx
+ROOT = Path(__file__).parent
+BASE = json.loads((ROOT / 'public-status.json').read_text())['url']
+HOST = urlsplit(BASE).hostname
+ACCOUNTS = json.loads((ROOT / 'accounts.json').read_text())
+original_resolve = socket.getaddrinfo
+
+def resolve(host, port, *args, **kwargs):
+    return original_resolve('104.16.230.132' if host == HOST else host, port, *args, **kwargs)
+socket.getaddrinfo = resolve
+REPORT = {'url': BASE, 'synthetic_only': True, 'checks': [], 'cloud_posts': 0}
+
+def save():
+    (ROOT / 'public-e2e.json').write_text(json.dumps(REPORT, ensure_ascii=False, indent=2), encoding='utf-8')
+
+def check(name, ok):
+    REPORT['checks'].append({'name': name, 'passed': bool(ok)})
+    save()
+    if not ok:
+        raise AssertionError(name)
+
+def req(client, method, path, **kwargs):
+    r = client.request(method, path, **kwargs)
+    if r.status_code >= 400:
+        REPORT['failure'] = {'path': path, 'status': r.status_code, 'detail': r.text[:2500]}
+        save()
+        raise RuntimeError(path + ': ' + str(r.status_code))
+    return r.json()
+
+@contextmanager
+def client(role=None):
+    c = httpx.Client(base_url=BASE, trust_env=False, timeout=90, headers={'Origin': BASE})
+    if role:
+        r = c.post('/api/v1/login', json=ACCOUNTS[role])
+        check(role + ' login', r.status_code == 200)
+        cookie = r.headers.get('set-cookie', '').lower()
+        check(role + ' secure session', 'httponly' in cookie and 'secure' in cookie and ('samesite' in cookie))
+    try:
+        yield c
+    finally:
+        c.close()
+
+def main():
+    if (ROOT / 'real-send-once.json').exists():
+        raise RuntimeError('Real send test already ran; use manage.py verify for read-only verification')
+    with client() as anon, client('case_operator') as op, client('legal_reviewer') as legal, client('approver') as approval:
+        html = anon.get('/')
+        check('public original UI', html.status_code == 200 and '/_workbench_transport.js' in html.text)
+        check('anonymous API denied', anon.get('/api/v1/bootstrap').status_code == 401)
+        check('cross-site write denied', op.post('/api/v1/demos', json={'scenario': 'success'}, headers={'Origin': 'https://unrelated.invalid'}).status_code == 403)
+        boot = req(op, 'GET', '/api/v1/bootstrap')
+        check('real integration mode', boot['runtime_profile'] == 'integration' and boot.get('runtime_config', {}).get('external_calls_allowed', False))
+        packs = req(op, 'GET', '/api/v1/domains')
+        case = req(op, 'POST', '/api/v1/demos', json={'scenario': 'success'})
+        REPORT['case_id'] = case['id']
+        save()
+        task = req(op, 'POST', f"/api/v1/cases/{case['id']}/tasks", json={'transport': 'cloud'})
+        REPORT['task_id'] = task['id']
+        save()
+        path = '/api/v1/tasks/' + task['id']
+        check('operator cannot approve', op.post(path + '/approve', json={'request_hash': 'forbidden'}).status_code == 403)
+        task = req(op, 'POST', path + '/evaluate')
+        check('request risk permits synthetic test', not task['risk']['blockers'])
+        REPORT['request_hash'] = task['request_hash']
+        save()
+        detail = req(op, 'GET', '/api/v1/cases/' + case['id'])
+        pack = next((p for p in packs if p['id'] == task['pack_id']))
+        conditions = pack.get('manual_review_conditions') or [c for r in pack.get('rules', []) for c in r.get('conditions', [])]
+        review = {'request_hash': task['request_hash'], 'material_version': detail['case']['revision'], 'idempotency_key': 'public-synthetic-' + task['id'], 'conclusion': 'allow_processing', 'reason': '<LOCALIZED_OR_PRIVATE_TEXT>', 'evidence_ids': [task['fact_snapshot'][0]['id']], 'reviewed_condition_ids': [conditions[0]['id']], 'legal_source_ids': [pack['legal_sources'][0]['id']], 'acknowledged_risk_notices': True, 'scope_note': '<LOCALIZED_OR_PRIVATE_TEXT>', 'fact_premise': '<LOCALIZED_OR_PRIVATE_TEXT>', 'authority_judgment': '<LOCALIZED_OR_PRIVATE_TEXT>', 'external_processing_note': '<LOCALIZED_OR_PRIVATE_TEXT>', 'minimization_note': '<LOCALIZED_OR_PRIVATE_TEXT>', 'final_basis': '<LOCALIZED_OR_PRIVATE_TEXT>'}
+        req(legal, 'POST', path + '/legal-review', json=review)
+        req(approval, 'POST', path + '/approve', json={'request_hash': task['request_hash']})
+        marker = ROOT / 'real-send-once.json'
+        if marker.exists():
+            raise RuntimeError('Send attempt already recorded; inspect receipt, do not automatically resend')
+        marker.write_text(json.dumps({'task_id': task['id'], 'request_hash': task['request_hash'], 'attempted_at': time.time()}))
+        REPORT['cloud_posts'] = 1
+        save()
+        req(op, 'POST', path + '/send')
+        deadline = time.monotonic() + 150
+        while time.monotonic() < deadline:
+            detail = req(op, 'GET', '/api/v1/cases/' + case['id'])
+            current = next((t for t in detail['tasks'] if t['id'] == task['id']))
+            REPORT['task_status'] = current['status']
+            save()
+            if current['status'] in {'complete', 'unknown', 'failed', 'blocked', 'stopped'}:
+                break
+            time.sleep(1)
+        (ROOT / 'public-cloud-task.json').write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding='utf-8')
+        check('cloud task completed', current['status'] == 'complete')
+        artifact = current['artifact']
+        check('real cloud provenance', artifact.get('provenance') == 'cloud')
+        check('claims have valid anchors', bool(artifact['claims']) and all((c['anchors'] and c.get('status') != 'blocked' for c in artifact['claims'])))
+        for claim in artifact['claims']:
+            req(legal, 'POST', path + '/claims/' + claim['id'] + '/review')
+        confirmed = req(legal, 'POST', path + '/confirm')
+        check('return review and confirmation', confirmed['artifact']['confirmed'])
+        check('browser sessions isolated', anon.get('/api/v1/bootstrap').status_code == 401)
+        REPORT['completed'] = True
+        save()
+        print(json.dumps({'completed': True, 'cloud_posts': 1, 'case_id': case['id'], 'task_id': task['id'], 'checks': len(REPORT['checks'])}))
+if __name__ == '__main__':
+    try:
+        main()
+    except Exception as e:
+        REPORT['error_type'] = type(e).__name__
+        save()
+        print('Verification stopped: ' + str(e))
+        raise SystemExit(1)

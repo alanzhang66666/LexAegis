@@ -1,0 +1,56 @@
+ARCHIVED SOURCE - NOT AN EXECUTABLE ENTRYPOINT. Local literals removed.
+
+"""Read-only runtime receipts and deployment checks; no provider POSTs."""
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+ROOT = Path(__file__).parent
+
+def docker(args, code=None):
+    r = subprocess.run(['docker', *args], input=code.encode() if code else None, capture_output=True, check=True)
+    return r.stdout
+
+def execute(container, code):
+    return json.loads(docker(['exec', '-i', container, 'python', '-'], code))
+
+def save(name, value):
+    (ROOT / name).write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding='utf-8')
+
+def main():
+    task = json.loads((ROOT / 'public-cloud-task.json').read_text(encoding='utf-8'))
+    tasks = [task]
+    second = ROOT / 'browser-cloud-task.json'
+    if second.exists():
+        tasks.append(json.loads(second.read_text(encoding='utf-8')))
+    identifiers = [item['request']['request_id'] for item in tasks]
+    receipt = execute('lexaegis-cloud-integration-gateway-1', "\nimport json,urllib.request\nfrom pathlib import Path\nfrom lexaegis.util import sign\nsecret=Path('/run/private/gateway-secret').read_text().strip()\ndef get(path,payload):\n req=urllib.request.Request('http://127.0.0.1:8766'+path,headers={'X-Gateway-Signature':sign(payload,secret)})\n return json.loads(urllib.request.urlopen(req,timeout=5).read())\nidentifiers=" + repr(identifiers) + "\nreceipts=[get('/requests/'+identifier,{'op':'status','request_id':identifier}) for identifier in identifiers]\nfields=('id','request_hash','status','at','selected_slot','failover_reason','generation_started','disclosure_state','generation_state','transmission_state','attempts','authorized_recipients','prompt_tokens','completion_tokens','total_tokens','duration_ms')\nreceipts=[{k:r[k] for k in fields if k in r} for r in receipts]\nprint(json.dumps({'status':get('/deployment/status',{'op':'health'}),'receipt':receipts[0],'receipts':receipts}))\n")
+    receipt['request_metadata'] = [{'task_id': item['id'], 'request_id': item['request']['request_id'], 'request_hash': item['request_hash'], 'body_sha256': hashlib.sha256(json.dumps(item['request']['body'], sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest(), 'requested_model': item['request']['body']['model'], 'parameters': {k: v for k, v in item['request']['body'].items() if k != 'messages'}, 'response_model': 'not_recorded_by_original_application'} for item in tasks]
+    save('cloud-receipt.json', receipt)
+    probe = "\nimport json,os,socket\nfrom pathlib import Path\nresult={}\nfor label,family,address in [('direct_ipv4',socket.AF_INET,('1.1.1.1',443)),('direct_ipv6',socket.AF_INET6,('2606:4700:4700::1111',443,0,0))]:\n s=socket.socket(family);s.settimeout(2)\n try:s.connect(address);result[label]='reachable'\n except OSError:result[label]='blocked'\n finally:s.close()\nkeys=[]\nfor proc in Path('/proc').iterdir():\n if not proc.name.isdigit():continue\n try:\n  names=[v.split(b'=',1)[0].decode() for v in (proc/'environ').read_bytes().split(b'\\0') if b'=' in v]\n  keys.extend(k for k in names if k.startswith('LEX_CLOUD_') and k.endswith('_KEY'))\n except OSError:pass\nresult['provider_credential_environment_names']=sorted(set(keys))\nresult['uid']=os.getuid()\nprint(json.dumps(result))\n"
+    workbench = execute('lexaegis-public-demo-demo-1', probe)
+    gateway = execute('lexaegis-cloud-integration-gateway-1', probe)
+    checks = []
+
+    def check(name, ok):
+        checks.append({'name': name, 'passed': bool(ok)})
+    for label, result in [('workbench', workbench), ('gateway', gateway)]:
+        check(label + ' direct IPv4 blocked', result['direct_ipv4'] == 'blocked')
+        check(label + ' direct IPv6 blocked', result['direct_ipv6'] == 'blocked')
+        check(label + ' no provider key in process environment', not result['provider_credential_environment_names'])
+        check(label + ' non-root runtime', result['uid'] == 10001)
+    app = json.loads(docker(['inspect', 'lexaegis-public-demo-demo-1']))[0]
+    gateway_config = json.loads(docker(['inspect', 'lexaegis-cloud-integration-gateway-1']))[0]
+    tunnel = json.loads(docker(['inspect', 'lexaegis-public-demo-tunnel-1']))[0]
+    check('workbench has no provider secret mount', all((m['Name'] != 'lexaegis-cloud-integration-secrets' for m in app['Mounts'] if 'Name' in m)))
+    check('gateway has no business volume', all((m['Name'] != 'lexaegis-public-workbench-integration-data' for m in gateway_config['Mounts'] if 'Name' in m)))
+    check('original public tunnel preserved', tunnel['Id'].startswith('8451850d294d'))
+    check('existing ten receipts retained', receipt['status']['quota']['reserved'] >= 11)
+    check('lifetime ceiling exactly twenty', receipt['status']['quota']['limit'] == 20)
+    report = {'checks': checks, 'workbench': workbench, 'gateway': gateway, 'quota': receipt['status']['quota'], 'workbench_image': app['Image'], 'gateway_image': gateway_config['Image'], 'gateway_started_at': gateway_config['State']['StartedAt'], 'tunnel_started_at': tunnel['State']['StartedAt'], 'production_isolation_acceptance': 'not_verified', 'formal_dispatch': 'blocked', 'additional_real_requests_used': receipt['status']['quota']['reserved'] - 10}
+    save('runtime-evidence.json', report)
+    print(json.dumps({'checks': len(checks), 'passed': sum((c['passed'] for c in checks)), 'quota': report['quota']}))
+    if not all((c['passed'] for c in checks)):
+        raise SystemExit(1)
+if __name__ == '__main__':
+    main()

@@ -1,0 +1,29 @@
+ARCHIVED SOURCE - NOT AN EXECUTABLE ENTRYPOINT. Local literals removed.
+
+"""Exercise the unchanged edge extractor with registered synthetic text only."""
+from datetime import datetime, timezone
+import json
+import os
+from pathlib import Path
+import time
+os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
+os.environ['LEX_EDGE_ALLOWED_HOSTS'] = '127.0.0.1'
+from lexaegis.demo import SCENARIOS
+from lexaegis.providers import EdgeClient
+ROOT = Path(__file__).parent
+report = {'tested_at': datetime.now(timezone.utc).isoformat(), 'synthetic_only': True, 'cloud_posts': 0, 'model': 'MiniCPM5-2B Q4_K_M', 'endpoint': 'http://127.0.0.1:18080/v1', 'real_model': True}
+blocks = [{'id': f'local-live-synthetic:v1:b{i}', 'text': text} for i, (_, text) in enumerate(SCENARIOS['success']['facts'])]
+start = time.monotonic()
+try:
+    client = EdgeClient(report['endpoint'], 'edge-small')
+    report['health'] = client.health()
+    facts = client.extract(blocks, second_pass=True)
+    texts = {b['id']: b['text'] for b in blocks}
+    report['facts'] = facts
+    report['checks'] = {'nonempty': bool(facts), 'source_ids_valid': all((f['source_ids'] and set(f['source_ids']) <= texts.keys() for f in facts)), 'available_quotes_match': all((not f.get('quote') or any((f['quote'] in texts[i] for i in f['source_ids'])) for f in facts))}
+    report['passed'] = all(report['checks'].values())
+except Exception as error:
+    report.update(passed=False, error_type=type(error).__name__, error=str(error)[:500])
+report['seconds'] = round(time.monotonic() - start, 3)
+(ROOT / 'edge-live-probe.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+print(json.dumps({'passed': report['passed'], 'seconds': report['seconds'], 'fact_count': len(report.get('facts', [])), 'cloud_posts': 0}))

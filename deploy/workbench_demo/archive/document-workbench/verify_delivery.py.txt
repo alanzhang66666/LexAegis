@@ -1,0 +1,78 @@
+ARCHIVED SOURCE - NOT AN EXECUTABLE ENTRYPOINT. Local literals removed.
+
+"""Read runtime evidence; optionally exercise cached dispatch, never a new send."""
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+ROOT = Path(__file__).parent
+REPO = Path('<PRIVATE_RUNTIME_ROOT>')
+
+def docker(args, code=None):
+    r = subprocess.run(['docker', *args], input=code.encode() if code else None, capture_output=True, check=True)
+    return r.stdout
+
+def execute(name, code):
+    return json.loads(docker(['exec', '-i', name, 'python', '-'], code))
+
+def save(name, value):
+    (ROOT / name).write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding='utf-8')
+
+def main():
+    task = json.loads((ROOT / 'document-completed-task.json').read_text(encoding='utf-8'))
+    cache_marker = ROOT / 'cached-dispatch-check.json'
+    test_duplicate = not cache_marker.exists()
+    code = 'payload=' + repr(json.dumps({'request': task['request'], 'approval': task['approval'], **({'cloud_envelope': task['cloud_envelope']} if task.get('cloud_envelope') else {})}, ensure_ascii=False)) + '\n'
+    code += "\nimport copy,json,httpx,sqlite3\nfrom pathlib import Path\nfrom lexaegis.util import sign\nsecret=Path('/run/private/gateway-secret').read_text().strip()\nenvelope=json.loads(payload)\nenvelope['signature']=sign(envelope,secret)\nwith httpx.Client(base_url='http://127.0.0.1:8766',trust_env=False,timeout=10) as client:\n headers={'X-Gateway-Signature':sign({'op':'health'},secret)}\n before=client.get('/deployment/status',headers=headers).json()\n health=client.get('/health',headers=headers).json()\n result={'before':before,'health':health,'unsigned_health_status':client.get('/health').status_code}\n if RUN_DUPLICATE:\n  duplicate=client.post('/dispatch',json=envelope)\n  result['duplicate']={'status':duplicate.status_code,'receipt_id':duplicate.json().get('id'),'receipt_status':duplicate.json().get('status')}\n  altered=copy.deepcopy(envelope);altered['request']['body']['messages'][1]['content']+=' injected'\n  result['tampered_status']=client.post('/dispatch',json=altered).status_code\n result['after']=client.get('/deployment/status',headers=headers).json()\n ident=envelope['request']['request_id']\n receipt=client.get('/requests/'+ident,headers={'X-Gateway-Signature':sign({'op':'status','request_id':ident},secret)}).json()\n fields=('id','request_hash','status','at','selected_slot','generation_started','disclosure_state','generation_state','transmission_state','attempts','authorized_recipients','prompt_tokens','completion_tokens','total_tokens','duration_ms')\n result['receipt']={k:receipt[k] for k in fields if k in receipt}\ndb=sqlite3.connect('file:/quota/cloud-budget.sqlite?mode=ro',uri=True);db.row_factory=sqlite3.Row\nresult['paid_post_metadata']=[dict(r) for r in db.execute('select id,at,body_sha256,model,http_status,response_model,usage,outcome from attempts order by at')]\nprint(json.dumps(result))\n"
+    code = code.replace('RUN_DUPLICATE', 'True' if test_duplicate else 'False')
+    cloud = execute('lexaegis-document-demo-doc-gateway-1', code)
+    if test_duplicate:
+        save('cached-dispatch-check.json', {'duplicate': cloud.get('duplicate'), 'tampered_status': cloud.get('tampered_status'), 'before': cloud['before']['quota'], 'after': cloud['after']['quota']})
+    save('cloud-receipt.json', cloud)
+    probe = "\nimport os,json,socket\nfrom pathlib import Path\nr={'uid':os.getuid()}\nfor label,family,target in [('ipv4',socket.AF_INET,('1.1.1.1',443)),('ipv6',socket.AF_INET6,('2606:4700:4700::1111',443,0,0))]:\n s=socket.socket(family);s.settimeout(2)\n try:s.connect(target);r[label]='reachable'\n except OSError:r[label]='blocked'\n finally:s.close()\nnames=set()\nfor p in Path('/proc').iterdir():\n if p.name.isdigit():\n  try:names.update(x.split(b'=',1)[0].decode() for x in (p/'environ').read_bytes().split(b'\\0') if b'=' in x)\n  except OSError:pass\nr['provider_key_environment_names']=sorted(n for n in names if n in {'LEX_CLOUD_PRIMARY_KEY','LEX_CLOUD_API_KEY','LEX_CLOUD_STANDBY_KEY'})\nprint(json.dumps(r))\n"
+    app = execute('lexaegis-document-demo-workbench-1', probe)
+    gateway = execute('lexaegis-document-demo-doc-gateway-1', probe)
+    model = execute('lexaegis-document-demo-edge-model-1', probe)
+    app_inspect = json.loads(docker(['inspect', 'lexaegis-document-demo-workbench-1']))[0]
+    gw_inspect = json.loads(docker(['inspect', 'lexaegis-document-demo-doc-gateway-1']))[0]
+    checks = []
+
+    def check(name, ok):
+        checks.append({'name': name, 'passed': bool(ok)})
+    cached = json.loads(cache_marker.read_text())
+    check('cached dispatch returns original complete receipt', cached['duplicate']['status'] == 200 and cached['duplicate']['receipt_status'] == 'complete' and (cached['duplicate']['receipt_id'] == task['request']['request_id']))
+    check('cached dispatch and tampering spend no quota', cached['before'] == cached['after'])
+    check('tampered signed envelope rejected', cached['tampered_status'] == 403)
+    check('unsigned gateway access rejected', cloud['unsigned_health_status'] == 403)
+    check('key configured only at cloud gateway', cloud['health']['primary'] == 'available' and cloud['health']['gateway_role'] == 'cloud')
+    check('global paid cap remains twenty', cloud['after']['quota']['limit'] == 20)
+    for name, value in [('workbench', app), ('gateway', gateway), ('model_connector', model)]:
+        check(name + ' ordinary IPv4 blocked', value['ipv4'] == 'blocked')
+        check(name + ' ordinary IPv6 blocked', value['ipv6'] == 'blocked')
+        check(name + ' no provider key in process environment', not value['provider_key_environment_names'])
+        check(name + ' non-root', value['uid'] == 10001)
+    check('provider private volume absent from workbench', all((m.get('Name') != 'lexaegis-document-demo-provider-private' for m in app_inspect['Mounts'])))
+    check('business volume absent from gateway', all((m.get('Name') != 'lexaegis-document-demo-app-data' for m in gw_inspect['Mounts'])))
+    baseline = json.loads((ROOT.parent / 'public-workbench/repository-baseline.json').read_text(encoding='utf-8'))
+    changed = []
+    for name, expected in baseline['files'].items():
+        file = REPO / name
+        if not file.is_file():
+            changed.append(name)
+            continue
+        if hashlib.sha256(file.read_bytes()).hexdigest() != expected:
+            changed.append(name)
+    observed = set(filter(None, subprocess.check_output(['git', '-C', str(REPO), 'ls-files', '-c', '--others', '--exclude-standard', '-z']).decode('utf-8').split('\x00')))
+    added = sorted(observed - set(baseline['files']))
+    check('original repository unchanged', not changed and (not added))
+    source = Path('<PRIVATE_RUNTIME_ROOT>/xwechat_files/wxid_oxieoa8852cs22_d6d2/msg/file/2026-11/<PRIVATE_FIXTURE>')
+    check('input document unchanged', hashlib.sha256(source.read_bytes()).hexdigest() == '<PRIVATE_FIXTURE>')
+    production = execute('lexaegis-formal-workbench-formal-1', '\nimport sqlite3,json\ndb=sqlite3.connect(\'file:/data/workbench/production/app/app.sqlite?mode=ro\',uri=True)\nfacts=[json.loads(r[0]) for r in db.execute("select body from records where kind=\'fact\'")]\nprint(json.dumps({\'facts\':len(facts),\'unconfirmed\':sum(not f.get(\'confirmed\') for f in facts)}))\n')
+    check('original production facts preserved unconfirmed', production == {'facts': 62, 'unconfirmed': 62})
+    report = {'checks': checks, 'quota': cloud['after']['quota'], 'workbench': app, 'gateway': gateway, 'model_connector': model, 'production_data': production, 'repository': {'files_checked': len(baseline['files']), 'changed': changed, 'added': added, 'unchanged': not changed and (not added)}, 'workbench_image': app_inspect['Image'], 'gateway_image': gw_inspect['Image'], 'formal_dispatch': 'blocked', 'production_isolation_acceptance': 'not_verified', 'scope': 'user-confirmed synthetic document only'}
+    save('runtime-evidence.json', report)
+    print(json.dumps({'checks': len(checks), 'passed': sum((c['passed'] for c in checks)), 'quota': report['quota'], 'response_models': [r['response_model'] for r in cloud['paid_post_metadata']]}))
+    if not all((c['passed'] for c in checks)):
+        raise SystemExit(1)
+if __name__ == '__main__':
+    main()

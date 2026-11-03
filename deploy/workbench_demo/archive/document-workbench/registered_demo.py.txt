@@ -1,0 +1,67 @@
+ARCHIVED SOURCE - NOT AN EXECUTABLE ENTRYPOINT. Local literals removed.
+
+"""Opt-in, hash-pinned synthetic document scope. No production exception."""
+import hashlib
+import json
+import os
+from pathlib import Path
+SCENARIO = 'registered_document'
+
+def register():
+    from .demo import SCENARIOS
+    path = os.getenv('LEX_REGISTERED_DEMO_MANIFEST')
+    expected = os.getenv('LEX_REGISTERED_DEMO_MANIFEST_SHA256')
+    if not path:
+        return
+    if os.getenv('LEX_RUN_PROFILE') != 'integration':
+        raise ValueError('Registered synthetic documents are integration-only')
+    file = Path(path)
+    if file.is_symlink() or not file.is_file() or file.stat().st_size > 65536:
+        raise ValueError('Invalid registered document manifest')
+    raw = file.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != expected:
+        raise ValueError('Registered document manifest hash mismatch')
+    seed = json.loads(raw)
+    if seed.get('scenario') != SCENARIO or seed.get('declaration') != 'user_confirmed_synthetic_demo_only' or len(seed.get('document_sha256', '')) != 64 or (not seed.get('facts')):
+        raise ValueError('Invalid registered synthetic declaration')
+    SCENARIOS[SCENARIO] = seed
+
+def enabled():
+    from .demo import SCENARIOS
+    return os.getenv('LEX_RUN_PROFILE') == 'integration' and SCENARIO in SCENARIOS
+
+def is_registered(case):
+    from .demo import SCENARIOS
+    from .util import digest
+    seed = SCENARIOS.get(SCENARIO, {})
+    return bool(enabled() and case.get('scenario') == SCENARIO and (case.get('mode') == 'demo') and (case.get('runtime_profile') == 'integration') and (case.get('data_origin') == 'bundled_synthetic') and (case.get('synthetic_manifest_hash') == digest(seed)) and (case.get('registered_document_sha256') == seed.get('document_sha256')))
+
+def public_spec():
+    from .demo import SCENARIOS
+    if not enabled():
+        return None
+    seed = SCENARIOS[SCENARIO]
+    return {'scenario': SCENARIO, 'name': seed['name'], 'filename': seed['document_name'], 'sha256': seed['document_sha256']}
+
+def check_upload(case, data, documents):
+    from .demo import SCENARIOS
+    if not is_registered(case):
+        raise ValueError('This case cannot accept registered uploads')
+    if documents:
+        raise ValueError('<LOCALIZED_OR_PRIVATE_TEXT>')
+    if hashlib.sha256(data).hexdigest() != SCENARIOS[SCENARIO]['document_sha256']:
+        raise ValueError('<LOCALIZED_OR_PRIVATE_TEXT>')
+
+def check_confirmed_fact(case, data, anchors):
+    from .demo import SCENARIOS
+    if not is_registered(case):
+        raise ValueError('Unregistered synthetic case')
+    seed = SCENARIOS[SCENARIO]
+    if (data.get('field'), str(data.get('value', '')).strip()) not in {tuple(row) for row in seed['facts']}:
+        raise ValueError('<LOCALIZED_OR_PRIVATE_TEXT>')
+    ids = data.get('source_ids') or []
+    if not ids or any((i not in anchors for i in ids)):
+        raise ValueError('<LOCALIZED_OR_PRIVATE_TEXT>')
+    if not any((data['value'] in anchors[i]['text'] for i in ids)):
+        raise ValueError('<LOCALIZED_OR_PRIVATE_TEXT>')
+register()

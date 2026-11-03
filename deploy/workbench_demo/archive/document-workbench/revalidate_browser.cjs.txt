@@ -1,0 +1,47 @@
+ARCHIVED SOURCE - NOT AN EXECUTABLE ENTRYPOINT. Local literals removed.
+
+/* Read the already-completed real flow; never enqueue or resend a model call. */
+const fs=require('fs'),path=require('path');
+const {chromium}=require('<PRIVATE_RUNTIME_ROOT>/branding/frontend/node_modules/@playwright/test');
+const root=__dirname,read=name=>JSON.parse(fs.readFileSync(path.join(root,name),'utf8'));
+const flow=read('document-cloud-flow.json'),base=read('status.json').url;
+const account=read('accounts.json').case_operator;
+const report={checked_at:new Date().toISOString(),url:base,existing_case_id:flow.case_id,new_cloud_posts:0,normal_dns:true,checks:[],page_errors:[]};
+const save=()=>fs.writeFileSync(path.join(root,'browser-revalidated.json'),JSON.stringify(report,null,2));
+const check=(name,ok)=>{report.checks.push({name,passed:!!ok});save();if(!ok)throw Error(name);};
+(async()=>{
+ const browser=await chromium.launch({channel:'msedge',headless:true});
+ try{
+  const context=await browser.newContext({baseURL:base,viewport:{width:1440,height:1050}});
+  const page=await context.newPage();page.setDefaultTimeout(45000);page.on('pageerror',e=>report.page_errors.push(e.message));
+  const response=await page.goto(base,{waitUntil:'networkidle'});check('public homepage',response.ok());
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+  await page.locator('button.case-row').filter({hasText:flow.case_id}).waitFor();
+<LOCALIZED_TEXT_REMOVED>
+  await page.locator('button.case-row').filter({hasText:flow.case_id}).click();
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+  const values=await page.evaluate(async({caseId,taskId})=>{
+   const response=await fetch('/api/v1/cases/'+caseId,{credentials:'same-origin'});if(!response.ok)throw Error('Case read failed');
+   const data=await response.json(),task=data.tasks.find(t=>t.id===taskId);
+   return {case_mode:data.case.mode,registered_document:!!data.case.registered_document_demo,
+    model:task.request.body.model,target:task.request.target,request_hash:task.request_hash,
+    provenance:task.artifact?.provenance,confirmed:task.artifact?.confirmed,
+    claims:task.artifact?.claims?.length,all_anchors:task.artifact?.claims?.every(c=>c.anchors?.length&&c.reviewed),
+    local_extraction_jobs:data.jobs.filter(j=>j.kind==='extract'&&j.status==='complete').length};
+  },{caseId:flow.case_id,taskId:flow.task_id});
+  report.result=values;save();
+  check('registered document remains synthetic',values.case_mode==='demo'&&values.registered_document);
+  check('completed real local extraction present',values.local_extraction_jobs>0);
+  check('official current DeepSeek alias',values.model==='deepseek-flash'&&values.target==='https://api.deepseek.com/v1/chat/completions');
+  check('same frozen request preserved',values.request_hash===flow.request_hash);
+  check('real cloud artifact confirmed with sources',values.provenance==='cloud'&&values.confirmed&&values.claims===7&&values.all_anchors);
+  await page.screenshot({path:path.join(root,'current-full-chain-confirmed.png'),fullPage:true});
+  check('no browser JavaScript errors',report.page_errors.length===0);
+<LOCALIZED_TEXT_REMOVED>
+  report.completed=true;save();
+ }finally{await browser.close();save();}
+ console.log(JSON.stringify({completed:true,checks:report.checks.length,new_cloud_posts:0,url:base}));
+})().catch(error=>{report.error=error.message.split('\n')[0];save();console.error(report.error);process.exitCode=1;});

@@ -1,0 +1,55 @@
+ARCHIVED SOURCE - NOT AN EXECUTABLE ENTRYPOINT. Local literals removed.
+
+"""Exercise origin replacement without restarting either temporary tunnel."""
+from datetime import datetime, timezone
+import json
+from pathlib import Path
+import subprocess
+import sys
+import time
+ROOT = Path(__file__).parent
+sys.path.insert(0, str(ROOT.parent))
+from public_access import snapshot
+NAMES = ('lexaegis-formal-workbench-tunnel-1', 'lexaegis-document-demo-tunnel-1')
+
+def run(args):
+    result = subprocess.run([str(x) for x in args], capture_output=True, timeout=90)
+    if result.returncode:
+        raise RuntimeError('Origin replacement check failed: ' + str(args[:2]))
+    return result.stdout
+
+def sessions():
+    result = {}
+    for name in NAMES:
+        info = json.loads(run(['docker', 'inspect', name]))[0]
+        result[name] = {'id': info['Id'], 'started_at': info['State']['StartedAt']}
+    return result
+
+def main():
+    before = sessions()
+    report = {'started_at': datetime.now(timezone.utc).isoformat(), 'before': before, 'new_generation_posts': 0}
+    try:
+        for directory, service, container in [(ROOT, 'workbench', 'lexaegis-document-demo-workbench-1'), (ROOT.parent / 'formal-workbench', 'formal', 'lexaegis-formal-workbench-formal-1')]:
+            run(['docker', 'compose', '-f', directory / 'compose.json', 'up', '-d', '--no-deps', '--force-recreate', service])
+            for _ in range(90):
+                state = json.loads(run(['docker', 'inspect', container]))[0]['State']
+                if state.get('Health', {}).get('Status') == 'healthy':
+                    break
+                time.sleep(0.5)
+            else:
+                raise RuntimeError('Origin health did not recover')
+        after = sessions()
+        access = snapshot('chain')
+        report.update(after=after, public_access=access, sessions_preserved=before == after, public_reachable=access['public_reachable'])
+        if before != after or not access['public_reachable']:
+            raise RuntimeError('Tunnel session continuity failed')
+        report['passed'] = True
+    except Exception as error:
+        report['passed'] = False
+        report['error'] = type(error).__name__ + ': ' + str(error)
+        raise
+    finally:
+        (ROOT / 'tunnel-origin-update-verification.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+    print(json.dumps({'passed': report['passed'], 'sessions_preserved': report['sessions_preserved'], 'url': report['public_access']['url'], 'new_generation_posts': 0}))
+if __name__ == '__main__':
+    main()

@@ -12,6 +12,10 @@
 | [ARCHITECTURE.md](ARCHITECTURE.md) | 字段级工程详本：模块、契约字段、状态机、API、限额、红队/实验附录 |
 | [DEPLOY.md](DEPLOY.md) | 数据目录、备份恢复、Compose 隔离 |
 | [DUAL_TRACK_DEPLOY.md](DUAL_TRACK_DEPLOY.md) | 三种运行环境、Windows 维护与隔离目录 |
+| [云边演示分支验证](CLOUD_EDGE_BRANCH_VALIDATION.md) | 源码迁移、登记文档能力、默认零额度与本分支验证 |
+| [CLOUD_EDGE_DEPLOYMENT_PLAN.md](CLOUD_EDGE_DEPLOYMENT_PLAN.md) | 云端独立网关与不超过 8GB 显存边侧模型的实施方案；目标环境待验证，不是发送授权 |
+| [LOCAL_CLOUD_TRIAL.md](LOCAL_CLOUD_TRIAL.md) | D 盘本地模型与模拟云网关的试跑结果、登录入口及启停方法；demo/native 合成流程 |
+| [LOCAL_DEPLOYMENT_EVALUATION_2026-11-01.md](LOCAL_DEPLOYMENT_EVALUATION_2026-11-01.md) | 完整本地测评：后端、浏览器、真实模型、网关安全和备份恢复；列示修复、失败样例与生产缺项 |
 | [DUAL_TRACK_ACCEPTANCE.md](DUAL_TRACK_ACCEPTANCE.md) | 人工否决录制路径、正式单次放行与交付验收边界 |
 | [legal/PRODUCT_RULE_PREPARATION.md](legal/PRODUCT_RULE_PREPARATION.md) | 常规产品规则草稿、导入报告及法源待复核边界 |
 | [MODELS.md](MODELS.md) | 边侧小模型、云端双槽、OCR 与本机转写 |

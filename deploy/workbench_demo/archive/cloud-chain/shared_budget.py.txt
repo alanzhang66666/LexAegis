@@ -1,0 +1,136 @@
+ARCHIVED SOURCE - NOT AN EXECUTABLE ENTRYPOINT. Local literals removed.
+
+"""Durable operational quota shared by gateways, separate from business/send ledgers."""
+from contextvars import ContextVar
+import hashlib
+import hmac
+import json
+from pathlib import Path
+from starlette.responses import JSONResponse
+from lexaegis.cloud import DispatchOutcome
+from lexaegis.gateway import Envelope
+from lexaegis.storage import Store
+from lexaegis.util import digest, now, sign
+CURRENT_REQUEST = ContextVar('gateway_budget_request', default=None)
+
+class SharedBudget:
+
+    def __init__(self, path):
+        self.store = Store(Path(path))
+        with self.store.read() as repo:
+            policy = repo.get('shared-cloud-budget', 'shared_cloud_budget')
+            if policy['limit'] != 20 or not 12 <= policy['reserved'] <= 20:
+                raise ValueError('Shared quota must preserve the authorized history and twenty-call ceiling')
+
+    def status(self):
+        with self.store.read() as repo:
+            policy = repo.get('shared-cloud-budget', 'shared_cloud_budget')
+        return {'limit': policy['limit'], 'reserved': policy['reserved'], 'remaining': max(0, policy['limit'] - policy['reserved'])}
+
+    def reserve(self, context):
+        profile, identifier, request_hash = context
+        reservation = 'shared-reservation:' + digest({'profile': profile, 'request_id': identifier})
+        with self.store.transaction() as repo:
+            try:
+                previous = repo.get(reservation, 'shared_cloud_reservation')
+                return 'Duplicate or uncertain provider attempt; reconcile original receipt'
+            except KeyError:
+                pass
+            policy = repo.get('shared-cloud-budget', 'shared_cloud_budget')
+            if policy['reserved'] >= policy['limit']:
+                return 'Authorized cloud quota exhausted'
+            policy['reserved'] += 1
+            repo.put('shared_cloud_budget', policy)
+            repo.put('shared_cloud_reservation', {'id': reservation, 'profile': profile, 'request_id': identifier, 'request_hash': request_hash, 'reserved_at': now(), 'status': 'reserved'})
+        return None
+
+    def record(self, context, fields):
+        profile, identifier, request_hash = context
+        record_id = 'shared-receipt:' + digest({'profile': profile, 'request_id': identifier})
+        with self.store.transaction() as repo:
+            try:
+                record = repo.get(record_id, 'shared_cloud_receipt')
+            except KeyError:
+                record = {'id': record_id, 'profile': profile, 'request_id': identifier, 'request_hash': request_hash}
+            record.update(fields, recorded_at=now())
+            repo.put('shared_cloud_receipt', record)
+
+class BudgetedProvider:
+
+    def __init__(self, provider, budget):
+        self.provider, self.budget = (provider, budget)
+
+    @property
+    def primary_key(self):
+        return self.provider.primary_key
+
+    @property
+    def standby_key(self):
+        return self.provider.standby_key
+
+    @property
+    def api_key(self):
+        return self.provider.api_key
+
+    @property
+    def supports_wire_binding(self):
+        return getattr(self.provider, 'supports_wire_binding', False)
+
+    def dispatch(self, target, body, dual_slot=None, persist_attempt=None):
+        context = CURRENT_REQUEST.get()
+        error = 'Missing authenticated request context' if context is None else self.budget.reserve(context)
+        if error:
+            return DispatchOutcome('failed', error=error, disclosure_state='undisclosed', generation_started=False)
+        self.budget.record(context, {'requested_model': body.get('model'), 'target': target, 'state': 'provider_starting'})
+        try:
+            outcome = self.provider.dispatch(target, body, dual_slot=dual_slot, persist_attempt=persist_attempt)
+            self.budget.record(context, {'state': outcome.status, 'selected_slot': outcome.selected_slot, 'disclosure_state': outcome.disclosure_state, 'generation_state': outcome.generation_state, **{k: outcome.usage[k] for k in ('prompt_tokens', 'completion_tokens', 'total_tokens') if outcome.usage and k in outcome.usage}})
+            return outcome
+        except Exception:
+            self.budget.record(context, {'state': 'unknown', 'automatic_retry': False})
+            raise
+
+class RequestContext:
+
+    def __init__(self, app, secret, profile, budget):
+        self.app, self.secret, self.profile, self.budget = (app, secret, profile, budget)
+
+    async def __call__(self, scope, receive, send):
+        if scope['type'] != 'http' or scope['path'] != '/dispatch' or scope['method'] != 'POST':
+            return await self.app(scope, receive, send)
+        raw = bytearray()
+        while True:
+            message = await receive()
+            if message['type'] == 'http.disconnect':
+                return
+            raw.extend(message.get('body', b''))
+            if len(raw) > 1024 * 1024:
+                return await JSONResponse({'detail': 'Gateway request exceeds deployment limit'}, 413)(scope, receive, send)
+            if not message.get('more_body'):
+                break
+        context = None
+        try:
+            envelope = Envelope.model_validate_json(raw)
+            request = envelope.request.model_dump()
+            signed = {'request': request, 'approval': envelope.approval}
+            for key in ('formal_release', 'cloud_envelope'):
+                value = getattr(envelope, key)
+                if value is not None:
+                    signed[key] = value
+            if request['transport'] == 'cloud' and hmac.compare_digest(sign(signed, self.secret), envelope.signature):
+                context = (self.profile, request['request_id'], digest(request))
+        except (ValueError, KeyError, TypeError):
+            pass
+        token = CURRENT_REQUEST.set(context)
+        delivered = False
+
+        async def replay():
+            nonlocal delivered
+            if not delivered:
+                delivered = True
+                return {'type': 'http.request', 'body': bytes(raw), 'more_body': False}
+            return await receive()
+        try:
+            return await self.app(scope, replay, send)
+        finally:
+            CURRENT_REQUEST.reset(token)

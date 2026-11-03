@@ -1,0 +1,76 @@
+ARCHIVED SOURCE - NOT AN EXECUTABLE ENTRYPOINT. Local literals removed.
+
+"""Fixed Windows-loopback llama target; no credentials, data volume or redirects."""
+import asyncio
+from datetime import datetime, timezone
+import hashlib
+import json
+import os
+from pathlib import Path
+import time
+import httpx
+from fastapi import FastAPI, Request
+from starlette.responses import JSONResponse, Response
+TARGET = 'http://192.168.65.254:18080'
+app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+busy = asyncio.Lock()
+metrics = {'completion_requests': 0, 'completed': 0, 'last': None}
+
+def guarded():
+    namespace = Path('/proc/sys/kernel/random/boot_id').read_text().strip() + ':' + os.readlink('/proc/self/ns/net')
+    try:
+        return Path('/run/route-guard/ready').read_text().strip() == namespace
+    except OSError:
+        return False
+
+@app.get('/health')
+async def health():
+    return JSONResponse({'status': 'ready' if guarded() else 'blocked'}, 200 if guarded() else 503)
+
+@app.get('/deployment/metrics')
+async def deployment_metrics():
+    return metrics
+
+@app.get('/v1/models')
+async def models():
+    if not guarded():
+        return JSONResponse({'error': 'Local model route is not ready'}, 503)
+    try:
+        async with httpx.AsyncClient(trust_env=False, follow_redirects=False, timeout=5) as client:
+            response = await client.get(TARGET + '/v1/models')
+            return Response(response.content, status_code=response.status_code, media_type='application/json')
+    except httpx.HTTPError:
+        return JSONResponse({'error': 'Local model is unavailable'}, 503)
+
+@app.post('/v1/chat/completions')
+async def complete(request: Request):
+    if not guarded():
+        return JSONResponse({'error': 'Local model route is not ready'}, 503)
+    if busy.locked():
+        return JSONResponse({'error': 'Local model is busy; retry manually after completion'}, 429)
+    raw = bytearray()
+    async for part in request.stream():
+        raw.extend(part)
+        if len(raw) > 1024 * 1024:
+            return JSONResponse({'error': 'Model request too large'}, 413)
+    try:
+        body = json.loads(raw)
+    except ValueError:
+        return JSONResponse({'error': 'Invalid JSON'}, 400)
+    if not isinstance(body, dict) or body.get('model') != 'edge-small' or body.get('stream'):
+        return JSONResponse({'error': 'Only the configured local model is supported'}, 400)
+    async with busy:
+        metrics['completion_requests'] += 1
+        record = {'at': datetime.now(timezone.utc).isoformat(), 'request_sha256': hashlib.sha256(raw).hexdigest(), 'request_bytes': len(raw), 'model': 'edge-small', 'target': 'windows-loopback:18080', 'status': 'in_progress'}
+        metrics['last'] = record
+        started = time.monotonic()
+        try:
+            async with httpx.AsyncClient(trust_env=False, follow_redirects=False, timeout=115) as client:
+                response = await client.post(TARGET + '/v1/chat/completions', content=bytes(raw), headers={'Content-Type': 'application/json'})
+            record.update(status='complete' if response.status_code == 200 else 'failed', http_status=response.status_code, response_sha256=hashlib.sha256(response.content).hexdigest(), duration_seconds=round(time.monotonic() - started, 3))
+            if response.status_code == 200:
+                metrics['completed'] += 1
+            return Response(response.content, status_code=response.status_code, media_type='application/json')
+        except httpx.HTTPError:
+            record.update(status='failed', duration_seconds=round(time.monotonic() - started, 3))
+            return JSONResponse({'error': 'Local model connection failed'}, 503)

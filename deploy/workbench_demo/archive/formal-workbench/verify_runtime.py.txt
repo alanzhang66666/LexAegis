@@ -1,0 +1,63 @@
+ARCHIVED SOURCE - NOT AN EXECUTABLE ENTRYPOINT. Local literals removed.
+
+"""Read-only runtime, boundary and repository checks; no inference or cloud send."""
+from datetime import datetime, timezone
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import sys
+ROOT = Path(__file__).parent
+REPO = Path('<PRIVATE_RUNTIME_ROOT>')
+
+def execute(container, code):
+    result = subprocess.run(['docker', 'exec', '-i', container, 'python', '-'], input=code.encode(), capture_output=True, check=True, timeout=25)
+    return json.loads(result.stdout)
+
+def main():
+    checks = []
+
+    def check(name, passed):
+        checks.append({'name': name, 'passed': bool(passed)})
+    probe = "\nimport json,os,socket\nfrom pathlib import Path\nr={}\nfor name,family,address in [('ipv4',socket.AF_INET,('1.1.1.1',443)),('ipv6',socket.AF_INET6,('2606:4700:4700::1111',443,0,0))]:\n s=socket.socket(family);s.settimeout(2)\n try:s.connect(address);r[name]='reachable'\n except OSError:r[name]='blocked'\n finally:s.close()\nnames=[]\nfor proc in Path('/proc').iterdir():\n if not proc.name.isdigit():continue\n try:names.extend(v.split(b'=',1)[0].decode() for v in (proc/'environ').read_bytes().split(b'\\0') if b'=' in v and v.split(b'=',1)[0].startswith(b'LEX_CLOUD_') and v.split(b'=',1)[0].endswith(b'_KEY'))\n except OSError:pass\nr['provider_key_names']=names;r['uid']=os.getuid()\nprint(json.dumps(r))\n"
+    results = {}
+    for label in ('formal', 'formal-gateway', 'edge-model'):
+        result = execute('lexaegis-formal-workbench-' + label + '-1', probe)
+        results[label] = result
+        check(label + ' direct IPv4 blocked', result['ipv4'] == 'blocked')
+        check(label + ' direct IPv6 blocked', result['ipv6'] == 'blocked')
+        check(label + ' has no provider key in process environment', not result['provider_key_names'])
+        check(label + ' runtime non-root', result['uid'] == 10001)
+    metadata = execute('lexaegis-formal-workbench-edge-model-1', "\nimport json,urllib.request\ndef get(path):return json.loads(urllib.request.urlopen('http://127.0.0.1:8080'+path,timeout=5).read())\nprint(json.dumps({'health':get('/health'),'models':get('/v1/models'),'metrics':get('/deployment/metrics')}))\n")
+    check('connector namespace route receipt valid', metadata['health']['status'] == 'ready')
+    check('host local model reachable', any((m['id'] == 'edge-small' for m in metadata['models']['data'])))
+    check('document used real local model', metadata['metrics']['completed'] > 0)
+    original = {}
+    for directory in ('lexaegis', 'packs'):
+        for path in (REPO / directory).rglob('*'):
+            if path.is_file() and '__pycache__' not in path.parts and (path.suffix != '.pyc'):
+                original[path.relative_to(REPO).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+    branding_manifest = ROOT.parent / 'branding/frontend-dist-manifest.json'
+    if branding_manifest.exists():
+        approved = json.loads(branding_manifest.read_text(encoding='utf-8'))['files']
+        original.update({'frontend/dist/' + name: value for name, value in approved.items()})
+    else:
+        for path in (REPO / 'frontend/dist').rglob('*'):
+            if path.is_file():
+                original[path.relative_to(REPO).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+    hashes = execute('lexaegis-formal-workbench-formal-1', "\nimport hashlib,json\nfrom pathlib import Path\nroot=Path('/app');result={}\nfor name in ('lexaegis','packs','frontend/dist'):\n for path in (root/name).rglob('*'):\n  if path.is_file() and '__pycache__' not in path.parts and path.suffix!='.pyc':result[path.relative_to(root).as_posix()]=hashlib.sha256(path.read_bytes()).hexdigest()\nprint(json.dumps(result))\n")
+    changed = [name for name, value in original.items() if hashes.get(name) != value]
+    check('original backend and approved frontend assets match formal image', not changed and original.keys() == hashes.keys())
+    key_health = execute('lexaegis-formal-workbench-formal-gateway-1', "\nimport json,urllib.request\nfrom pathlib import Path\nfrom lexaegis.util import sign\nsecret=Path('/run/signing/gateway-secret').read_text().strip()\nreq=urllib.request.Request('http://127.0.0.1:8766/health',headers={'X-Gateway-Signature':sign({'op':'health'},secret)})\nprint(urllib.request.urlopen(req,timeout=4).read().decode())\n")
+    check('formal gateway is keyless edge role', key_health['gateway_role'] == 'edge' and key_health['primary'] == 'unconfigured')
+    source = Path('<PRIVATE_RUNTIME_ROOT>/xwechat_files/wxid_oxieoa8852cs22_d6d2/msg/file/2026-11/<PRIVATE_FIXTURE>')
+    source_hash = json.loads((ROOT / 'source-document.json').read_text(encoding='utf-8'))['source_sha256']
+    check('user document unchanged', hashlib.sha256(source.read_bytes()).hexdigest() == source_hash)
+    subprocess.run([sys.executable, str(ROOT.parent / 'public-workbench/manage.py'), 'repo-check'], capture_output=True, check=True)
+    report = {'tested_at': datetime.now(timezone.utc).isoformat(), 'checks': checks, 'containers': results, 'model_connector': metadata, 'source_files_compared': len(original), 'source_files_changed': changed, 'formal_gateway_health': key_health, 'production_isolation_acceptance': 'not_verified', 'formal_cloud_authorization': 'not_granted', 'repository_check': json.loads((ROOT.parent / 'public-workbench/repository-check.json').read_text())}
+    (ROOT / 'runtime-evidence.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+    print(json.dumps({'passed': sum((c['passed'] for c in checks)), 'checks': len(checks), 'original_assets_compared': len(original), 'model_completions': metadata['metrics']['completed']}))
+    if not all((c['passed'] for c in checks)):
+        raise SystemExit(1)
+if __name__ == '__main__':
+    main()

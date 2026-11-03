@@ -1,0 +1,73 @@
+ARCHIVED SOURCE - NOT AN EXECUTABLE ENTRYPOINT. Local literals removed.
+
+const fs=require('fs'),path=require('path');
+const {chromium}=require('<PRIVATE_RUNTIME_ROOT>/frontend/node_modules/@playwright/test');
+const root=__dirname,read=n=>JSON.parse(fs.readFileSync(path.join(root,n),'utf8'));
+const base=read('status.json').url,account=read('accounts.json').case_operator;
+const marker=path.join(root,'document-case.json');
+const report=fs.existsSync(marker)?read('document-case.json'):{url:base,synthetic_only:true,cloud_posts:0,checks:[]};
+const save=()=>fs.writeFileSync(marker,JSON.stringify(report,null,2));
+const source='<PRIVATE_RUNTIME_ROOT>/xwechat_files/wxid_oxieoa8852cs22_d6d2/msg/file/2026-11/<PRIVATE_FIXTURE>';
+(async()=>{
+ const browser=await chromium.launch({channel:'msedge',headless:true,args:['--no-proxy-server','--disable-quic',`--host-resolver-rules=MAP ${new URL(base).hostname} 104.16.230.132`]});
+ let page;
+ try{
+  page=await browser.newPage({viewport:{width:1500,height:1050}});page.setDefaultTimeout(45000);
+  page.on('pageerror',e=>{report.page_errors=report.page_errors||[];report.page_errors.push(e.message);save();});
+  await page.goto(base,{waitUntil:'networkidle'});
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+  if(!report.case_id){
+   const [response]=await Promise.all([
+    page.waitForResponse(r=>new URL(r.url()).pathname==='/api/v1/demos'&&r.request().method()==='POST'),
+<LOCALIZED_TEXT_REMOVED>
+   ]);
+   if(!response.ok())throw Error('Registered case creation failed '+response.status());
+   report.case_id=(await response.json()).id;save();
+  }else await page.locator('button.case-row').filter({hasText:report.case_id}).click();
+  const caseData=()=>page.evaluate(async id=>{const r=await fetch('/api/v1/cases/'+id,{credentials:'same-origin',cache:'no-store'});if(!r.ok)throw Error('Case read '+r.status);return r.json();},report.case_id);
+  let detail=await caseData();
+  if(!detail.documents.length){
+   const upload=page.waitForResponse(r=>new URL(r.url()).pathname===`/api/v1/cases/${report.case_id}/documents`&&r.request().method()==='POST');
+<LOCALIZED_TEXT_REMOVED>
+   const response=await upload;if(!response.ok())throw Error('Document upload '+response.status());
+   report.uploaded=true;save();
+  }
+  for(let i=0;i<60;i++){
+   detail=await caseData();if(detail.documents.length&&detail.documents.every(d=>d.status==='ready'))break;
+   await page.waitForTimeout(1000);
+  }
+  if(!detail.documents.every(d=>d.status==='ready'))throw Error('Parsing did not complete');
+  if(!report.extraction_started){
+   report.extraction_started=new Date().toISOString();save();
+   const [response]=await Promise.all([
+    page.waitForResponse(r=>new URL(r.url()).pathname===`/api/v1/cases/${report.case_id}/extract`&&r.request().method()==='POST'),
+<LOCALIZED_TEXT_REMOVED>
+   ]);
+   if(!response.ok())throw Error('Extract queue '+response.status());
+   report.job_id=(await response.json()).id;save();
+   await page.screenshot({path:path.join(root,'document-extract-running.png'),fullPage:true});
+  }
+  for(let i=0;i<240;i++){
+   detail=await caseData();const job=detail.jobs.find(j=>j.id===report.job_id);
+   if(job&&['complete','completed','failed'].includes(job.status)){
+    report.job_status=job.status;report.job_warning=job.warning;report.job_error=job.error;
+    if(job.status==='failed')throw Error('Real model extraction failed: '+job.error);
+    break;
+   }
+   await page.waitForTimeout(1000);
+  }
+  if(!detail.facts.length)throw Error('No extracted candidates');
+  report.extraction_completed=new Date().toISOString();report.candidate_count=detail.facts.length;
+  report.all_unconfirmed=detail.facts.every(f=>!f.confirmed);report.all_edge_model=detail.facts.every(f=>f.origin==='edge_model');
+  if(!report.all_unconfirmed||!report.all_edge_model)throw Error('Extraction provenance mismatch');
+  fs.writeFileSync(path.join(root,'document-extracted.json'),JSON.stringify(detail,null,2));
+<LOCALIZED_TEXT_REMOVED>
+  await page.screenshot({path:path.join(root,'document-extracted.png'),fullPage:true});
+  report.extracted=true;save();
+  console.log(JSON.stringify({case_id:report.case_id,job_status:report.job_status,candidates:report.candidate_count,all_unconfirmed:true,all_edge_model:true,cloud_posts:0}));
+ }finally{
+  if(page){await page.screenshot({path:path.join(root,'extract-final.png'),fullPage:true});fs.writeFileSync(path.join(root,'extract-body.txt'),await page.locator('body').innerText());}
+  await browser.close();save();
+ }
+})().catch(e=>{report.error=e.message;save();console.error(e.message);process.exitCode=1;});

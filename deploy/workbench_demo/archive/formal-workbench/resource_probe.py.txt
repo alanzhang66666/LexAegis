@@ -1,0 +1,21 @@
+ARCHIVED SOURCE - NOT AN EXECUTABLE ENTRYPOINT. Local literals removed.
+
+"""Sample total GPU usage during this document job; no model-exclusive claim."""
+from datetime import datetime, timezone
+import json
+from pathlib import Path
+import subprocess
+import time
+ROOT = Path(__file__).parent
+rows = []
+for _ in range(250):
+    value = subprocess.run(['nvidia-smi', '--query-gpu=memory.used,utilization.gpu', '--format=csv,noheader,nounits'], capture_output=True, text=True, timeout=10)
+    if value.returncode == 0:
+        memory, utilization = [int(v.strip()) for v in value.stdout.strip().split(',')]
+        rows.append({'at': datetime.now(timezone.utc).isoformat(), 'total_gpu_used_mib': memory, 'utilization_percent': utilization})
+        (ROOT / 'case-resource-samples.json').write_text(json.dumps({'scope': 'whole GPU including other processes; sampled, not exclusive peak', 'samples': rows}, indent=2))
+    path = ROOT / 'case-demonstration.json'
+    if path.exists() and json.loads(path.read_text(encoding='utf-8')).get('completed'):
+        break
+    time.sleep(5)
+print(json.dumps({'samples': len(rows), 'sampled_max_total_gpu_mib': max((r['total_gpu_used_mib'] for r in rows)) if rows else None}))

@@ -1,0 +1,41 @@
+ARCHIVED SOURCE - NOT AN EXECUTABLE ENTRYPOINT.
+
+const fs=require('fs'),path=require('path');
+const {chromium}=require('<PRIVATE_RUNTIME_ROOT>/frontend/node_modules/@playwright/test');
+const root=__dirname,report={checked_at:new Date().toISOString(),normal_browser_dns:true,no_resolver_override:true,no_tls_bypass:true,cloud_posts:0,workspaces:[]};
+(async()=>{
+ const browser=await chromium.launch({channel:'msedge',headless:true});
+ try{
+  for(const [name,folder] of [['demo','public-workbench'],['formal','formal-workbench']]){
+   const access=JSON.parse(fs.readFileSync(path.join(root,name+'-public-access.json'),'utf8'));
+   if(!access.public_reachable||!access.url)throw Error(name+' has no verified public URL');
+   const account=JSON.parse(fs.readFileSync(path.join(root,folder,'accounts.json'),'utf8')).case_operator;
+   const context=await browser.newContext({baseURL:access.url,viewport:{width:1440,height:1000}});
+   const page=await context.newPage();page.setDefaultTimeout(40000);
+   const errors=[];page.on('pageerror',e=>errors.push(e.message));
+   const opened=await page.goto(access.url,{waitUntil:'networkidle'});
+   await page.getByRole('button',{name:'进入工作台',exact:true}).waitFor();
+   await page.screenshot({path:path.join(root,name+'-public-login-verified.png'),fullPage:false});
+   await page.getByLabel('用户名').fill(account.username);
+   await page.getByLabel('本地访问口令').fill(account.password);
+   const [logged]=await Promise.all([
+    page.waitForResponse(r=>new URL(r.url()).pathname==='/api/v1/login'&&r.request().method()==='POST'),
+    page.getByRole('button',{name:'进入工作台',exact:true}).click()
+   ]);
+   if(!logged.ok())throw Error(name+' login failed');
+   await page.getByRole('button',{name:'新建案件',exact:true}).waitFor();
+   await page.locator('button.case-row').first().waitFor();
+   const caseCount=await page.locator('button.case-row').count();
+   if(caseCount<(name==='demo'?6:1))throw Error(name+' case records missing');
+   await page.screenshot({path:path.join(root,name+'-public-workbench-verified.png'),fullPage:false});
+   report.workspaces.push({name,url:access.url,home_status:opened.status(),login_status:logged.status(),case_count:caseCount,page_errors:errors,passed:opened.ok()&&errors.length===0});
+   await page.locator('button.profile').click();
+   await page.getByRole('button',{name:'进入工作台',exact:true}).waitFor();
+   await context.close();
+  }
+ }finally{
+  await browser.close();fs.writeFileSync(path.join(root,'public-browser-verification.json'),JSON.stringify(report,null,2));
+ }
+ console.log(JSON.stringify(report));
+ if(report.workspaces.some(w=>!w.passed))process.exitCode=1;
+})().catch(e=>{report.error=e.message.split('\n')[0];fs.writeFileSync(path.join(root,'public-browser-verification.json'),JSON.stringify(report,null,2));console.error(report.error);process.exitCode=1;});

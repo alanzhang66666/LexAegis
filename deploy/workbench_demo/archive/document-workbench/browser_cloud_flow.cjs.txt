@@ -1,0 +1,68 @@
+ARCHIVED SOURCE - NOT AN EXECUTABLE ENTRYPOINT. Local literals removed.
+
+const fs=require('fs'),path=require('path');
+const {chromium,expect}=require('<PRIVATE_RUNTIME_ROOT>/frontend/node_modules/@playwright/test');
+const root=__dirname,read=n=>JSON.parse(fs.readFileSync(path.join(root,n),'utf8'));
+const base=read('status.json').url,accounts=read('accounts.json'),{case_id,task_id,request_hash}=read('document-curation.json');
+const marker=path.join(root,'document-cloud-send-once.json'),file=path.join(root,'document-cloud-flow.json');
+const report={url:base,case_id,task_id,request_hash,synthetic_only:true,real_legal_signature:false,cloud_posts:0,checks:[]};
+const save=()=>fs.writeFileSync(file,JSON.stringify(report,null,2));
+const check=(name,ok)=>{report.checks.push({name,passed:!!ok});save();if(!ok)throw Error(name);};
+(async()=>{
+ if(fs.existsSync(marker))throw Error('A send was attempted already. Reconcile its receipt; never run another send automatically.');
+ const browser=await chromium.launch({channel:'msedge',headless:true,args:['--no-proxy-server','--disable-quic',`--host-resolver-rules=MAP ${new URL(base).hostname} 104.16.230.132`]});
+ let last;
+ async function open(role){
+  const context=await browser.newContext({viewport:{width:1500,height:1050}}),page=await context.newPage();last=page;page.setDefaultTimeout(45000);
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+  await page.locator('button.case-row').filter({hasText:case_id}).click();
+<LOCALIZED_TEXT_REMOVED>
+ }
+ async function mutation(page,suffix,action){
+  const [response]=await Promise.all([
+   page.waitForResponse(r=>new URL(r.url()).pathname===`/api/v1/tasks/${task_id}/${suffix}`&&r.request().method()==='POST'),action()
+  ]);
+  const value=await response.json();check(suffix+' via original UI',response.ok());return value;
+ }
+ try{
+  const legal=await open('legal_reviewer');
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+  await legal.locator('.check-grid input[type=checkbox]').first().check();
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+  const approval=await open('approver');
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+  const op=await open('case_operator');
+<LOCALIZED_TEXT_REMOVED>
+  fs.writeFileSync(marker,JSON.stringify({case_id,task_id,request_hash,at:new Date().toISOString()}));report.cloud_posts=1;save();
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+  for(let i=0;i<20;i++){
+<LOCALIZED_TEXT_REMOVED>
+   const [response]=await Promise.all([
+    legal.waitForResponse(r=>new URL(r.url()).pathname.startsWith(`/api/v1/tasks/${task_id}/claims/`)&&r.request().method()==='POST'),buttons.first().click()
+   ]);
+   check('claim source reviewed',response.ok());await expect(buttons).toHaveCount(count-1,{timeout:45000});
+  }
+<LOCALIZED_TEXT_REMOVED>
+  check('confirmed cloud artifact',task.artifact.confirmed&&task.artifact.provenance==='cloud');
+  check('all claims anchored',task.artifact.claims.length>0&&task.artifact.claims.every(c=>c.anchors.length&&c.reviewed));
+  fs.writeFileSync(path.join(root,'document-completed-task.json'),JSON.stringify(task,null,2));
+<LOCALIZED_TEXT_REMOVED>
+  await legal.screenshot({path:path.join(root,'document-cloud-confirmed.png'),fullPage:true});
+  report.completed=true;report.request_id=task.request.request_id;report.claim_count=task.artifact.claims.length;save();
+  console.log(JSON.stringify({completed:true,cloud_posts:1,checks:report.checks.length,task_id,request_id:report.request_id}));
+ }finally{
+  if(last){await last.screenshot({path:path.join(root,'cloud-flow-final.png'),fullPage:true});fs.writeFileSync(path.join(root,'cloud-flow-body.txt'),await last.locator('body').innerText());}
+  await browser.close();save();
+ }
+})().catch(e=>{report.error=e.message;save();console.error(e.message);process.exitCode=1;});

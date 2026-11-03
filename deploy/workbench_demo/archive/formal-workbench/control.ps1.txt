@@ -1,0 +1,6 @@
+ARCHIVED SOURCE - NOT AN EXECUTABLE ENTRYPOINT. Local literals removed.
+
+param([ValidateSet('start','stop','status','verify')][string]$Action='status')
+$ErrorActionPreference='Stop'
+& '<PRIVATE_RUNTIME_ROOT>\.venv\Scripts\python.exe' (Join-Path $PSScriptRoot 'manage.py') $Action
+if($LASTEXITCODE -ne 0){throw "Formal workbench command failed: $Action"}

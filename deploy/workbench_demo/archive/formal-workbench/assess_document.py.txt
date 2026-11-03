@@ -1,0 +1,93 @@
+ARCHIVED SOURCE - NOT AN EXECUTABLE ENTRYPOINT. Local literals removed.
+
+"""Document-specific manual adjudication with reproducible derived metrics."""
+from collections import Counter, defaultdict
+from datetime import datetime, timezone
+import csv
+import hashlib
+import json
+from pathlib import Path
+import re
+ROOT = Path(__file__).parent
+
+def read(name):
+    return json.loads((ROOT / name).read_text(encoding='utf-8'))
+
+def compact(text):
+    return re.sub('[\\s，,。；;：:、（）()\\[\\]]', '', text)
+
+def write(name, value):
+    (ROOT / name).write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding='utf-8')
+
+def main():
+    data = read('case-extracted-detail.json')
+    gold = read('case-gold-frozen.json')
+    freeze = read('case-gold-freeze.json')
+    demo = read('case-demonstration.json')
+    assert hashlib.sha256((ROOT / 'case-gold-frozen.json').read_bytes()).hexdigest() == freeze['sha256']
+    facts = data['facts']
+    assert len(facts) == 62
+    blocks = {b['id']: b for d in data['documents'] for b in d['ir']['blocks']}
+    wrong_fields = {27: '<LOCALIZED_OR_PRIVATE_TEXT>', 32: '<LOCALIZED_OR_PRIVATE_TEXT>', 33: '<LOCALIZED_OR_PRIVATE_TEXT>', 34: '<LOCALIZED_OR_PRIVATE_TEXT>', 35: '<LOCALIZED_OR_PRIVATE_TEXT>', 36: '<LOCALIZED_OR_PRIVATE_TEXT>', 37: '<LOCALIZED_OR_PRIVATE_TEXT>', 58: '<LOCALIZED_OR_PRIVATE_TEXT>'}
+    issues = {2: ['<LOCALIZED_OR_PRIVATE_TEXT>'], 24: ['<LOCALIZED_OR_PRIVATE_TEXT>'], 31: ['<LOCALIZED_OR_PRIVATE_TEXT>']}
+    observations = []
+    seen = {}
+    duplicate_positions = []
+    for index, fact in enumerate(facts, 1):
+        notes = list(issues.get(index, []))
+        if index in wrong_fields:
+            notes.append(wrong_fields[index])
+        key = (fact['field'], compact(fact['value']))
+        if key in seen:
+            notes.append('<LOCALIZED_OR_PRIVATE_TEXT>' + str(seen[key]))
+            duplicate_positions.append(index)
+        else:
+            seen[key] = index
+        if fact['field'] == 'amount':
+            notes.append('<LOCALIZED_OR_PRIVATE_TEXT>')
+        valid = bool(fact['source_ids']) and set(fact['source_ids']) <= blocks.keys()
+        exact = any((fact['value'] in blocks[source]['text'] for source in fact['source_ids']))
+        normalized = any((compact(fact['value']) in compact(blocks[source]['text']) for source in fact['source_ids']))
+        observations.append({'position': index, 'fact_id': fact['id'], 'field': fact['field'], 'value': fact['value'], 'source_ids': fact['source_ids'], 'origin': fact['origin'], 'confirmed': fact['confirmed'], 'role': fact.get('role'), 'source_ids_valid': valid, 'value_exact_substring_of_some_source': exact, 'value_normalized_substring': normalized, 'field_semantics_correct': index not in wrong_fields, 'role_wrong': index == 2, 'primary_source_support_sufficient': index != 24, 'notes': notes})
+    strict = {1: [1], 2: [18, 22], 3: [4], 4: [5], 5: [9], 6: [10], 7: [11], 8: [12], 9: [13], 10: [14], 11: [15], 12: [16], 13: [17], 25: [38, 55], 27: [23], 28: [39], 29: [57, 60], 34: [25], 47: [56], 48: [62]}
+    loose = {26: [34], 30: [32], 32: [33], 46: [36, 37], 50: [35], 53: [58]}
+    matching = []
+    for number, item in enumerate(gold['facts'], 1):
+        strict_positions = strict.get(number, [])
+        content_positions = strict_positions or loose.get(number, [])
+        if 14 <= number <= 24:
+            reason = '<LOCALIZED_OR_PRIVATE_TEXT>'
+        elif strict_positions:
+            reason = '<LOCALIZED_OR_PRIVATE_TEXT>'
+        elif content_positions:
+            reason = '<LOCALIZED_OR_PRIVATE_TEXT>'
+        else:
+            reason = '<LOCALIZED_OR_PRIVATE_TEXT>'
+        matching.append({**item, 'strict_match': bool(strict_positions), 'content_match': bool(content_positions), 'prediction_positions': content_positions, 'reason': reason})
+    by_category = defaultdict(lambda: {'gold': 0, 'content': 0, 'usable_typed': 0})
+    for item in matching:
+        group = by_category[item['category']]
+        group['gold'] += 1
+        group['content'] += item['content_match']
+        group['usable_typed'] += item['strict_match']
+    anchors = [source for fact in facts for source in fact['source_ids']]
+    partial = [item for item in data['audit'] if item['event'] == 'extract.partial']
+    resource = read('case-resource-samples.json')
+    metrics = {'prediction_count': len(facts), 'unique_field_value_count': len(seen), 'exact_duplicate_extra_count': len(duplicate_positions), 'field_counts': dict(Counter((f['field'] for f in facts))), 'source_id_valid_facts': sum((item['source_ids_valid'] for item in observations)), 'source_id_valid_fact_rate': sum((item['source_ids_valid'] for item in observations)) / len(facts), 'source_references': len(anchors), 'unique_source_blocks_cited': len(set(anchors)), 'value_exact_substring_facts': sum((item['value_exact_substring_of_some_source'] for item in observations)), 'value_normalized_substring_facts': sum((item['value_normalized_substring'] for item in observations)), 'field_semantics_correct': len(facts) - len(wrong_fields), 'field_semantics_rate': (len(facts) - len(wrong_fields)) / len(facts), 'wrong_explicit_roles': 1, 'unknown_roles': sum((f.get('role') == 'unknown' for f in facts)), 'explicit_role_predictions': sum((f.get('role') != 'unknown' for f in facts)), 'primary_source_support_sufficient': 61, 'primary_source_support_rate': 61 / 62, 'core_gold_count': len(matching), 'core_content_recall': sum((g['content_match'] for g in matching)) / len(matching), 'core_content_matched': sum((g['content_match'] for g in matching)), 'core_usable_typed_recall': sum((g['strict_match'] for g in matching)) / len(matching), 'core_usable_typed_matched': sum((g['strict_match'] for g in matching)), 'worker_amount_pair_matches': 0, 'worker_amount_pair_gold': 11, 'claim_denial_matches': 0, 'claim_denial_gold': 5, 'party_name_matches': 13, 'party_name_gold': 13, 'worker_unique_wage_values_found': 8, 'worker_unique_wage_values_gold': 8, 'total_wage_amount_found': '<PRIVATE_NUMERIC_OR_DATE>', 'partial_failed_batches': sum((item['metadata']['failed_batches'] for item in partial)), 'job_seconds': (datetime.fromisoformat(demo['job']['finished_at']) - datetime.fromisoformat(demo['job']['started_at'])).total_seconds(), 'browser_observed_seconds': demo['elapsed_seconds'], 'all_model_candidates_unconfirmed': all((not f['confirmed'] and f['origin'] == 'edge_model' for f in facts)), 'human_edits_performed': 0, 'minimum_wrong_field_candidates_requiring_correction': len(wrong_fields), 'quote_matching_rate': None, 'quote_matching_unavailable_reason': 'Original worker does not persist extracted quote; do not substitute value substring rate for quote matching', 'sampled_gpu_total_used_mib_max': max((r['total_gpu_used_mib'] for r in resource['samples'])), 'model_exclusive_vram_peak': None, 'full_document_precision': None, 'full_document_recall': None}
+    report = {'generated_at': datetime.now(timezone.utc).isoformat(), 'model_quality': 'not_passed', 'integration_status': 'live_local_extraction_working', 'source_name': gold.get('source_name', '<PRIVATE_FIXTURE>'), 'source_sha256': gold['source_sha256'], 'gold_sha256': freeze['sha256'], 'evaluation_kind': 'single_document_agent_review_not_independent_legal_gold_standard', 'scope': gold['scope'], 'case_id': data['case']['id'], 'runtime_profile': 'production', 'formal_cloud_sent': False, 'cloud_posts': 0, 'model': 'MiniCPM5-2B Q4_K_M', 'model_quality_settings_changed': False, 'metrics': metrics, 'category_results': dict(by_category), 'prediction_review': observations, 'gold_matching': matching, 'limitations': ['Single document; no held-out generalization estimate.', 'Core checklist, not all document statements.', 'Original quote is not retained by worker.', 'Total GPU sampling includes other processes and did not cover every millisecond.', 'No independent human legal review; no production external authorization.']}
+    write('<LOCALIZED_OR_PRIVATE_TEXT>', report)
+    with (ROOT / '<LOCALIZED_OR_PRIVATE_TEXT>').open('w', encoding='utf-8-sig', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerow(['<LOCALIZED_OR_PRIVATE_TEXT>', '<LOCALIZED_OR_PRIVATE_TEXT>', '<LOCALIZED_OR_PRIVATE_TEXT>', '<LOCALIZED_OR_PRIVATE_TEXT>', '<LOCALIZED_OR_PRIVATE_TEXT>', '<LOCALIZED_OR_PRIVATE_TEXT>', '<LOCALIZED_OR_PRIVATE_TEXT>', '<LOCALIZED_OR_PRIVATE_TEXT>', '<LOCALIZED_OR_PRIVATE_TEXT>'])
+        for item in observations:
+            writer.writerow([item['position'], item['fact_id'], item['field'], item['value'], item['role'], item['source_ids_valid'], item['field_semantics_correct'], item['confirmed'], '；'.join(item['notes'])])
+    with (ROOT / '<LOCALIZED_OR_PRIVATE_TEXT>').open('w', encoding='utf-8-sig', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerow(['<LOCALIZED_OR_PRIVATE_TEXT>', '<LOCALIZED_OR_PRIVATE_TEXT>', '<LOCALIZED_OR_PRIVATE_TEXT>', '<LOCALIZED_OR_PRIVATE_TEXT>', '<LOCALIZED_OR_PRIVATE_TEXT>', '<LOCALIZED_OR_PRIVATE_TEXT>', '<LOCALIZED_OR_PRIVATE_TEXT>'])
+        for item in matching:
+            writer.writerow([item['id'], item['category'], item['text'], item['content_match'], item['strict_match'], ','.join(map(str, item['prediction_positions'])), item['reason']])
+    rows = ['<LOCALIZED_OR_PRIVATE_TEXT>', '', '<LOCALIZED_OR_PRIVATE_TEXT>', '', f"<LOCALIZED_OR_PRIVATE_TEXT>{read('status.json')['url']}", f"<LOCALIZED_OR_PRIVATE_TEXT>{data['case']['id']}", '', f"<LOCALIZED_OR_PRIVATE_TEXT>{demo['parsed_characters']}<LOCALIZED_OR_PRIVATE_TEXT>{demo['parsed_blocks']}<LOCALIZED_OR_PRIVATE_TEXT>{demo['elapsed_seconds']}<LOCALIZED_OR_PRIVATE_TEXT>{metrics['job_seconds']:.2f}<LOCALIZED_OR_PRIVATE_TEXT>", '', '<LOCALIZED_OR_PRIVATE_TEXT>', '', '<LOCALIZED_OR_PRIVATE_TEXT>', '| --- | --- |', '<LOCALIZED_OR_PRIVATE_TEXT>', '<LOCALIZED_OR_PRIVATE_TEXT>', '<LOCALIZED_OR_PRIVATE_TEXT>', '<LOCALIZED_OR_PRIVATE_TEXT>', '<LOCALIZED_OR_PRIVATE_TEXT>', '<LOCALIZED_OR_PRIVATE_TEXT>', '<LOCALIZED_OR_PRIVATE_TEXT>', '<LOCALIZED_OR_PRIVATE_TEXT>', '<LOCALIZED_OR_PRIVATE_TEXT>', '<LOCALIZED_OR_PRIVATE_TEXT>', '<LOCALIZED_OR_PRIVATE_TEXT>', f"<LOCALIZED_OR_PRIVATE_TEXT>{metrics['value_exact_substring_facts']}<LOCALIZED_OR_PRIVATE_TEXT>", '<LOCALIZED_OR_PRIVATE_TEXT>', f"<LOCALIZED_OR_PRIVATE_TEXT>{metrics['exact_duplicate_extra_count']}<LOCALIZED_OR_PRIVATE_TEXT>", '<LOCALIZED_OR_PRIVATE_TEXT>', f"<LOCALIZED_OR_PRIVATE_TEXT>{metrics['sampled_gpu_total_used_mib_max']}<LOCALIZED_OR_PRIVATE_TEXT>", '', '<LOCALIZED_OR_PRIVATE_TEXT>', '', '<LOCALIZED_OR_PRIVATE_TEXT>', '', '<LOCALIZED_OR_PRIVATE_TEXT>', '', '<LOCALIZED_OR_PRIVATE_TEXT>']
+    (ROOT / '<LOCALIZED_OR_PRIVATE_TEXT>').write_text('\n'.join(rows), encoding='utf-8')
+    print(json.dumps({'quality': 'not_passed', 'facts': len(facts), 'core_content': metrics['core_content_matched'], 'core_usable_typed': metrics['core_usable_typed_matched'], 'gold': len(matching), 'field_correct': metrics['field_semantics_correct'], 'duplicates': len(duplicate_positions)}))
+if __name__ == '__main__':
+    main()

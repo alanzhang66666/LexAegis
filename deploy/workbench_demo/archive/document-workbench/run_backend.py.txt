@@ -1,0 +1,21 @@
+ARCHIVED SOURCE - NOT AN EXECUTABLE ENTRYPOINT. Local literals removed.
+
+"""Force the full regression to import the authorized deployment copy."""
+import os
+from pathlib import Path
+import sys
+ROOT = Path(__file__).parent
+os.chdir(ROOT / 'candidate')
+os.environ.pop('LEX_REGISTERED_DEMO_MANIFEST', None)
+os.environ.pop('LEX_REGISTERED_DEMO_MANIFEST_SHA256', None)
+sys.path.insert(0, str(ROOT / 'candidate'))
+sys.path.append(str(ROOT / 'candidate'))
+import lexaegis
+assert Path(lexaegis.__file__).resolve().is_relative_to((ROOT / 'candidate').resolve())
+if __name__ == '__main__':
+    import multiprocessing
+    multiprocessing.freeze_support()
+    import pytest
+    print('Backend under test: ' + lexaegis.__file__, flush=True)
+    print('Repository fixtures under test: ' + str(ROOT / 'candidate/tests'), flush=True)
+    raise SystemExit(pytest.main([str(ROOT / 'candidate/tests'), '-q', '--import-mode=importlib', '-o', 'cache_dir=' + str(ROOT / 'candidate-pytest-cache'), '--basetemp', str(ROOT / 'candidate-backend-final-temp'), '--junitxml', str(ROOT / 'candidate-backend-final.xml')]))

@@ -1,0 +1,79 @@
+ARCHIVED SOURCE - NOT AN EXECUTABLE ENTRYPOINT. Local literals removed.
+
+/* Demonstrate the original formal-case UI using the supplied document. */
+const fs=require('fs'),path=require('path');
+const {chromium}=require('<PRIVATE_RUNTIME_ROOT>/frontend/node_modules/@playwright/test');
+const root=__dirname,read=n=>JSON.parse(fs.readFileSync(path.join(root,n),'utf8'));
+const base=read('status.json').url,account=read('accounts.json').case_operator;
+const source='<PRIVATE_RUNTIME_ROOT>/xwechat_files/wxid_oxieoa8852cs22_d6d2/msg/file/2026-11/<PRIVATE_FIXTURE>';
+const report={url:base,source_name:path.basename(source),source_sha256:read('source-document.json').source_sha256,
+    gold_sha256:read('case-gold-freeze.json').sha256,checks:[],cloud_posts:0,model_calls:'local_only',page_errors:[]};
+const save=()=>fs.writeFileSync(path.join(root,'case-demonstration.json'),JSON.stringify(report,null,2));
+const check=(name,passed)=>{report.checks.push({name,passed});save();if(!passed)throw Error(name);};
+(async()=>{
+ if(fs.existsSync(path.join(root,'doc-extract-once.json')))throw Error('An extraction was already submitted; inspect or resume its stored job instead of starting another');
+ const browser=await chromium.launch({channel:'msedge',headless:true,args:['--no-proxy-server','--disable-quic',`--host-resolver-rules=MAP ${new URL(base).hostname} 104.16.230.132`]});
+ let page;
+ try{
+  const context=await browser.newContext({baseURL:base,viewport:{width:1440,height:1050}});
+  page=await context.newPage();page.setDefaultTimeout(45000);page.on('pageerror',e=>report.page_errors.push(e.message));
+  await page.goto(base,{waitUntil:'networkidle'});
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+  const [createdResponse]=await Promise.all([
+   page.waitForResponse(r=>new URL(r.url()).pathname==='/api/v1/cases'&&r.request().method()==='POST'),
+<LOCALIZED_TEXT_REMOVED>
+  ]);
+  const created=await createdResponse.json();report.case_id=created.id;save();
+  check('original formal case created',createdResponse.ok()&&created.mode==='formal');
+  const [uploadResponse]=await Promise.all([
+   page.waitForResponse(r=>new URL(r.url()).pathname===`/api/v1/cases/${created.id}/documents`&&r.request().method()==='POST'),
+<LOCALIZED_TEXT_REMOVED>
+  ]);
+  check('original DOCX upload',uploadResponse.ok());
+  const parse=await uploadResponse.json();report.parse_job_id=parse.id;save();
+  async function detail(){const r=await context.request.get(`/api/v1/cases/${created.id}`);if(!r.ok())throw Error('Case read failed '+r.status());return r.json();}
+  for(let i=0;i<60;i++){
+   const current=await detail();const job=current.jobs.find(j=>j.id===parse.id);
+   if(job&&['complete','failed'].includes(job.status)){
+    check('DOCX parsed',job.status==='complete');
+    report.parsed_blocks=current.documents.reduce((n,d)=>n+(d.ir?.blocks?.length||0),0);
+    report.parsed_characters=current.documents.reduce((n,d)=>n+(d.ir?.blocks||[]).reduce((x,b)=>x+b.text.length,0),0);save();break;
+   }
+   await page.waitForTimeout(1000);
+  }
+  const capabilities=await (await context.request.get('/api/v1/capabilities')).json();
+  check('real edge model advertised available',capabilities.edge.status==='available');
+  const marker={case_id:created.id,at:new Date().toISOString()};
+  fs.writeFileSync(path.join(root,'doc-extract-once.json'),JSON.stringify(marker));
+  const started=Date.now();
+  const [extractResponse]=await Promise.all([
+   page.waitForResponse(r=>new URL(r.url()).pathname===`/api/v1/cases/${created.id}/extract`&&r.request().method()==='POST'),
+<LOCALIZED_TEXT_REMOVED>
+  ]);
+  check('original edge extraction button queues job',extractResponse.ok());
+  const queued=await extractResponse.json();report.extract_job_id=queued.id;save();
+  fs.writeFileSync(path.join(root,'doc-extract-once.json'),JSON.stringify({...marker,job_id:queued.id}));
+  await page.screenshot({path:path.join(root,'case-extract-running.png'),fullPage:true});
+  let latest;
+  for(let i=0;i<400;i++){
+   latest=await detail();const job=latest.jobs.find(j=>j.id===queued.id);
+   report.extract_status=job?.status;report.elapsed_seconds=Math.round((Date.now()-started)/1000);save();
+   if(job&&['complete','failed','cancelled'].includes(job.status)){
+    report.job=job;report.fact_count=latest.facts.length;report.model_facts=latest.facts.filter(f=>f.origin==='edge_model').length;save();break;
+   }
+   await page.waitForTimeout(3000);
+  }
+  fs.writeFileSync(path.join(root,'case-extracted-detail.json'),JSON.stringify(latest,null,2));
+  await page.waitForTimeout(3000);
+  await page.screenshot({path:path.join(root,'case-extract-result.png'),fullPage:true});
+  report.completed=true;report.extraction_passed=report.extract_status==='complete'&&report.model_facts>0;save();
+  console.log(JSON.stringify({completed:true,case_id:report.case_id,extraction_status:report.extract_status,facts:report.fact_count,seconds:report.elapsed_seconds,cloud_posts:0}));
+ }finally{
+  if(page){await page.screenshot({path:path.join(root,'case-browser-final.png'),fullPage:true});fs.writeFileSync(path.join(root,'case-browser-body.txt'),await page.locator('body').innerText());}
+  await browser.close();save();
+ }
+})().catch(e=>{report.error=e.message;save();console.error(e.message);process.exitCode=1;});

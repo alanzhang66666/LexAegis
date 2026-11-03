@@ -1,0 +1,221 @@
+ARCHIVED SOURCE - NOT AN EXECUTABLE ENTRYPOINT. Local literals removed.
+
+"""External deployment manager. Repository files are read-only inputs."""
+import argparse
+from contextlib import closing
+from datetime import datetime, timezone
+import hashlib
+import importlib.util
+import io
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import sqlite3
+import subprocess
+import sys
+import tarfile
+import tempfile
+import time
+HERE = Path(__file__).resolve().parent
+REPOSITORY = Path('<PRIVATE_RUNTIME_ROOT>')
+PUBLIC = HERE / 'public.compose.json'
+CLOUD = HERE / 'cloud.compose.json'
+TAG = 'lexaegis:public-integration-workbench'
+
+def command(arguments, **kwargs):
+    result = subprocess.run(arguments, capture_output=True, timeout=kwargs.pop('timeout', 90), **kwargs)
+    if result.returncode:
+        raise RuntimeError('Deployment command failed: ' + arguments[0])
+    return result.stdout
+
+def compose(path, *arguments):
+    return ['docker', 'compose', '-f', str(path), *arguments]
+
+def record(name, value):
+    (HERE / name).write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding='utf-8')
+
+def build():
+    with tempfile.TemporaryDirectory() as directory, (HERE / 'build.log').open('wb') as log:
+        context = Path(directory)
+        shutil.copytree(REPOSITORY / 'lexaegis', context / 'lexaegis', ignore=shutil.ignore_patterns('__pycache__', '*.pyc', '.env*'))
+        shutil.copytree(REPOSITORY / 'packs', context / 'packs')
+        shutil.copytree(REPOSITORY / 'frontend/dist', context / 'frontend/dist')
+        shutil.copy2(REPOSITORY / 'requirements.lock', context / 'requirements.lock')
+        shutil.copy2(HERE / 'Dockerfile', context / 'Dockerfile')
+        scripts = context / 'deployment'
+        scripts.mkdir()
+        for name in ('workbench.py', 'public_proxy.py', 'poll_events.js'):
+            shutil.copy2(HERE / name, scripts / name)
+        result = subprocess.run(['docker', 'build', '-t', TAG, str(context)], stdout=log, stderr=log)
+        if result.returncode:
+            raise RuntimeError('Image build failed; inspect external build.log')
+    image = command(['docker', 'image', 'inspect', TAG, '--format', '{{.Id}}']).decode().strip()
+    record('image.json', {'image_config_id': image, 'tag': TAG, 'repository_source_modified': False})
+    print('Integration workbench image built', flush=True)
+
+def volume(name):
+    command(['docker', 'volume', 'create', '--label', 'lexaegis.deployment=external-public-integration', name])
+    labels = json.loads(command(['docker', 'volume', 'inspect', name]))[0].get('Labels') or {}
+    if labels.get('lexaegis.deployment') != 'external-public-integration':
+        raise ValueError('Existing volume belongs to another deployment')
+
+def provision_signing(image):
+    name = 'lexaegis-public-workbench-signing'
+    volume(name)
+    source = HERE.parent / 'integration/gateway-secret'
+    payload = io.BytesIO()
+    with tarfile.open(fileobj=payload, mode='w') as archive:
+        data = source.read_bytes()
+        member = tarfile.TarInfo('gateway-secret')
+        member.size = len(data)
+        member.mode = 384
+        archive.addfile(member, io.BytesIO(data))
+    code = "import io,tarfile,sys,os; a=tarfile.open(fileobj=io.BytesIO(sys.stdin.buffer.read()),mode='r:'); d=a.extractfile('gateway-secret').read(); p='/provision/gateway-secret'; open(p+'.new','wb').write(d); os.chmod(p+'.new',0o600); os.chown(p+'.new',10001,10001); os.replace(p+'.new',p); os.chmod('/provision',0o700); os.chown('/provision',10001,10001)"
+    command(['docker', 'run', '--rm', '-i', '--read-only', '--network', 'none', '--user', '0:0', '--cap-drop=ALL', '--cap-add=CHOWN', '--cap-add=DAC_OVERRIDE', '--cap-add=FOWNER', '--security-opt=no-new-privileges', '--mount', 'type=volume,src=' + name + ',dst=/provision', '--entrypoint', 'python', image, '-c', code], input=payload.getvalue())
+
+def configure():
+    image = json.loads((HERE / 'image.json').read_text())['image_config_id']
+    old = REPOSITORY / 'deploy/cloud_gateway'
+    cloud = json.loads(command(['docker', 'compose', '--env-file', str(REPOSITORY / '.data/cloud-gateway/integration.env'), '-f', str(old / 'compose.yaml'), 'config', '--format', 'json']))
+    gateway = cloud['services']['gateway']
+    gateway['command'] = ['python', '-m', 'uvicorn', 'quota_runtime:create_app', '--factory', '--host', '0.0.0.0', '--port', '8766', '--no-access-log']
+    gateway['volumes'] += [{'type': 'bind', 'source': str(HERE / 'quota_runtime.py'), 'target': '/opt/cloud_gateway/quota_runtime.py', 'read_only': True}, {'type': 'bind', 'source': str(HERE / 'allowance.json'), 'target': '/run/quota/allowance.json', 'read_only': True}]
+    record('cloud.compose.json', cloud)
+    public = json.loads(command(['docker', 'compose', '--env-file', str(REPOSITORY / '.data/cloud-gateway/public-demo.env'), '-f', str(old / 'compose.public-demo.yaml'), 'config', '--format', 'json']))
+    demo = public['services']['demo']
+    demo['image'] = image
+    demo['volumes'] = [{'type': 'volume', 'source': 'workbench-data', 'target': '/data'}, {'type': 'volume', 'source': 'workbench-signing', 'target': '/run/signing', 'read_only': True}]
+    demo['networks']['cloud-private'] = None
+    public['networks']['cloud-private'] = {'external': True, 'name': 'lexaegis-cloud-integration_gateway-private'}
+    public['volumes']['workbench-data'] = {'external': True, 'name': 'lexaegis-public-workbench-integration-data'}
+    public['volumes']['workbench-signing'] = {'external': True, 'name': 'lexaegis-public-workbench-signing'}
+    record('public.compose.json', public)
+    volume('lexaegis-public-workbench-integration-data')
+    provision_signing(image)
+    command(compose(CLOUD, 'config', '--quiet'))
+    command(compose(PUBLIC, 'config', '--quiet'))
+    print('External deployment configuration prepared', flush=True)
+
+def allowance(additional):
+    if not 0 <= additional <= 10:
+        raise ValueError('Only the ten additional user-authorized calls are permitted')
+    record('allowance.json', {'id': '20261102-user-additional-' + str(additional), 'previous_ceiling': 10, 'additional_requests': additional, 'lifetime_ceiling': 10 + additional, 'authorization': 'User explicitly authorized up to ten additional real cloud calls in this chat', 'created_at': datetime.now(timezone.utc).isoformat()})
+
+def start():
+    command(compose(CLOUD, 'up', '-d', 'gateway', 'provider-egress', 'gateway-ingress', 'isolate-ingress-route'))
+    for _ in range(45):
+        code = "from pathlib import Path; import urllib.request; from lexaegis.util import sign; s=Path('/run/private/gateway-secret').read_text().strip(); r=urllib.request.Request('http://127.0.0.1:8766/deployment/status',headers={'X-Gateway-Signature':sign({'op':'health'},s)}); print(urllib.request.urlopen(r,timeout=3).read().decode())"
+        try:
+            gateway_status = json.loads(command(compose(CLOUD, 'exec', '-T', 'gateway', 'python', '-c', code)))
+            record('gateway-status.json', gateway_status)
+            break
+        except RuntimeError:
+            time.sleep(0.5)
+    else:
+        raise RuntimeError('Gateway readiness failed')
+    command(compose(PUBLIC, 'up', '-d', '--no-deps', 'demo'), timeout=120)
+    for _ in range(90):
+        try:
+            workbench_status = json.loads(command(compose(PUBLIC, 'exec', '-T', 'demo', 'python', '-c', "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:59767/_public_demo_health',timeout=3).read().decode())")))
+            if workbench_status['status'] == 'ready':
+                break
+        except RuntimeError:
+            pass
+        time.sleep(0.5)
+    else:
+        raise RuntimeError('Workbench readiness failed')
+    tunnel = command(compose(PUBLIC, 'ps', '-q', 'tunnel')).decode().strip()
+    running = tunnel and json.loads(command(['docker', 'inspect', tunnel]))[0]['State']['Running']
+    if not running:
+        command(compose(PUBLIC, 'up', '-d', '--no-deps', 'tunnel'))
+    export_access()
+    print('Interactive integration workbench ready', flush=True)
+    status()
+
+def export_access():
+    code = "from pathlib import Path; print(Path('/data/workbench/integration/config/accounts.json').read_text())"
+    raw = command(compose(PUBLIC, 'exec', '-T', 'demo', 'python', '-c', code))
+    accounts = json.loads(raw)
+    record('accounts.json', accounts)
+    labels = {'admin': '<LOCALIZED_OR_PRIVATE_TEXT>', 'case_operator': '<LOCALIZED_OR_PRIVATE_TEXT>', 'technical_reviewer': '<LOCALIZED_OR_PRIVATE_TEXT>', 'legal_reviewer': '<LOCALIZED_OR_PRIVATE_TEXT>', 'approver': '<LOCALIZED_OR_PRIVATE_TEXT>'}
+    rows = ['<LOCALIZED_OR_PRIVATE_TEXT>', '<LOCALIZED_OR_PRIVATE_TEXT>', '']
+    for role, account in accounts.items():
+        rows.append(labels[role] + '\t' + account['username'] + '\t' + account['password'])
+    (HERE / '<LOCALIZED_OR_PRIVATE_TEXT>').write_text('\n'.join(rows), encoding='utf-8')
+
+def status():
+    sys.path.insert(0, str(HERE.parent))
+    from public_access import snapshot
+    access = snapshot('demo')
+    states = {}
+    for name in ('lexaegis-public-demo-demo-1', 'lexaegis-public-demo-tunnel-1', 'lexaegis-cloud-integration-gateway-1'):
+        state = json.loads(command(['docker', 'inspect', name]))[0]['State']
+        states[name] = {'status': state['Status'], 'health': state.get('Health', {}).get('Status')}
+    report = {'url': access['url'], 'access': 'interactive', 'runtime_profile': 'integration', 'public_access': access, 'containers': states, 'authentication': 'original_login', 'repository_source_modified': False}
+    record('public-status.json', report)
+    print(json.dumps(report))
+
+def repository_check():
+    baseline = json.loads((HERE / 'repository-baseline.json').read_text(encoding='utf-8'))
+    changed = []
+    for name, expected in baseline['files'].items():
+        path = REPOSITORY / name
+        if not path.is_file():
+            changed.append(name)
+            continue
+        with path.open('rb') as handle:
+            observed = hashlib.file_digest(handle, 'sha256').hexdigest()
+        if observed != expected:
+            changed.append(name)
+    names = set(filter(None, command(['git', '-C', str(REPOSITORY), 'ls-files', '-c', '--others', '--exclude-standard', '-z']).decode('utf-8').split('\x00')))
+    added = sorted(names - set(baseline['files']))
+    report = {'files_checked': len(baseline['files']), 'changed': changed, 'added': added, 'repository_unchanged': not changed and (not added)}
+    record('repository-check.json', report)
+    if changed or added:
+        raise RuntimeError('Repository differs from the captured baseline')
+    print('All repository files match the captured baseline', flush=True)
+
+def stop():
+    command(compose(PUBLIC, 'stop', 'tunnel', 'demo'))
+    observed = subprocess.run(['docker', 'inspect', 'lexaegis-document-demo-doc-gateway-1'], capture_output=True)
+    document_active = observed.returncode == 0 and json.loads(observed.stdout)[0]['State']['Running']
+    if document_active:
+        command(compose(CLOUD, 'stop', 'gateway', 'gateway-ingress', 'isolate-ingress-route'))
+    else:
+        command(compose(CLOUD, 'stop'))
+    print('Public workbench and gateway stopped; data retained', flush=True)
+
+def verify():
+    repository_check()
+    command([sys.executable, str(HERE / 'collect_evidence.py')], timeout=60)
+    status()
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('action', choices=['build', 'configure', 'start', 'stop', 'status', 'verify', 'repo-check', 'allowance'])
+    parser.add_argument('--additional', type=int, default=10)
+    args = parser.parse_args()
+    if args.action == 'build':
+        build()
+    elif args.action == 'configure':
+        configure()
+    elif args.action == 'start':
+        start()
+    elif args.action == 'stop':
+        stop()
+    elif args.action == 'verify':
+        verify()
+    elif args.action == 'status':
+        status()
+    elif args.action == 'repo-check':
+        repository_check()
+    else:
+        allowance(args.additional)
+if __name__ == '__main__':
+    try:
+        main()
+    except Exception as error:
+        print('External deployment failed (' + type(error).__name__ + '); no credentials displayed', file=sys.stderr)
+        raise SystemExit(1)

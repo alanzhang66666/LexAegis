@@ -1,0 +1,53 @@
+ARCHIVED SOURCE - NOT AN EXECUTABLE ENTRYPOINT. Local literals removed.
+
+/* Resume only the already returned result. This script cannot send cloud calls. */
+const fs=require('fs'),path=require('path');
+const {chromium,expect}=require('<PRIVATE_RUNTIME_ROOT>/frontend/node_modules/@playwright/test');
+const root=__dirname,read=n=>JSON.parse(fs.readFileSync(path.join(root,n),'utf8'));
+const base=read('public-status.json').url,account=read('accounts.json').legal_reviewer;
+const report=read('browser-flow.json'),{case_id,task_id}=report;
+const save=()=>fs.writeFileSync(path.join(root,'browser-flow.json'),JSON.stringify(report,null,2));
+(async()=>{
+ const browser=await chromium.launch({channel:'msedge',headless:true,args:['--no-proxy-server','--disable-quic',`--host-resolver-rules=MAP ${new URL(base).hostname} 104.16.230.132`]});
+ let page;
+ try{
+  page=await browser.newPage({viewport:{width:1440,height:1050}});page.setDefaultTimeout(45000);
+  await page.goto(base,{waitUntil:'networkidle'});
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+  await page.locator('button.case-row').filter({hasText:case_id}).click();
+<LOCALIZED_TEXT_REMOVED>
+<LOCALIZED_TEXT_REMOVED>
+  await page.screenshot({path:path.join(root,'browser-before-confirmation.png'),fullPage:true});
+  for(let i=0;i<20;i++){
+<LOCALIZED_TEXT_REMOVED>
+   if(!before)break;
+   const [response]=await Promise.all([
+    page.waitForResponse(r=>new URL(r.url()).pathname.startsWith(`/api/v1/tasks/${task_id}/claims/`)&&r.request().method()==='POST'),
+    reviews.first().click()
+   ]);
+   if(!response.ok())throw Error('claim review response '+response.status());
+   await expect(reviews).toHaveCount(before-1,{timeout:45000});
+   report.checks.push({name:'claim review through original UI',passed:true});save();
+  }
+<LOCALIZED_TEXT_REMOVED>
+  if(!await confirmed.count()){
+   const [response]=await Promise.all([
+    page.waitForResponse(r=>new URL(r.url()).pathname===`/api/v1/tasks/${task_id}/confirm`&&r.request().method()==='POST'),
+<LOCALIZED_TEXT_REMOVED>
+   ]);
+   const final=await response.json();
+   if(!response.ok()||!final.artifact.confirmed||final.artifact.provenance!=='cloud')throw Error('Result confirmation did not pass');
+   fs.writeFileSync(path.join(root,'browser-cloud-task.json'),JSON.stringify(final,null,2));
+  }
+  await confirmed.waitFor();
+  report.checks.push({name:'confirmed cloud provenance through original UI',passed:true});
+  report.completed=true;delete report.error;save();
+  await page.screenshot({path:path.join(root,'public-cloud-confirmed.png'),fullPage:true});
+  console.log(JSON.stringify({completed:true,cloud_posts_this_script:0,checks:report.checks.length}));
+ }finally{
+  if(page){await page.screenshot({path:path.join(root,'browser-flow-final.png'),fullPage:true});fs.writeFileSync(path.join(root,'browser-flow-body.txt'),await page.locator('body').innerText());}
+  await browser.close();save();
+ }
+})().catch(e=>{report.error=e.message;save();console.error(e.message);process.exitCode=1;});

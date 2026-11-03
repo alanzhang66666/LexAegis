@@ -1,0 +1,14 @@
+ARCHIVED SOURCE - NOT AN EXECUTABLE ENTRYPOINT. Local literals removed.
+
+"""Configure a draft official DS slot, then report original production blockers."""
+import json
+from pathlib import Path
+import subprocess
+ROOT = Path(__file__).parent
+code = '<LOCALIZED_OR_PRIVATE_TEXT>'
+r = subprocess.run(['docker', 'exec', '-i', 'lexaegis-formal-workbench-formal-1', 'python', '-'], input=code.encode(), capture_output=True, timeout=120)
+if not r.stdout:
+    raise SystemExit('Preflight did not return a report; no provider request was made')
+report = json.loads(r.stdout.decode('utf-8'))
+(ROOT / 'formal-preflight.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+print(json.dumps({k: report.get(k) for k in ('configured_slot', 'provider', 'task_create_status', 'task_id', 'task_status', 'release_check', 'error')}, ensure_ascii=False))

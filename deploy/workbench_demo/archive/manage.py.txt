@@ -1,0 +1,107 @@
+ARCHIVED SOURCE - NOT AN EXECUTABLE ENTRYPOINT.
+
+"""User-visible deployment entry point outside the repository and app sandbox."""
+import argparse
+from datetime import datetime, timezone
+import hashlib
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+from public_access import ensure
+ROOT = Path(__file__).resolve().parent
+PYTHON = Path('<PRIVATE_RUNTIME_ROOT>/.venv/Scripts/python.exe')
+PARTS = {'demo': 'public-workbench', 'formal': 'formal-workbench', 'chain': 'document-workbench'}
+
+def command(args, timeout=240):
+    result = subprocess.run([str(arg) for arg in args], capture_output=True, timeout=timeout)
+    if result.returncode:
+        message = '\n'.join((part for part in (result.stdout.decode('utf-8', errors='replace').strip(), result.stderr.decode('utf-8', errors='replace').strip()[:1500]) if part))
+        raise RuntimeError(message or 'Deployment subprocess failed')
+    return result.stdout.decode('utf-8', errors='replace')
+
+def engine_ready():
+    result = subprocess.run(['docker', 'version', '--format', '{{.Server.Version}}'], capture_output=True, timeout=20)
+    if result.returncode:
+        raise RuntimeError('Docker engine is not ready. Open Docker Desktop and wait for the engine, then retry.')
+
+def worker(which, action):
+    return command([PYTHON, ROOT / PARTS[which] / 'manage.py', action])
+
+def status(which):
+    worker(which, 'status')
+    filename = 'public-status.json' if which == 'demo' else 'status.json'
+    report = json.loads((ROOT / PARTS[which] / filename).read_text(encoding='utf-8'))
+    (ROOT / (which + '-status.json')).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+    rows = ['LexAegis current public URLs', 'Run control.cmd status all to refresh; expired URLs are not advertised.', '']
+    for label in ('demo', 'formal', 'chain'):
+        file = ROOT / (label + '-public-access.json')
+        if not file.exists():
+            continue
+        observed = json.loads(file.read_text(encoding='utf-8'))
+        rows.extend([label + ': ' + str(observed.get('url') or 'unavailable; run control.cmd repair ' + label), 'Checked at UTC: ' + observed['checked_at'], ''])
+    (ROOT / '<LOCALIZED_OR_PRIVATE_TEXT>').write_text('\n'.join(rows), encoding='utf-8-sig')
+    containers = report.get('containers', {})
+    running = bool(containers) and all((value['status'] == 'running' for value in containers.values()))
+    model = report.get('host_model', {})
+    print(which + ' services: ' + ('running' if running else 'stopped or incomplete'))
+    if which == 'formal':
+        print('local model: ' + ('running' if model.get('running') else 'stopped'))
+    access = report.get('public_access', {})
+    print('public HTTPS: ' + ('available' if access.get('public_reachable') else 'unavailable'))
+    if report.get('url'):
+        print('URL: ' + report['url'])
+    elif running:
+        print('Repair: <PRIVATE_RUNTIME_ROOT>\\control.cmd repair ' + which)
+    return report
+
+def verify_layout():
+    expected = [ROOT / 'public-workbench/manage.py', ROOT / 'formal-workbench/manage.py', ROOT / 'public-workbench/cloud.compose.json', ROOT / 'formal-workbench/compose.json', ROOT / 'document-workbench/manage.py', ROOT / 'document-workbench/compose.json']
+    for item in expected:
+        if not item.is_file():
+            raise RuntimeError('Missing deployment file: ' + str(item))
+    cloud = json.loads((ROOT / 'public-workbench/cloud.compose.json').read_text(encoding='utf-8'))
+    for volume in cloud['services']['gateway']['volumes']:
+        if volume['type'] == 'bind' and (not Path(volume['source']).is_file()):
+            raise RuntimeError('Missing gateway bind file: ' + volume['source'])
+    print('Deployment files are present at ' + str(ROOT))
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('action', choices=['start', 'stop', 'status', 'verify', 'repair', 'check-files'])
+    parser.add_argument('workspace', choices=['all', 'demo', 'formal', 'chain'], nargs='?', default='all')
+    args = parser.parse_args()
+    verify_layout()
+    if args.action == 'check-files':
+        return
+    engine_ready()
+    order = ['demo', 'formal', 'chain'] if args.workspace == 'all' else [args.workspace]
+    if args.action == 'stop':
+        order = list(reversed(order))
+    for which in order:
+        if args.action == 'status':
+            status(which)
+            continue
+        print(args.action + ' ' + which + ' ...', flush=True)
+        if args.action == 'repair':
+            ensure(which)
+        else:
+            worker(which, args.action)
+        if args.action == 'start':
+            route = ROOT / 'previous-url-route.json'
+            preserve = which in ('formal', 'chain') and route.exists() and json.loads(route.read_text(encoding='utf-8')).get('enabled')
+            ensure(which, allow_restart=not preserve)
+        current = status(which)
+        if args.action in ('start', 'repair') and (not current.get('public_access', {}).get('public_reachable')):
+            raise RuntimeError(which + ' public HTTPS is not available')
+    if args.action == 'stop':
+        print('Stopped. Cases, accounts and gateway ledgers are retained.')
+    if args.action == 'start':
+        print('Ready. Use the URLs shown above.')
+if __name__ == '__main__':
+    try:
+        main()
+    except (RuntimeError, subprocess.SubprocessError, OSError) as error:
+        print('Deployment command failed: ' + str(error), file=sys.stderr)
+        raise SystemExit(1)

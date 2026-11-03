@@ -1,0 +1,132 @@
+ARCHIVED SOURCE - NOT AN EXECUTABLE ENTRYPOINT. Local literals removed.
+
+"""Control the existing registered-document chain without replaying any cloud POST."""
+import argparse
+from datetime import datetime, timezone
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import sys
+import time
+ROOT = Path(__file__).parent
+DEPLOY = ROOT.parent
+COMPOSE = ROOT / 'compose.json'
+sys.path.insert(0, str(DEPLOY))
+from public_access import ensure, snapshot
+
+def previous_url_route():
+    try:
+        return json.loads((DEPLOY / 'previous-url-route.json').read_text(encoding='utf-8')).get('enabled', False)
+    except (OSError, ValueError):
+        return False
+
+def command(args, timeout=120, **kwargs):
+    result = subprocess.run([str(a) for a in args], capture_output=True, timeout=timeout, **kwargs)
+    if result.returncode:
+        raise RuntimeError('Document deployment command failed: ' + str(args[0]))
+    return result.stdout
+
+def compose(*args):
+    return ['docker', 'compose', '-f', COMPOSE, *args]
+
+def start_tunnel_without_recreating(compose_file, container):
+    observed = subprocess.run(['docker', 'inspect', container], capture_output=True)
+    if observed.returncode:
+        command(['docker', 'compose', '-f', compose_file, 'up', '-d', '--no-deps', 'tunnel'])
+    elif not json.loads(observed.stdout)[0]['State']['Running']:
+        command(['docker', 'start', container])
+
+def gateway_status():
+    code = "from pathlib import Path; import json,urllib.request; from lexaegis.util import sign; secret=Path('/run/private/gateway-secret').read_text().strip(); req=urllib.request.Request('http://127.0.0.1:8766/deployment/status',headers={'X-Gateway-Signature':sign({'op':'health'},secret)}); print(urllib.request.urlopen(req,timeout=5).read().decode())"
+    try:
+        return json.loads(command(['docker', 'exec', 'lexaegis-document-demo-doc-gateway-1', 'python', '-c', code], timeout=10))
+    except (RuntimeError, subprocess.SubprocessError):
+        return None
+
+def export_accounts():
+    raw = command(['docker', 'exec', 'lexaegis-document-demo-workbench-1', 'python', '-c', "from pathlib import Path; print(Path('/data/workbench/integration/config/accounts.json').read_text())"])
+    accounts = json.loads(raw)
+    (ROOT / 'accounts.json').write_text(json.dumps(accounts, ensure_ascii=False, indent=2), encoding='utf-8')
+    labels = {'admin': '<LOCALIZED_OR_PRIVATE_TEXT>', 'case_operator': '<LOCALIZED_OR_PRIVATE_TEXT>', 'technical_reviewer': '<LOCALIZED_OR_PRIVATE_TEXT>', 'legal_reviewer': '<LOCALIZED_OR_PRIVATE_TEXT>', 'approver': '<LOCALIZED_OR_PRIVATE_TEXT>'}
+    text = ['<LOCALIZED_OR_PRIVATE_TEXT>', '<LOCALIZED_OR_PRIVATE_TEXT>', '']
+    text.extend((labels[key] + '\t' + account['username'] + '\t' + account['password'] for key, account in accounts.items()))
+    (ROOT / '<LOCALIZED_OR_PRIVATE_TEXT>').write_text('\n'.join(text), encoding='utf-8')
+
+def repository_status():
+    source = Path('<PRIVATE_RUNTIME_ROOT>')
+    baseline = json.loads((DEPLOY / 'public-workbench/repository-baseline.json').read_text(encoding='utf-8'))
+    changed = []
+    for name, expected in baseline['files'].items():
+        file = source / name
+        if not file.is_file() or hashlib.sha256(file.read_bytes()).hexdigest() != expected:
+            changed.append(name)
+    names = set(filter(None, command(['git', '-C', source, 'ls-files', '-c', '--others', '--exclude-standard', '-z']).decode('utf-8').split('\x00')))
+    added = sorted(names - set(baseline['files']))
+    return {'checked_at': datetime.now(timezone.utc).isoformat(), 'files_checked': len(baseline['files']), 'changed': changed, 'added': added, 'unchanged': not changed and (not added)}
+
+def status():
+    access = snapshot('chain')
+    states = {}
+    for name in ('workbench', 'doc-gateway', 'edge-model', 'model-guard', 'tunnel'):
+        info = json.loads(command(['docker', 'inspect', 'lexaegis-document-demo-' + name + '-1']))[0]
+        state = info['State']
+        states[name] = {'status': state['Status'], 'health': state.get('Health', {}).get('Status'), 'image': info['Image']}
+    if previous_url_route():
+        for label, name in [('public-entry', 'tunnel'), ('public-origin', 'formal')]:
+            info = json.loads(command(['docker', 'inspect', 'lexaegis-formal-workbench-' + name + '-1']))[0]
+            state = info['State']
+            states[label] = {'status': state['Status'], 'health': state.get('Health', {}).get('Status'), 'image': info['Image']}
+    gateway = gateway_status()
+    repository = repository_status()
+    result = {'url': access['url'], 'public_access': access, 'profile': 'integration', 'scope': 'registered_synthetic_document', 'containers': states, 'quota': gateway['quota'] if gateway else None, 'original_repository_modified': not repository['unchanged'], 'repository': repository, 'production_dispatch': 'blocked', 'latest_model_alias': 'deepseek-flash'}
+    (ROOT / 'status.json').write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
+    print(json.dumps(result))
+    return result
+
+def start():
+    command([sys.executable, DEPLOY / 'public-workbench/edge_service.py', 'start'])
+    command(['docker', 'compose', '-f', DEPLOY / 'public-workbench/cloud.compose.json', 'up', '-d', 'gateway', 'provider-egress', 'gateway-ingress', 'isolate-ingress-route'])
+    command(compose('up', '-d', 'edge-model', 'model-guard', 'doc-gateway', 'workbench'), timeout=200)
+    for _ in range(90):
+        try:
+            code = "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:59767/_public_demo_health',timeout=3).status)"
+            if command(['docker', 'exec', 'lexaegis-document-demo-workbench-1', 'python', '-c', code], timeout=5).strip() == b'200':
+                break
+        except (RuntimeError, subprocess.SubprocessError):
+            pass
+        time.sleep(0.5)
+    else:
+        raise RuntimeError('Document workbench readiness timed out')
+    if previous_url_route():
+        command(['docker', 'compose', '-f', DEPLOY / 'formal-workbench/compose.json', 'up', '-d', 'edge-model', 'model-guard', 'formal-gateway', 'formal'], timeout=200)
+        start_tunnel_without_recreating(DEPLOY / 'formal-workbench/compose.json', 'lexaegis-formal-workbench-tunnel-1')
+    start_tunnel_without_recreating(COMPOSE, 'lexaegis-document-demo-tunnel-1')
+    export_accounts()
+    ensure('chain', allow_restart=not previous_url_route())
+    status()
+
+def stop():
+    if previous_url_route():
+        command(['docker', 'stop', '--time', '5', 'lexaegis-formal-workbench-tunnel-1'])
+    command(compose('stop', 'tunnel', 'workbench', 'doc-gateway', 'model-guard', 'edge-model'))
+    formal = subprocess.run(['docker', 'inspect', 'lexaegis-formal-workbench-formal-1'], capture_output=True)
+    formal_active = formal.returncode == 0 and json.loads(formal.stdout)[0]['State']['Running']
+    if not formal_active:
+        command([sys.executable, DEPLOY / 'public-workbench/edge_service.py', 'stop'])
+    print('Registered document chain stopped; cases and ledgers retained; shared model retained if formal workspace is running')
+
+def verify():
+    if not (ROOT / 'cached-dispatch-check.json').exists():
+        raise RuntimeError('Expected cached verification marker missing')
+    command([sys.executable, ROOT / 'verify_delivery.py'], timeout=90)
+    status()
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('action', choices=['start', 'stop', 'status', 'verify'])
+    args = parser.parse_args()
+    try:
+        {'start': start, 'stop': stop, 'status': status, 'verify': verify}[args.action]()
+    except (RuntimeError, OSError, subprocess.SubprocessError) as error:
+        print('Document workbench failed: ' + str(error), file=sys.stderr)
+        raise SystemExit(1)
