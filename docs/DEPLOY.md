@@ -44,7 +44,7 @@ lexaegis check-isolation
 
 ## 阿里云 PAI-DSW / ECS 试用部署
 
-见 [deploy/README.md](../deploy/README.md)：三个版本——A 阿里云（PAI-DSW 试用 + ECS GPU）、B 腾讯 Cloud Studio 免费 GPU、C CPU 部署——的对比和入口。只用于合成材料；不构成隔离收据或正式发布。
+见 [deploy/README.md](../deploy/README.md)：四个版本——A 阿里云（PAI-DSW 试用 + ECS GPU）、B 腾讯 Cloud Studio 免费 GPU、C CPU 部署、D Apple Silicon Mac 本机——的对比和入口。只用于合成材料；不构成隔离收据或正式发布。
 
 ## Kubernetes / KubeEdge（草拟，未验证）
 
