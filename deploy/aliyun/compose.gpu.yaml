@@ -1,0 +1,56 @@
+# GPU 叠加层：边侧模型（llama.cpp）改用 CUDA 镜像并占用一块 GPU，其余服务不变。
+# 边侧默认 Qwen3.5-9B Q8_0（约 10GB），需 ≥16G 显存（T4 / A10 均可）；换模型用 LEX_EDGE_GGUF_FILE。
+# 用法（在仓库根目录）：
+#   docker compose -f compose.yaml -f deploy/aliyun/compose.gpu.yaml --profile edge up -d
+# 前提：宿主机已装 NVIDIA 驱动 + nvidia-container-toolkit，`nvidia-smi` 正常；
+#       models/Qwen3.5-9B-Q8_0.gguf 已就位（deploy.sh --gpu 会自动下载）；llama.cpp CUDA 镜像已提前 pull/load。
+#
+# 显存不够（如 4GB/8GB vGPU）时，在 .env 里把 LEX_EDGE_CTX_SIZE 调小（16384 / 8192），
+# 再不行把 LEX_EDGE_UBATCH_SIZE 降到 256。T4 上若 flash-attn 报错，设 LEX_EDGE_FLASH_ATTN=off。
+services:
+  edge-model:
+    image: ${LEX_EDGE_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-cuda}
+    command:
+      - --model
+      - /models/${LEX_EDGE_GGUF_FILE:-Qwen3.5-9B-Q8_0.gguf}
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --alias
+      - edge-small
+      - --jinja
+      - --ctx-size
+      - "${LEX_EDGE_CTX_SIZE:-32768}"
+      - --batch-size
+      - "${LEX_EDGE_BATCH_SIZE:-2048}"
+      - --ubatch-size
+      - "${LEX_EDGE_UBATCH_SIZE:-512}"
+      - --parallel
+      - "1"
+      - --cache-type-k
+      - f16
+      - --cache-type-v
+      - f16
+      - --n-gpu-layers
+      - "99"
+      - --flash-attn
+      - "${LEX_EDGE_FLASH_ATTN:-on}"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+  # compose.yaml 里这两项默认是空值，这里补上服务别名，api/worker 才会真正调用边侧。
+  api:
+    environment:
+      LEX_EDGE_MODEL: ${LEX_EDGE_MODEL:-edge-small}
+  worker:
+    environment:
+      LEX_EDGE_MODEL: ${LEX_EDGE_MODEL:-edge-small}
+      # 本叠加层不启用 GPU OCR / 转写：容器镜像未包含 RapidOCR、whisper.cpp、FFmpeg，
+      # 且 worker 无法卸载另一个容器里的 llama-server。扫描件走"看原图 + 人工转录"。
+      LEX_OCR_ENABLED: "0"
+      LEX_WHISPER_ENABLED: "0"

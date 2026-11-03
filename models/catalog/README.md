@@ -8,6 +8,8 @@
 
 - `edge.minicpm5-2b.q4_k_m.nothink.json`：现行且唯一的生产声明。`role=fact_extraction_only`，服务别名 `edge-small`，`context=32768`（模型原生最长 131072，边侧抽取仍按块截断），`json_object=required`，`thinking=request_controlled`，`vision=false`。不宣称 32K 已在本机跑通。请求默认 `enable_thinking=false`；缺字段同站点二次抽取可按环境打开有界 thinking。
 
+- `edge.qwen3.5-9b.q8_0.trial.json`：**试用声明**，只用于 `deploy/aliyun/` 的 PAI-DSW / 阿里云试用部署，只放合成材料。权重取 [unsloth/Qwen3.5-9B-GGUF](https://huggingface.co/unsloth/Qwen3.5-9B-GGUF) 的 `Qwen3.5-9B-Q8_0.gguf`（约 10GB），服务别名同样是 `edge-small`。状态 `trial_unverified`：尚未在真实 GPU 上跑通，`enable_thinking=false` 是否生效、长材料能否在 120 秒超时内抽完都待 `dsw_edge_test.sh` 实测。它不改变上面的生产声明。
+
 Compose / `lexaegis edge --start` 服务别名仍为 `edge-small`。Ollama 需自行导入同一 GGUF 并把 `LEX_EDGE_MODEL` 指到该名称。
 
 ## 运行
