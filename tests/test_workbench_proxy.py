@@ -1,0 +1,71 @@
+import importlib.util
+from pathlib import Path
+
+import httpx
+import pytest
+from fastapi.testclient import TestClient
+
+SOURCE=Path(__file__).resolve().parents[1]/'deploy/workbench_demo/public_proxy.py'
+PUBLIC='https://demo.example.test'
+
+def load():
+    spec=importlib.util.spec_from_file_location('previous_url_proxy_test',SOURCE)
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    return module
+
+@pytest.fixture
+def proxy(monkeypatch):
+    monkeypatch.setenv('LEX_PUBLIC_CHAIN_ORIGIN','http://chain-origin:59767')
+    module=load();original=httpx.AsyncClient
+    def install(handler):
+        def factory(**kwargs):return original(transport=httpx.MockTransport(handler),**kwargs)
+        monkeypatch.setattr(module.httpx,'AsyncClient',factory)
+    return module,install
+
+def test_mutating_body_and_browser_origin_are_preserved(proxy):
+    module,install=proxy;calls=[];body=b'{"request_hash":"bound-hash", "decision":"approve"}'
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(200,content=b'{"ok":true}',headers={'Content-Type':'application/json',
+            'X-LexAegis-Deployment':'interactive-integration','Set-Cookie':'lex_session=synthetic-session-123; HttpOnly; Path=/'})
+    install(handler)
+    with TestClient(module.app,base_url=PUBLIC) as client:
+        response=client.post('/api/v1/tasks/task_test/approve',content=body,
+            headers={'Origin':PUBLIC,'Content-Type':'application/json'})
+    assert response.status_code==200 and response.headers['x-lexaegis-deployment']=='interactive-integration'
+    assert len(calls)==1 and calls[0].content==body
+    assert str(calls[0].url)=='http://chain-origin:59767/api/v1/tasks/task_test/approve'
+    assert calls[0].headers['Host']==PUBLIC.removeprefix('https://') and calls[0].headers['Origin']==PUBLIC
+    assert 'Secure' in response.headers['set-cookie'] and 'HttpOnly' in response.headers['set-cookie']
+
+def test_cross_site_post_never_reaches_origin(proxy):
+    module,install=proxy;calls=[]
+    install(lambda request:calls.append(request) or httpx.Response(200))
+    with TestClient(module.app,base_url=PUBLIC) as client:
+        response=client.post('/api/v1/login',json={'password':'invalid-test-password'},headers={'Origin':'https://foreign.invalid'})
+    assert response.status_code==403 and calls==[]
+
+def test_proxy_does_not_login_or_share_session(proxy):
+    module,install=proxy;observed=[]
+    def handler(request):
+        observed.append(request.headers.get('cookie'))
+        return httpx.Response(401,json={'detail':'authentication required'})
+    install(handler)
+    with TestClient(module.app,base_url=PUBLIC) as first:
+        assert first.get('/api/v1/bootstrap',headers={'Cookie':'lex_session=first-session-123; untrusted=drop'}).status_code==401
+    with TestClient(module.app,base_url=PUBLIC) as second:
+        assert second.get('/api/v1/bootstrap').status_code==401
+    assert observed==['lex_session=first-session-123',None]
+
+def test_origin_failure_does_not_redirect_or_fallback(proxy):
+    module,install=proxy;calls=[]
+    def handler(request):
+        calls.append(request)
+        raise httpx.ConnectError('unavailable',request=request)
+    install(handler)
+    with TestClient(module.app,base_url=PUBLIC) as client:response=client.get('/')
+    assert response.status_code==503 and len(calls)==1 and 'Location' not in response.headers
+
+def test_arbitrary_upstream_is_refused(monkeypatch):
+    monkeypatch.setenv('LEX_PUBLIC_CHAIN_ORIGIN','https://unapproved.invalid')
+    with pytest.raises(RuntimeError,match='Unapproved'):load()

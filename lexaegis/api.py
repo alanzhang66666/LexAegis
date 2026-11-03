@@ -15,6 +15,7 @@ from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from . import registered_demo
 from . import __version__, service, release_service, retention
 from .auth import create_user_record, current_actor, ensure_initial_admin, public_user, verify_password
 from .diagnostics import host_publish_capability, isolation_capability, legal_capability, redteam_capability
@@ -42,7 +43,7 @@ class CaseInput(Input):
 
 
 class DemoInput(Input):
-    scenario: Literal["success", "human_veto", "linkage", "stop"] = "success"
+    scenario: Literal["success", "human_veto", "linkage", "stop", "registered_document"] = "success"
 
 
 class LoginInput(Input):
@@ -279,6 +280,7 @@ def assert_docx_payload(data: bytes) -> None:
 
 
 def create_app(data_dir=None, password=None, build_manifest=None):
+    registered_demo.register()
     explicit_password = password is not None
     root = Path(data_dir or app_dir()).resolve()
     runtime = bind_runtime(root, "app")
@@ -487,7 +489,7 @@ def create_app(data_dir=None, password=None, build_manifest=None):
             return {"runtime_profile": startup_profile, "runtime_config": {**profile_config(startup_profile), "external_calls_allowed": startup_profile != "demo", "mock_responses": startup_profile == "demo"},
                     "cases": [public_recording_case(case) for case in repo.list("case")], "packs": repo.list("pack"), "tasks": [t.model_dump() for t in TASKS],
                     "task_definitions": task_definitions(), "providers": repo.list("provider"), "risk_protocols": repo.list("risk_protocol"),
-                    "settings": public_settings(repo.get("settings"))}
+                    "settings": public_settings(repo.get("settings")), "registered_document_demo": registered_demo.public_spec()}
 
     @app.get("/api/v1/capabilities")
     def capabilities():
@@ -901,6 +903,8 @@ def create_app(data_dir=None, password=None, build_manifest=None):
     def demo(body: DemoInput, request: Request):
         require_role(request, "case_operator")
         from .demo import SCENARIOS
+        if body.scenario == registered_demo.SCENARIO and not registered_demo.enabled():
+            raise HTTPException(409, "登记文档联调未启用")
         with store.transaction() as repo:
             return service.create_case(repo, SCENARIOS[body.scenario]["name"], scenario=body.scenario)
 
@@ -1070,11 +1074,14 @@ def create_app(data_dir=None, password=None, build_manifest=None):
             raise HTTPException(400, "仅支持 DOCX、PDF、PNG、JPEG、TXT、XLSX、CSV 与常见音视频")
         with store.read() as repo:
             case = service.get_case(repo, case_id)
-            if case["mode"] == "demo":
+            if case["mode"] == "demo" and not registered_demo.is_registered(case):
                 raise HTTPException(409, "演示模式不接收上传；请新建正式案件")
         data = await file.read(20*1024*1024+1)
         if not data or len(data) > 20*1024*1024:
             raise HTTPException(413, "文件为空或超过 20MB")
+        if registered_demo.is_registered(case):
+            with store.read() as repo:
+                registered_demo.check_upload(case, data, repo.list("document", case_id))
         ident = uid("doc")
         path = root / "files" / (ident + extension)
         path.write_bytes(data)
@@ -1083,6 +1090,8 @@ def create_app(data_dir=None, password=None, build_manifest=None):
             with store.transaction() as repo:
                 case = service.get_case(repo, case_id)
                 service.assert_editable(repo, case_id)
+                if registered_demo.is_registered(case):
+                    registered_demo.check_upload(case, data, repo.list("document", case_id))
                 doc = {"id": ident, "case_id": case_id, "name": Path(file.filename).name[:200], "extension": extension, "path": path.name, "version": 1, "status": "pending", "ir": None}
                 repo.put("document", doc, case_id)
                 service.touch_case(repo, case, "document.uploaded")
@@ -1263,7 +1272,7 @@ def create_app(data_dir=None, password=None, build_manifest=None):
         with store.transaction() as repo:
             case = service.get_case(repo, case_id)
             service.assert_editable(repo, case_id)
-            if case["mode"] == "demo" or repo.get(fact_id, "fact")["case_id"] != case_id:
+            if (case["mode"] == "demo" and not registered_demo.is_registered(case)) or repo.get(fact_id, "fact")["case_id"] != case_id:
                 raise service.DomainError("不能删除该事实")
             repo.delete(fact_id)
             service.touch_case(repo, case, "fact.deleted")
@@ -1274,7 +1283,7 @@ def create_app(data_dir=None, password=None, build_manifest=None):
         require_role(request, "case_operator")
         with store.transaction() as repo:
             case = service.get_case(repo, case_id)
-            if case["mode"] == "demo":
+            if case["mode"] == "demo" and not registered_demo.is_registered(case):
                 raise service.DomainError("固定演示无需重新提取")
             service.assert_editable(repo, case_id)
             if not repo.get("settings")["edge_model"]:

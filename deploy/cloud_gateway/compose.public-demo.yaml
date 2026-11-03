@@ -1,0 +1,35 @@
+name: lexaegis-public-demo
+services:
+  demo:
+    image: ${LEX_PUBLIC_DEMO_IMAGE:?set fixed local demo image}
+    pull_policy: never
+    user: '10001:10001'
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    volumes: [demo-data:/data]
+    networks: [demo-private]
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:59767/_public_demo_health',timeout=3)"]
+      interval: 5s
+      timeout: 4s
+      retries: 20
+      start_period: 30s
+  tunnel:
+    image: cloudflare/cloudflared:2026.10.7@sha256:4955524aeaa379e154023d5a027c250f7b35041a2e7e950cf13f144bc9b9c5ba
+    command: [tunnel, --no-autoupdate, --protocol, http2, --edge-ip-version, '4', --url, 'http://demo:59767']
+    depends_on:
+      demo: {condition: service_healthy}
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    networks: [demo-private, tunnel-uplink]
+    restart: unless-stopped
+volumes:
+  demo-data: {}
+networks:
+  demo-private: {internal: true}
+  tunnel-uplink: {}

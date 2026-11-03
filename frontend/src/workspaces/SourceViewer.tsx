@@ -60,7 +60,7 @@ export function SourceViewer({ data, currentCase, caseId, busy, activeSource, bl
       {document.status === "failed" && onRetry && <button className="text-button" disabled={busy} onClick={()=>onRetry(document)}>重试解析</button>}
       </div>)}</div>
     {<label className="upload"><Upload size={17}/><span>
-      {currentCase.mode === "demo" ? "导入 Word 材料" : "上传 DOCX / PDF / 文本 / 表格 / 图片 / 音视频"}<small>{currentCase.mode === "demo" ? "选择配套 Word 文件，载入对应案件并进入工作区 · 最大 2 MB" : "TXT 按段落切块 · XLSX/CSV 按单元格定位 · PNG/JPEG 可选本地 OCR · 音视频本机转写后复核 · 最大 20 MB"}</small></span>
+      {currentCase.registered_document_demo ? "上传已登记合成文档" : currentCase.mode === "demo" ? "导入 Word 材料" : "上传 DOCX / PDF / 文本 / 表格 / 图片 / 音视频"}<small>{currentCase.registered_document_demo ? `仅接受已登记的${currentCase.registered_document_name || "合成文档"}；哈希不符会拒绝` : currentCase.mode === "demo" ? "选择配套 Word 文件，载入对应案件并进入工作区 · 最大 2 MB" : "TXT 按段落切块 · XLSX/CSV 按单元格定位 · PNG/JPEG 可选本地 OCR · 音视频本机转写后复核 · 最大 20 MB"}</small></span>
       <input type="file" aria-label="上传案件材料" accept={currentCase.mode === "demo" ? ".docx" : ".docx,.pdf,.txt,.png,.jpg,.jpeg,.xlsx,.csv,.mp3,.m4a,.wav,.mp4"} disabled={busy}
         onChange={event => {
           const file = event.target.files?.[0];

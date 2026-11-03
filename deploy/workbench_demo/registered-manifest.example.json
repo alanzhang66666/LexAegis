@@ -1,0 +1,10 @@
+{
+  "scenario": "registered_document",
+  "declaration": "user_confirmed_synthetic_demo_only",
+  "live_extract": true,
+  "name": "填写合成演示名称",
+  "document_name": "填写合成文档名称.docx",
+  "document_sha256": "填写合成文档的64位小写SHA256",
+  "facts": [],
+  "note": "合成测试，不构成真实案件授权或法学签署。"
+}

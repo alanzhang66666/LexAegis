@@ -1,0 +1,66 @@
+"""Registered synthetic document workbench with original role separation."""
+import json
+import os
+from pathlib import Path
+import secrets
+import subprocess
+import sys
+import time
+
+import httpx
+import uvicorn
+
+ROOT=Path('/data/workbench/integration');API='http://127.0.0.1:59765'
+ROLES={'admin':('admin','合成文档联调管理员'),'case_operator':('operator','合成文档操作员（测试身份）'),
+    'technical_reviewer':('technical','合成文档技术复核（测试身份）'),
+    'legal_reviewer':('legal','合成文档法学复核（测试身份）'),'approver':('approver','合成文档审批人（测试身份）')}
+def require(r):
+    if r.status_code>=400:raise RuntimeError('Provisioning HTTP '+str(r.status_code))
+    return r.json()
+def main():
+    ROOT.mkdir(parents=True,exist_ok=True);(ROOT/'config').mkdir(mode=0o700,exist_ok=True)
+    path=ROOT/'config/accounts.json'
+    if path.exists():accounts=json.loads(path.read_text())
+    else:
+        accounts={role:{'username':name,'password':secrets.token_urlsafe(24)} for role,(name,label) in ROLES.items()}
+        path.write_text(json.dumps(accounts));path.chmod(0o600)
+    base={k:v for k,v in os.environ.items() if k in {'PATH','HOME','LANG','LC_ALL','PYTHONPATH','LEX_REGISTERED_DEMO_MANIFEST','LEX_REGISTERED_DEMO_MANIFEST_SHA256'}}
+    base.update(LEX_RUN_PROFILE='integration',LEX_DEPLOYMENT_MODE='native',LEX_DATA_DIR=str(ROOT/'app'),
+        LEX_GATEWAY_DIR=str(ROOT/'unused-gateway'),LEX_GATEWAY_URL='http://gateway:8766',
+        LEX_GATEWAY_SECRET=Path('/run/signing/gateway-secret').read_text().strip(),LEX_API_PORT='59765',
+        LEX_CLOUD_ALLOWED_HOSTS='api.deepseek.com',LEX_EDGE_URL='http://edge-model:8080/v1',LEX_EDGE_MODEL='edge-small',
+        LEX_EDGE_ALLOWED_HOSTS='edge-model',LEX_EDGE_IDLE_UNLOAD_SECONDS='0',LEX_DEMO_LIVE_EDGE_REVIEW='1',
+        LEX_EDGE_OUTBOUND_REVIEW='1',LEX_OCR_ENABLED='0',LEX_WHISPER_ENABLED='0',
+        PYTHONDONTWRITEBYTECODE='1',PYTHONUNBUFFERED='1')
+    children=[]
+    try:
+        children.append(subprocess.Popen([sys.executable,'-m','uvicorn','lexaegis.api:create_app','--factory','--host','127.0.0.1','--port','59765','--no-access-log'],
+            cwd='/app',env={**base,'LEX_RUNTIME_ROLE':'api','LEX_LOCAL_PASSWORD':accounts['admin']['password'],'LEX_LOCAL_ACTOR':'合成文档联调管理员'},stdin=subprocess.DEVNULL))
+        for _ in range(180):
+            if children[0].poll() is not None:raise RuntimeError('API exited')
+            try:
+                if httpx.get(API+'/api/v1/health',trust_env=False,timeout=2).status_code==200:break
+            except httpx.HTTPError:pass
+            time.sleep(.5)
+        else:raise RuntimeError('API startup timeout')
+        with httpx.Client(base_url=API,trust_env=False,timeout=30) as c:
+            require(c.post('/api/v1/login',json=accounts['admin']));users=require(c.get('/api/v1/users'))
+            for role,(name,label) in ROLES.items():
+                if role!='admin' and not any(u['username']==name for u in users):require(c.post('/api/v1/users',json={**accounts[role],'role':role,'display_name':label}))
+            settings=require(c.get('/api/v1/bootstrap'))['settings']
+            if settings.get('cloud_model')!='deepseek-flash' or settings.get('edge_url')!='http://edge-model:8080/v1':
+                require(c.put('/api/v1/settings',json={'cloud_url':'https://api.deepseek.com/v1','cloud_model':'deepseek-flash',
+                    'cloud_primary':{'url':'https://api.deepseek.com/v1','model':'deepseek-flash'},'cloud_standby':{'url':'','model':''},
+                    'edge_url':'http://edge-model:8080/v1','edge_model':'edge-small'}))
+        children.append(subprocess.Popen([sys.executable,'-m','lexaegis.worker'],cwd='/app',env={**base,'LEX_RUNTIME_ROLE':'worker'},stdin=subprocess.DEVNULL))
+        (ROOT/'ready.json').write_text(json.dumps({'status':'ready','runtime_profile':'integration','data_origin':'registered_synthetic_document',
+        'access':'interactive','edge_mode':'configured_local_model','edge_acceptance':'not_verified',
+            'formal_dispatch':'blocked'}))
+        from public_proxy import app
+        uvicorn.run(app,host='0.0.0.0',port=59767,access_log=False)
+    finally:
+        for child in reversed(children):child.terminate()
+        for child in reversed(children):
+            try:child.wait(timeout=5)
+            except subprocess.TimeoutExpired:child.kill()
+if __name__=='__main__':main()

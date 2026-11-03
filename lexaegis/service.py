@@ -5,6 +5,7 @@ from pathlib import Path
 from .attacks import assert_isolated_payload
 from .cloud import build_dispatch_slot, chat_completions_target
 from .demo import SCENARIOS
+from . import registered_demo
 from . import capability_registry, domain_runtime, orchestrator, review, release_service, support_registry
 from .runtime_profile import current_profile, require_case_scope, validate_case_creation, validate_transport
 from .governance import frozen_protocol_runs, profile_not_dispatchable, protocols_for_pack, provider_checks
@@ -98,6 +99,8 @@ def touch_case(repo, case, event):
 
 
 def create_case(repo, name, domain="labor", scenario=None, reference_code=None):
+    if scenario == registered_demo.SCENARIO and not registered_demo.enabled():
+        raise DomainError("登记文档联调未启用")
     validate_case_creation(scenario)
     if reference_code and (scenario or any(c.get("reference_code") == reference_code for c in repo.list("case"))):
         raise DomainError("正式案件编号不合法或已绑定")
@@ -115,7 +118,12 @@ def create_case(repo, name, domain="labor", scenario=None, reference_code=None):
                 supplemental_evidence=SCENARIOS[scenario].get("supplemental_evidence", []) if scenario else [])
     repo.put("case", case)
     domain_runtime.ensure_case_binding(repo, case, bound_by=case["owner"])
-    if scenario:
+    if scenario == registered_demo.SCENARIO:
+        case["registered_document_sha256"] = SCENARIOS[scenario]["document_sha256"]
+        case["registered_document_demo"] = True
+        case["registered_document_name"] = SCENARIOS[scenario]["document_name"]
+        repo.put("case", case)
+    if scenario and scenario != registered_demo.SCENARIO:
         seed = SCENARIOS[scenario]
         document_id = uid("doc")
         blocks = [{"id": f"{document_id}:v1:b{i}", "document_id": document_id, "document_version": 1, "kind": "paragraph", "text": value, "locator": f"材料段落 {i+1}", "page": None, "bbox": None, "confidence": None, "reviewed": True} for i, (_, value) in enumerate(seed["facts"])]
@@ -140,8 +148,10 @@ def anchor_index(repo, case_id, current_only=True):
 def save_fact(repo, case_id, data, fact_id=None, origin="manual"):
     case = get_case(repo, case_id)
     assert_editable(repo, case_id)
-    if case["mode"] == "demo":
+    if case["mode"] == "demo" and not registered_demo.is_registered(case):
         raise DomainError("演示数据固定；请新建正式案件录入自己的材料")
+    if registered_demo.is_registered(case) and origin != "edge_model" and not fact_id:
+        raise DomainError("登记演示只核校已有模型候选，不能新增任意事实")
     fields = {field for pack in repo.list("pack") if pack["domain_id"] == case["domain"] for field in pack_field_ids(pack)}
     if data["field"] not in fields:
         raise DomainError("字段未在案由包中定义")
@@ -152,6 +162,10 @@ def save_fact(repo, case_id, data, fact_id=None, origin="manual"):
         existing = repo.get(fact_id, "fact")
         if existing["case_id"] != case_id:
             raise DomainError("事实不属于本案")
+    if registered_demo.is_registered(case) and data.get("confirmed"):
+        registered_demo.check_confirmed_fact(case, data, anchors)
+    if fact_id and registered_demo.is_registered(case):
+        origin = existing.get("origin", origin)
     fact = {"id": fact_id or uid("fact"), "case_id": case_id, **data, "origin": origin, "stale": False}
     repo.put("fact", fact, case_id)
     touch_case(repo, case, "fact.updated")

@@ -1,0 +1,6 @@
+services:
+  gateway:
+    environment:
+      LEX_RELEASE_BUILD_MANIFEST_PATH: /release/release-build-manifest.json
+    volumes:
+      - ${LEX_BUILD_MANIFEST_PATH:?set real verified build manifest}:/release/release-build-manifest.json:ro

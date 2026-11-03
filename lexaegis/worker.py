@@ -161,6 +161,10 @@ def recover(store):
 
 
 def process_one(store, root, gateway_client=None, redteam_client=None):
+    # API and worker are independent processes; each must load the same pinned
+    # private synthetic registry before enforcing a persisted case's scope.
+    from .registered_demo import register
+    register()
     bind_runtime(root, "app")
     with store.transaction() as repo:
         for pending_job in repo.list("job"):

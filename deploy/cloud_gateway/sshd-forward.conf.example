@@ -1,0 +1,13 @@
+# Cloud host: validate with sshd -t and keep the management connection open.
+Match User lexforward
+    AuthenticationMethods publickey
+    PasswordAuthentication no
+    KbdInteractiveAuthentication no
+    AllowTcpForwarding local
+    PermitOpen 127.0.0.1:8766
+    PermitListen none
+    GatewayPorts no
+    AllowAgentForwarding no
+    X11Forwarding no
+    PermitTTY no
+    MaxSessions 0

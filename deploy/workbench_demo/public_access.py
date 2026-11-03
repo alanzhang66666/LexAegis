@@ -1,0 +1,108 @@
+"""Check the current tunnel session and real HTTPS response, never just process state."""
+from datetime import datetime,timezone
+import json
+from pathlib import Path
+import re
+import subprocess
+import time
+
+import httpx
+
+import os
+ROOT=Path(os.getenv("LEX_DEMO_RUNTIME_ROOT",str(Path(__file__).resolve().parents[2]/".data/workbench-demo")))
+try: _deployment=json.loads((ROOT/"deployment.json").read_text(encoding="utf-8"))
+except (OSError,ValueError): _deployment={}
+_project=_deployment.get("project","lexaegis-demo-unconfigured")
+_target={"tunnel":_project+"-tunnel-1","origin":_project+"-public-origin-1","marker":"interactive-integration"}
+TARGETS={name:dict(_target) for name in ("chain","demo","formal")}
+URL_PATTERN=r'https://[a-z0-9-]+\.trycloudflare\.com'
+
+def run(arguments,timeout=15):
+    result=subprocess.run(arguments,capture_output=True,timeout=timeout)
+    if result.returncode:raise RuntimeError('Tunnel operation failed: '+arguments[1])
+    return result.stdout.decode('utf-8',errors='replace'),result.stderr.decode('utf-8',errors='replace')
+
+def inspect(name):return json.loads(run(['docker','inspect',name])[0])[0]
+
+def current_url(logs,container_id,started_at,previous):
+    urls=re.findall(URL_PATTERN,logs)
+    if urls:return urls[-1]
+    if previous.get('container_id')==container_id and previous.get('started_at')==started_at:
+        return previous.get('observed_url')
+    return None
+
+def origin_probe(which):
+    code="import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:59767/',timeout=3).status)"
+    try:return run(['docker','exec',TARGETS[which]['origin'],'python','-c',code],timeout=8)[0].strip()=='200'
+    except (RuntimeError,subprocess.SubprocessError):return False
+
+def connector_probe(which):
+    code="import urllib.request; print(urllib.request.urlopen('http://tunnel:20241/ready',timeout=2).status)"
+    try:return run(['docker','exec',TARGETS[which]['origin'],'python','-c',code],timeout=6)[0].strip()=='200'
+    except (RuntimeError,subprocess.SubprocessError):return False
+
+def https_probe(url,marker):
+    try:
+        with httpx.Client(trust_env=False,follow_redirects=False,timeout=6) as client:
+            home=client.get(url+'/')
+            anonymous=client.get(url+'/api/v1/bootstrap')
+        ok=home.status_code==200 and home.headers.get('x-lexaegis-deployment')==marker and anonymous.status_code==401
+        return {'reachable':ok,'home_status':home.status_code,'anonymous_status':anonymous.status_code,
+            'tls_certificate_verification':True,'normal_system_dns':True}
+    except httpx.HTTPError as error:
+        return {'reachable':False,'error_type':type(error).__name__,'tls_certificate_verification':True,'normal_system_dns':True}
+
+def snapshot(which):
+    target=TARGETS[which];file=ROOT/(which+'-public-access.json')
+    try:previous=json.loads(file.read_text(encoding='utf-8'))
+    except (OSError,ValueError):previous={}
+    container=inspect(target['tunnel']);state=container['State'];started=state['StartedAt']
+    result={'checked_at':datetime.now(timezone.utc).isoformat(),'container_id':container['Id'],'started_at':started,
+        'container_running':state['Running'],'connector_ready':False,'public_reachable':False,'url':None,'observed_url':None,
+        'last_error':None}
+    if state['Running']:
+        out,err=run(['docker','logs','--since',started,'--tail','2000',target['tunnel']])
+        logs=out+err
+        observed=current_url(logs,container['Id'],started,previous)
+        result['observed_url']=observed
+        if logs.rfind('Tunnel not found')>logs.rfind('Registered tunnel connection'):
+            result['last_error']='tunnel_expired'
+        else:
+            result['connector_ready']=connector_probe(which)
+            if not result['connector_ready']:result['last_error']='connector_not_ready'
+        if observed and result['connector_ready']:
+            result['https_probe']=https_probe(observed,target['marker'])
+            result['public_reachable']=result['https_probe']['reachable']
+            if result['public_reachable']:result['url']=observed
+            else:result['last_error']='public_https_unavailable'
+        elif not observed and not result['last_error']:result['last_error']='current_url_not_available'
+    else:result['last_error']='tunnel_stopped'
+    file.write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
+    return result
+
+def ensure(which,allow_restart=True):
+    report=snapshot(which)
+    if report['public_reachable']:return report
+    if not origin_probe(which):raise RuntimeError(which+' origin is unavailable; start the workbench first')
+    started=datetime.fromisoformat(report['started_at'].replace('Z','+00:00'))
+    if (datetime.now(timezone.utc)-started).total_seconds()<20 and report['last_error'] in ('connector_not_ready','current_url_not_available'):
+        for _ in range(10):
+            time.sleep(1)
+            report=snapshot(which)
+            if report['public_reachable']:return report
+            if report['last_error']=='tunnel_expired':break
+    if report['last_error']=='public_https_unavailable' and report['connector_ready']:
+        # A single slow GET must not replace a functioning public hostname.
+        time.sleep(1)
+        report=snapshot(which)
+        if report['public_reachable']:return report
+    if allow_restart:
+        target=TARGETS[which]['tunnel']
+        if report['container_running']:run(['docker','restart','--time','5',target],timeout=20)
+        else:run(['docker','start',target],timeout=20)
+    deadline=time.monotonic()+45
+    while time.monotonic()<deadline:
+        report=snapshot(which)
+        if report['public_reachable']:return report
+        time.sleep(1)
+    raise RuntimeError(which+' tunnel still unavailable; see '+str(ROOT/(which+'-public-access.json')))

@@ -1,0 +1,8 @@
+"""Original production edge gateway, no service-provider credentials."""
+from pathlib import Path
+import os
+from lexaegis.gateway import create_gateway
+
+def create_app():
+    os.environ['LEX_GATEWAY_SECRET']=Path('/run/signing/gateway-secret').read_text().strip()
+    return create_gateway()

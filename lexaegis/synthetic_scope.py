@@ -8,6 +8,8 @@ from .util import digest
 
 
 def validate_synthetic_request(request):
+    from . import registered_demo
+    registered_demo.register()
     manifest = (request.get("dependencies") or {}).get("synthetic_manifest_hash")
     seed = next((s for s in SCENARIOS.values() if digest(s) == manifest), None)
     if seed is None:
@@ -19,11 +21,14 @@ def validate_synthetic_request(request):
     task_id = "fact_summary"
     if task != {"id": task_id, "version": "2.0"}:
         raise ValueError("合成外部调用仅支持内置事实摘要")
+    registered = seed.get("scenario") == "registered_document" and seed.get("live_extract") is True
+    def compared(text):
+        return re.sub(r"\[\[LEX:P[0-9]{4}\]\]", "[[ENTITY]]", text) if registered else text
     mappings = {value: f"[[LEX:P{index:04d}]]" for index, (field, value) in
                 enumerate((row for row in seed["facts"] if row[0] == "entity"), start=1)}
-    allowed = {(field, transform(value, method, mappings))
+    allowed = {(field, compared(transform(value, method, mappings)))
                for field, value in seed["facts"]
-               for method in ("keep", "pseudonymize", "generalize", "moderate_generalize")}
+               for method in (("pseudonymize", "generalize", "moderate_generalize") if registered else ("keep", "pseudonymize", "generalize", "moderate_generalize"))}
     facts = wire.get("facts")
     if not isinstance(facts, list) or not 0 < len(facts) <= len(seed["facts"]):
         raise ValueError("合成披露字段数量不匹配")
@@ -35,7 +40,9 @@ def validate_synthetic_request(request):
         if not isinstance(ident, str) or not re.fullmatch(r"fact_[0-9a-f]{16}", ident) or ident in seen_ids:
             raise ValueError("合成事实标识不是系统生成的唯一引用")
         seen_ids.add(ident)
-        if (fact.get("field"), fact.get("text")) not in allowed:
+        if registered and any(value in fact.get("text", "") for field, value in seed["facts"] if field == "entity"):
+            raise ValueError("登记演示不得外发原始主体名称")
+        if (fact.get("field"), compared(fact.get("text", ""))) not in allowed:
             raise ValueError("合成正文不是登记材料的允许处理结果")
     body = request.get("body") or {}
     if set(body) - {"model", "messages", "temperature", "response_format", "thinking"}:

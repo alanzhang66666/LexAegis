@@ -1,0 +1,67 @@
+name: lexaegis-cloud-${LEX_PROFILE:?set integration or production}
+x-service: &service
+  image: ${LEX_CLOUD_IMAGE:?set fixed image identity}
+  pull_policy: never
+  user: '10001:10001'
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  tmpfs: [/tmp]
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options: {max-size: 10m, max-file: '3'}
+services:
+  gateway:
+    <<: *service
+    environment:
+      LEX_RUN_PROFILE: ${LEX_PROFILE}
+      LEX_RUNTIME_ROLE: gateway
+      LEX_GATEWAY_ROLE: cloud
+      LEX_DEPLOYMENT_MODE: isolated
+      LEX_GATEWAY_DIR: /data/gateway
+      LEX_CLOUD_ALLOWED_HOSTS: api.deepseek.com
+      LEX_INTEGRATION_MAX_CLOUD_ATTEMPTS: ${LEX_INTEGRATION_MAX_CLOUD_ATTEMPTS:-0}
+      LEX_INITIAL_CONSUMED: ${LEX_INITIAL_CONSUMED:-0}
+    volumes: [gateway-data:/data, gateway-config:/run/private:ro]
+    networks: [gateway-private]
+    healthcheck:
+      test: [CMD, python, -c, "import socket; socket.create_connection(('127.0.0.1',8766),2).close()"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+  provider-egress:
+    <<: *service
+    command: [python, /opt/cloud_gateway/provider_egress.py]
+    networks: [gateway-private, provider-uplink]
+    # No volumes or credentials. Only exact CONNECT api.deepseek.com:443.
+  gateway-ingress:
+    <<: *service
+    command: [python, /opt/cloud_gateway/tcp_ingress.py]
+    ports: ['127.0.0.1:${LEX_CLOUD_PORT:-8766}:8766']
+    networks: [gateway-private, host-publish]
+    volumes: [ingress-guard:/run/route-guard:ro]
+    # Fixed TCP target gateway:8766; no secrets, data, payload logs or POST replay.
+  isolate-ingress-route:
+    <<: *service
+    user: '0:0'
+    command: [python, /opt/cloud_gateway/route_guard.py]
+    network_mode: service:gateway-ingress
+    depends_on: [gateway-ingress]
+    cap_add: [NET_ADMIN]
+    volumes: [ingress-guard:/run/route-guard]
+    # Privileged only for ingress routes; no keys, ledger, originals or Docker socket.
+volumes:
+  gateway-data:
+    external: true
+    name: lexaegis-cloud-${LEX_PROFILE}-data
+  gateway-config:
+    external: true
+    name: lexaegis-cloud-${LEX_PROFILE}-secrets
+  ingress-guard: {}
+networks:
+  gateway-private: {internal: true}
+  provider-uplink: {}
+  host-publish:
+    driver_opts: {com.docker.network.bridge.enable_ip_masquerade: 'false'}

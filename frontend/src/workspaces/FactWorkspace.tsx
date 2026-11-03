@@ -36,12 +36,12 @@ export function FactWorkspace({ facts, currentCase, busy, label, onExtract, onOp
 }) {
   return <>
     <div className="toolbar"><p>{facts.length} 项事实 · 来源可追溯</p>
-      {currentCase.mode === "formal" && <div>
+      {(currentCase.mode === "formal" || currentCase.registered_document_demo) && <div>
         <button className="secondary compact" disabled={busy} onClick={onExtract}>边侧提取</button>
-        <button className="primary compact" onClick={() => onOpen()}><Plus size={14}/>添加事实</button>
+        {currentCase.mode === "formal" && <button className="primary compact" onClick={() => onOpen()}><Plus size={14}/>添加事实</button>}
         {onStartCloud && (
           <button className="secondary compact" disabled={busy || !facts.length} onClick={onStartCloud}>
-            正式云端摘要任务（仅生成草案）
+            {currentCase.registered_document_demo ? "云端摘要任务（仅生成草案）" : "正式云端摘要任务（仅生成草案）"}
           </button>
         )}
       </div>}</div>
@@ -56,7 +56,7 @@ export function FactWorkspace({ facts, currentCase, busy, label, onExtract, onOp
       <p>{fact.value}</p><div className="fact-footer">
         <button onClick={() => onLocate(fact.source_ids)}><Link2 size={13}/>查看原文依据</button>
         <span>{fact.origin === "edge_model" ? "边侧模型提取" : fact.origin === "recording_annotation" ? "材料标注" : fact.origin === "synthetic" ? "预置标注" : "人工录入"}</span>
-        {currentCase.mode === "formal" && <>
+        {(currentCase.mode === "formal" || currentCase.registered_document_demo) && <>
           <button onClick={() => onOpen(fact)}>编辑</button>
           <button className="danger-text" onClick={() => onDelete(fact)}>删除</button>
         </>}

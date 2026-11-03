@@ -1,0 +1,112 @@
+"""Private Windows llama service; repository inputs are read only."""
+import argparse
+import ctypes
+from ctypes import wintypes
+from datetime import datetime,timezone
+import hashlib
+import json
+import os
+from pathlib import Path
+import socket
+import subprocess
+import time
+import zipfile
+import sys
+
+import httpx
+
+REPOSITORY=Path(__file__).resolve().parents[2]
+ROOT=Path(os.getenv('LEX_DEMO_RUNTIME_ROOT',str(REPOSITORY/'.data/workbench-demo')))
+STATE=ROOT/'edge-service-state.json'
+ASSETS=Path(os.getenv('LEX_MODEL_ASSETS',str(REPOSITORY/'.data/local-cloud-trial/setup/ASSETS.json')))
+PORT=18080
+
+def write(name,value): (ROOT/name).write_text(json.dumps(value,ensure_ascii=False,indent=2),encoding='utf-8')
+def identity(pid):
+    kernel=ctypes.WinDLL('kernel32',use_last_error=True)
+    kernel.OpenProcess.argtypes=[wintypes.DWORD,wintypes.BOOL,wintypes.DWORD];kernel.OpenProcess.restype=wintypes.HANDLE
+    kernel.GetProcessTimes.argtypes=[wintypes.HANDLE]+[ctypes.POINTER(wintypes.FILETIME)]*4
+    kernel.GetExitCodeProcess.argtypes=[wintypes.HANDLE,ctypes.POINTER(wintypes.DWORD)]
+    kernel.QueryFullProcessImageNameW.argtypes=[wintypes.HANDLE,wintypes.DWORD,wintypes.LPWSTR,ctypes.POINTER(wintypes.DWORD)]
+    kernel.CloseHandle.argtypes=[wintypes.HANDLE]
+    handle=kernel.OpenProcess(0x1000,False,pid)
+    if not handle:return None
+    try:
+        code=wintypes.DWORD()
+        if not kernel.GetExitCodeProcess(handle,ctypes.byref(code)) or code.value!=259:return None
+        times=[wintypes.FILETIME() for _ in range(4)]
+        if not kernel.GetProcessTimes(handle,*[ctypes.byref(t) for t in times]):return None
+        buffer=ctypes.create_unicode_buffer(32768);size=wintypes.DWORD(len(buffer))
+        if not kernel.QueryFullProcessImageNameW(handle,0,buffer,ctypes.byref(size)):return None
+        return {'pid':pid,'created':(times[0].dwHighDateTime<<32)|times[0].dwLowDateTime,'executable':buffer.value}
+    finally:kernel.CloseHandle(handle)
+def owned():
+    if not STATE.exists():return None
+    saved=json.loads(STATE.read_text(encoding='utf-8'));actual=identity(saved['process']['pid'])
+    if actual!=saved['process']:return None
+    return saved
+def digest(path):
+    with Path(path).open('rb') as file:return hashlib.file_digest(file,'sha256').hexdigest()
+def verify_assets():
+    assets=json.loads(ASSETS.read_text(encoding='utf-8'))
+    weights=next(a for a in assets['assets'] if a['name'].endswith('.gguf'))
+    runtime=next(a for a in assets['assets'] if a['name'].startswith('llama-'))
+    if digest(weights['path'])!=weights['sha256'] or digest(runtime['path'])!=runtime['sha256']:raise ValueError('Asset hash mismatch')
+    with zipfile.ZipFile(runtime['path']) as archive:
+        name=next(n for n in archive.namelist() if n.endswith('llama-server.exe'))
+        expected=hashlib.sha256(archive.read(name)).hexdigest()
+    if digest(assets['binary_path'])!=expected:raise ValueError('Runtime binary differs from pinned archive')
+    return assets,{'model_sha256':weights['sha256'],'binary_sha256':expected,'runtime_release':assets['runtime_release']}
+def environment(binary):
+    allowed={'SYSTEMROOT','WINDIR','SYSTEMDRIVE','TEMP','TMP','USERPROFILE','APPDATA','LOCALAPPDATA','PROGRAMDATA'}
+    result={k:v for k,v in os.environ.items() if k.upper() in allowed or k.upper().startswith('CUDA_PATH')}
+    system=Path(os.environ.get('SystemRoot','C:/Windows'))
+    result['PATH']=';'.join([str(Path(binary).parent),str(system/'System32'),str(system)]+[str(Path(v)/'bin') for k,v in result.items() if k.upper().startswith('CUDA_PATH')])
+    return result
+def start():
+    ROOT.mkdir(parents=True,exist_ok=True)
+    if sys.platform!='win32':raise RuntimeError('This host model launcher is Windows-only')
+    if owned():print('Managed edge model already running');return
+    with socket.socket() as sock:
+        sock.settimeout(.5)
+        if sock.connect_ex(('127.0.0.1',PORT))==0:raise RuntimeError('Model port is occupied; existing service will not be changed')
+    assets,hashes=verify_assets()
+    args=[assets['binary_path'],'--model',assets['model_path'],'--host','127.0.0.1','--port',str(PORT),
+        '--alias','edge-small','--jinja','--ctx-size','8192','--batch-size','512','--ubatch-size','128',
+        '--parallel','1','--cache-type-k','f16','--cache-type-v','f16','--n-gpu-layers','99','--flash-attn','on','--threads','4']
+    env=environment(assets['binary_path'])
+    with (ROOT/'edge-model.stdout.log').open('ab') as out,(ROOT/'edge-model.stderr.log').open('ab') as err:
+        process=subprocess.Popen(args,cwd=str(Path(assets['binary_path']).parent),env=env,stdin=subprocess.DEVNULL,
+            stdout=out,stderr=err,creationflags=subprocess.CREATE_NO_WINDOW|subprocess.CREATE_NEW_PROCESS_GROUP)
+    current=identity(process.pid)
+    if not current:raise RuntimeError('Model exited; inspect external model log')
+    write('edge-service-state.json',{'process':current,'url':'http://127.0.0.1:18080/v1','alias':'edge-small',
+        'started_at':datetime.now(timezone.utc).isoformat(),'hashes':hashes,'args':args,'environment_names':sorted(env)})
+    with httpx.Client(trust_env=False,timeout=3) as client:
+        for _ in range(180):
+            if process.poll() is not None:raise RuntimeError('Model exited during initialization; inspect external model log')
+            try:
+                response=client.get('http://127.0.0.1:18080/v1/models')
+                if response.status_code==200 and 'edge-small' in [m['id'] for m in response.json()['data']]:
+                    print(json.dumps({'status':'ready','pid':process.pid,'bind':'127.0.0.1:18080','hashes_verified':True,'provider_keys_in_environment':False}));return
+            except httpx.HTTPError:pass
+            time.sleep(.5)
+    raise RuntimeError('Model readiness timed out; managed PID retained for status or stop')
+def status():
+    saved=owned();print(json.dumps({'running':bool(saved),'process':saved['process'] if saved else None,'url':'http://127.0.0.1:18080/v1'}))
+def stop():
+    saved=owned()
+    if not saved:raise RuntimeError('No matching managed process; nothing stopped')
+    kernel=ctypes.WinDLL('kernel32',use_last_error=True)
+    kernel.OpenProcess.argtypes=[wintypes.DWORD,wintypes.BOOL,wintypes.DWORD];kernel.OpenProcess.restype=wintypes.HANDLE
+    kernel.TerminateProcess.argtypes=[wintypes.HANDLE,wintypes.UINT];kernel.CloseHandle.argtypes=[wintypes.HANDLE]
+    handle=kernel.OpenProcess(0x1001,False,saved['process']['pid'])
+    if not handle:raise RuntimeError('Cannot open managed process')
+    try:
+        if not owned():raise RuntimeError('Process identity changed')
+        if not kernel.TerminateProcess(handle,0):raise RuntimeError('Cannot stop managed process')
+    finally:kernel.CloseHandle(handle)
+    print('Managed edge model stopped')
+if __name__=='__main__':
+    parser=argparse.ArgumentParser();parser.add_argument('action',choices=['start','status','stop']);args=parser.parse_args()
+    {'start':start,'status':status,'stop':stop}[args.action]()

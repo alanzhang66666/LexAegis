@@ -2040,6 +2040,27 @@ pre {
   letter-spacing: -0.03em;
   text-wrap: balance;
 }
+.login-card .system-name-short {
+  display: block;
+}
+.login-card .system-name-detail {
+  display: block;
+  margin-top: var(--space-2);
+  font-family: var(--font-ui);
+  font-size: var(--font-size-15);
+  font-weight: var(--font-weight-regular);
+  line-height: var(--system-name-line-height);
+  letter-spacing: 0;
+  color: var(--color-ink);
+  text-wrap: balance;
+  overflow-wrap: anywhere;
+}
+.section-heading .system-heading-name {
+  max-width: 54em;
+  font-size: var(--font-size-13);
+  line-height: var(--system-name-line-height);
+  overflow-wrap: anywhere;
+}
 .login-card p {
   font-size: 12px;
   line-height: 1.9;

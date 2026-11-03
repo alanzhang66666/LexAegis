@@ -1,6 +1,7 @@
 import { RecordingProviderCenter } from "./pages/RecordingProviderCenter";
 import { loadRecordingProviders } from "./recordingProviders";
 import { PRODUCT_RELEASE, PRODUCT_VERSION } from "./release";
+import { SYSTEM_SHORT_NAME, SYSTEM_DESCRIPTOR, SYSTEM_FULL_NAME } from "./branding";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ShieldCheck,
@@ -51,12 +52,12 @@ function BrandLockup({ wordmark = true }: { wordmark?: boolean }) {
     <>
       <img
         src="/logo-mark.png"
-        alt={wordmark ? "" : "案隐盾 LexAegis"}
+        alt={wordmark ? "" : SYSTEM_FULL_NAME}
         width={189}
         height={230}
       />
       {wordmark ? (
-        <div className="brand-wordmark">
+        <div className="brand-wordmark" title={SYSTEM_FULL_NAME}>
           <strong>案隐盾</strong>
           <span>LexAegis</span>
         </div>
@@ -532,14 +533,13 @@ export default function App() {
           <AppearanceSwitch theme={theme} palette={palette} setTheme={setTheme} setPalette={setPalette}/>
         </div>
         <div className="login-card">
-          <div className="login-lockup">
+          <div className="login-lockup" title={SYSTEM_FULL_NAME}>
             <BrandLockup />
           </div>
           <div className="eyebrow">本地工作空间</div>
-          <h1 className="display">
-            让案件信息，
-            <br />
-            留在合适的边界。
+          <h1 className="display system-name" aria-label={SYSTEM_FULL_NAME}>
+            <span className="system-name-short">{SYSTEM_SHORT_NAME}</span>
+            <span className="system-name-detail">——{SYSTEM_DESCRIPTOR}</span>
           </h1>
           <p>输入启动终端显示的本地访问口令，进入云边协同工作台。</p>
           <form
@@ -590,7 +590,7 @@ export default function App() {
     <div className="app-shell">
       <a className="skip-link" href="#main-content">跳到正文</a>
       <aside className="sidebar">
-        <div className="brand">
+        <div className="brand" title={SYSTEM_FULL_NAME}>
           <BrandLockup />
         </div>
         <div className="workspace-label">
@@ -713,7 +713,7 @@ export default function App() {
               <div>
                 <div className="eyebrow">案件工作空间</div>
                 <h1>案件工作台</h1>
-                <p>从材料到摘要，为每一次信息披露保留依据。</p>
+                <p className="system-heading-name">{SYSTEM_FULL_NAME}</p>
               </div>
               <button
                 className="primary"
@@ -873,6 +873,7 @@ export default function App() {
               <div className="list-heading demo-heading"><div><h2>流程验证场景</h2><p>用于集成环境的固定材料与边界验证。</p></div></div>
               <div className="demo-grid">
                 {[
+                  ...(boot?.registered_document_demo ? [{ id: "registered_document", no: "文档", name: "登记文档全流程联调" }] : []),
                   { id: "success", no: "01", name: "完整披露流程" },
                   { id: "human_veto", no: "02", name: "人工复核否决" },
                   { id: "linkage", no: "03", name: "组合线索风险" },
@@ -1031,7 +1032,7 @@ export default function App() {
                   onTimeline={() => startTask("local", "timeline")}
                   onEvidence={() => startTask("local", "evidence_inventory")}
                   onIssues={() => startTask("local", "issue_extraction")}
-                  onSummary={() => startTask(currentCase.mode === "demo" ? "mock" : "local")}
+                  onSummary={() => startTask(currentCase.registered_document_demo ? "cloud" : currentCase.mode === "demo" ? "mock" : "local")}
                   onStartCloud={boot?.runtime_profile === "production" && currentCase.mode === "formal"
                     ? () => startTask("cloud")
                     : boot?.runtime_profile === "integration" && boot?.runtime_config?.external_calls_allowed
@@ -1071,7 +1072,7 @@ export default function App() {
                         className="text-button"
                         onClick={() =>
                           startTask(
-                            currentCase.mode === "demo" ? "mock" : "local",
+                            currentCase.registered_document_demo ? "cloud" : currentCase.mode === "demo" ? "mock" : "local",
                           )
                         }
                       >

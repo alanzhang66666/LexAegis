@@ -31,3 +31,16 @@ deliverables/*
 # Local pytest scratch dirs (tests run with --basetemp)
 pytest-*/
 _demo_*.py
+# Deployment state and credentials must never become source artifacts.
+*.env
+!*.env.example
+gateway-secret
+accounts.json
+registered-manifest.json
+global-policy.json
+*.sqlite
+*.sqlite-*
+*.db
+*.log
+*.gguf
+*.safetensors
