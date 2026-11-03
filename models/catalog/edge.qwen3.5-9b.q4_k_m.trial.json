@@ -1,0 +1,19 @@
+{
+  "id": "edge.qwen3.5-9b.q4_k_m.trial",
+  "status": "trial_unverified",
+  "scope": "Apple Silicon Mac（如 MacBook Air M4 24GB）本机试用部署，仅合成材料；不替代生产声明 edge.minicpm5-2b.q4_k_m.nothink",
+  "role": "fact_extraction_only",
+  "runtime": "llamacpp",
+  "source": "Qwen3.5-9B（Apache 2.0），GGUF 由 unsloth 量化",
+  "gguf": "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF",
+  "filename": "Qwen3.5-9B-Q4_K_M.gguf",
+  "served_model_id": "edge-small",
+  "quant": "Q4_K_M",
+  "vram": "unified-memory-8GB-budget",
+  "context": 16384,
+  "json_object": "required",
+  "thinking": "request_controlled",
+  "vision": false,
+  "second_call_site": "same_site_missing_fields",
+  "verification": "deploy/mac/mac.sh 尚未在真实 Mac 上运行；Q4_K_M 量化对抽取质量的影响、enable_thinking=false 是否被模板接受、真实 tok/s 与长材料耗时均待 mac.sh bench 实测"
+}
